@@ -42,6 +42,22 @@ func TestSequentialIsPredictable(t *testing.T) {
 	}
 }
 
+func TestDeterministicIsStableAndParseable(t *testing.T) {
+	t.Parallel()
+	a, err := Deterministic("computeimage", "e00", "ubuntu24.04-driverless/20250610")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Deterministic("computeimage", "e00", "ubuntu24.04-driverless/20250610")
+	c, _ := Deterministic("computeimage", "e01", "ubuntu24.04-driverless/20250610")
+	if a != b || a == c {
+		t.Fatalf("Deterministic not stable/distinct: %s %s %s", a, b, c)
+	}
+	if _, err := gosdknid.Parse(a); err != nil || !strings.HasPrefix(a, "computeimage-e00") {
+		t.Fatalf("Deterministic = %q (parse err %v)", a, err)
+	}
+}
+
 func TestRejectsBadInputs(t *testing.T) {
 	t.Parallel()
 	if _, err := NewGenerator(Random, "E0", 0); err == nil {

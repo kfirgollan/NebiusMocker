@@ -113,36 +113,68 @@ func Authenticate(mode config.AuthnMode, tokens map[string]string) grpc.UnarySer
 }
 
 // Validate applies the buf.validate rules embedded in the Nebius protos.
+//
+// Update RPCs are partial: the official CLI's default "patch" mode sends only
+// the changed fields (e.g. metadata.id + spec.description) with an empty
+// X-ResetMask, meaning "leave everything else as it is". Presence rules
+// ("required", required oneofs) therefore do not apply to Update requests;
+// the module checks the merged resource instead. Value rules (lengths,
+// patterns, ranges) still apply.
 func Validate() (grpc.UnaryServerInterceptor, error) {
 	v, err := protovalidate.New()
 	if err != nil {
 		return nil, fmt.Errorf("protovalidate: %w", err)
 	}
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 		msg, ok := req.(proto.Message)
 		if !ok {
 			return next(ctx, req)
 		}
 		if err := v.Validate(msg); err != nil {
-			return nil, serviceerror.FromDomain(ctx, toBadRequest(err))
+			if bad := toBadRequest(err, ruleFilter(info.FullMethod)); bad != nil {
+				return nil, serviceerror.FromDomain(ctx, bad)
+			}
 		}
 		return next(ctx, req)
 	}, nil
 }
 
-func toBadRequest(err error) error {
+// ruleFilter returns which violations to ignore for method: presence rules
+// for standard (partial) Update RPCs, nothing otherwise.
+func ruleFilter(method string) func(ruleID string) bool {
+	if strings.HasSuffix(method, "/Update") {
+		return isPresenceRule
+	}
+	return func(string) bool { return false }
+}
+
+// toBadRequest converts a validation error, dropping violations whose rule ID
+// skip matches; it returns nil if none remain.
+func toBadRequest(err error, skip func(ruleID string) bool) error {
 	ve, ok := err.(*protovalidate.ValidationError) //nolint:errorlint // protovalidate returns this type unwrapped
 	if !ok {
 		return errs.BadRequest(errs.Violation{Message: err.Error()})
 	}
 	violations := make([]errs.Violation, 0, len(ve.Violations))
 	for _, v := range ve.Violations {
+		if skip(v.Proto.GetRuleId()) {
+			continue
+		}
 		violations = append(violations, errs.Violation{
 			Field:   protovalidate.FieldPathString(v.Proto.GetField()),
 			Message: v.Proto.GetMessage(),
 		})
 	}
+	if len(violations) == 0 {
+		return nil
+	}
 	return errs.BadRequest(violations...)
+}
+
+// isPresenceRule matches protovalidate's field "required" and oneof
+// "required" rule IDs.
+func isPresenceRule(ruleID string) bool {
+	return ruleID == "required" || strings.HasSuffix(ruleID, ".required")
 }
 
 func bearerToken(ctx context.Context) (string, bool) {

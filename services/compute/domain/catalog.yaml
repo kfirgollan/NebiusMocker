@@ -1,0 +1,90 @@
+# Built-in public image catalog of NebiusMocker.
+#
+# Family names follow https://docs.nebius.com/compute/storage/boot-disk-images.
+# Versions, labels, sizes and dates are ILLUSTRATIVE, not recorded from the
+# live API. Replace the whole catalog with NEBIUS_MOCKER_COMPUTE_IMAGES_FILE.
+#
+# Every version becomes one READY image per region, owned by the region's
+# public-images project (project-<routing code>public-images), named
+# "<family>-<version>", with a small synthetic qcow2 payload in the object store.
+families:
+  - name: ubuntu22.04-driverless
+    human_readable: Ubuntu 22.04 LTS
+    description: Ubuntu 22.04 LTS without GPU drivers
+    min_disk_size_gibibytes: 20
+    labels: { os_name: Ubuntu, os_version: 22.04 LTS, linux_kernel: "5.15" }
+    recommended_platforms: [cpu-e2, cpu-d3]
+    deprecation:
+      at: 2025-10-01T00:00:00Z
+      message: Ubuntu 22.04 images are deprecated. Use the ubuntu24.04-driverless family.
+    versions:
+      - { version: "20250218" }
+      - { version: "20250415" }
+
+  - name: ubuntu22.04-cuda12
+    human_readable: Ubuntu 22.04 LTS for NVIDIA® GPUs (CUDA® 12)
+    description: Ubuntu 22.04 LTS with NVIDIA GPU drivers, CUDA 12 and OFED
+    min_disk_size_gibibytes: 50
+    labels: { os_name: Ubuntu, os_version: 22.04 LTS, linux_kernel: "5.15", cuda_toolkit: "12.4", nvidia_gpu_drivers: "550", networking_package: OFED 23.10 }
+    recommended_platforms: [gpu-h100-sxm, gpu-h200-sxm, gpu-l40s-a]
+    deprecation:
+      at: 2025-10-01T00:00:00Z
+      message: Ubuntu 22.04 images are deprecated. Use the ubuntu24.04-cuda12 family.
+    versions:
+      - { version: "20250218" }
+      - { version: "20250415" }
+
+  - name: ubuntu24.04-driverless
+    human_readable: Ubuntu 24.04 LTS
+    description: Ubuntu 24.04 LTS without GPU drivers
+    min_disk_size_gibibytes: 20
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8" }
+    recommended_platforms: [cpu-e2, cpu-d3]
+    versions:
+      - { version: "20250722" }
+      - { version: "20251015" }
+
+  - name: ubuntu24.04-cuda12
+    human_readable: Ubuntu 24.04 LTS for NVIDIA® GPUs (CUDA® 12)
+    description: Ubuntu 24.04 LTS with NVIDIA GPU drivers, CUDA 12 and OFED
+    min_disk_size_gibibytes: 50
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8", cuda_toolkit: "12.8", nvidia_gpu_drivers: "570", networking_package: OFED 24.10 }
+    recommended_platforms: [gpu-h100-sxm, gpu-h200-sxm, gpu-b200-sxm, gpu-l40s-a, gpu-l40s-d]
+    versions:
+      - { version: "20250722" }
+      - { version: "20251015" }
+
+  - name: ubuntu24.04-cuda13.0
+    human_readable: Ubuntu 24.04 LTS for NVIDIA® GPUs (CUDA® 13)
+    description: Ubuntu 24.04 LTS with NVIDIA GPU drivers, CUDA 13.0 and OFED
+    min_disk_size_gibibytes: 50
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8", cuda_toolkit: "13.0", nvidia_gpu_drivers: "580", networking_package: OFED 24.10 }
+    recommended_platforms: [gpu-h100-sxm, gpu-h200-sxm, gpu-b200-sxm]
+    versions:
+      - { version: "20251015" }
+      - { version: "20251112" }
+
+  - name: ubuntu24.04-cuda13-latest
+    human_readable: Ubuntu 24.04 LTS for NVIDIA® GPUs (latest CUDA® 13)
+    description: Ubuntu 24.04 LTS with the newest NVIDIA GPU drivers and CUDA 13 toolkit
+    min_disk_size_gibibytes: 50
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8", cuda_toolkit: "13.0", nvidia_gpu_drivers: "580", networking_package: OFED 24.10 }
+    recommended_platforms: [gpu-h100-sxm, gpu-h200-sxm, gpu-b200-sxm]
+    versions:
+      - { version: "20251112" }
+
+  - name: mk8s-worker-node-v-1-32-ubuntu24.04
+    human_readable: Managed Kubernetes 1.32 worker node (Ubuntu 24.04)
+    description: Node image used by Managed Service for Kubernetes node groups without GPUs
+    min_disk_size_gibibytes: 64
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8", kubernetes: "1.32" }
+    versions:
+      - { version: "20251015" }
+
+  - name: mk8s-worker-node-v-1-32-ubuntu24.04-cuda12
+    human_readable: Managed Kubernetes 1.32 GPU worker node (Ubuntu 24.04, CUDA® 12)
+    description: Node image used by Managed Service for Kubernetes GPU node groups
+    min_disk_size_gibibytes: 96
+    labels: { os_name: Ubuntu, os_version: 24.04 LTS, linux_kernel: "6.8", kubernetes: "1.32", cuda_toolkit: "12.8", nvidia_gpu_drivers: "570" }
+    versions:
+      - { version: "20251015" }

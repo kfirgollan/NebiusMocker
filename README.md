@@ -5,8 +5,10 @@ gRPC services as the real cloud, so the **official** Nebius Terraform provider, 
 CI with no Nebius account.
 
 > Status: early. **IAM groups, memberships and access permits, with enforced authorization,** work end to end with the
-> official Terraform provider. See
-> [docs/services/iam.md](docs/services/iam.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
+> official Terraform provider. **Compute images** (public catalog per region, custom images imported from Object
+> Storage) work with the provider's image data source, the Go SDK and the `nebius` CLI. See
+> [docs/services/iam.md](docs/services/iam.md#implementation-status),
+> [docs/services/compute.md](docs/services/compute.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
 
 ## Quick start
 
@@ -33,6 +35,22 @@ resource "nebius_iam_v1_group" "engineers" {
   parent_id = "tenant-e00mock0000000000default"     # seeded default tenant
   name      = "engineers"
 }
+
+data "nebius_compute_v1_image" "ubuntu" {           # seeded public image catalog
+  parent_id = "project-e00public-images"
+  name      = "ubuntu24.04-driverless-20251015"
+}
+```
+
+Compute images work with the `nebius` CLI too (profile endpoint `localhost:4566`, `--insecure`), with payloads in
+RustFS when `NEBIUS_MOCKER_OBJSTORE=rustfs`
+([details](docs/services/compute.md#implementation-status)):
+
+```bash
+nebius compute image list-public --region eu-north1
+nebius compute image get-latest-by-family --image-family ubuntu24.04-driverless
+nebius compute image create --parent-id project-e00mock000000000default --name my-image \
+  --source-storage-bucket-name my-bucket --source-storage-object-name disk.qcow2
 ```
 
 Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/architecture/11-configuration.md)):
@@ -45,6 +63,8 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 | `NEBIUS_MOCKER_DEV_TOKENS` | `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` | `token=principal,…` static tokens |
 | `NEBIUS_MOCKER_OP_DELAY` | `0` | Keep operations running this long (exercise client polling) |
 | `NEBIUS_MOCKER_IDS` | `random` | `sequential` for predictable IDs |
+| `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions (and NID routing codes) with a public image catalog |
+| `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in | Replace the public image catalog ([format](docs/services/compute.md#catalogs-seed)) |
 
 ## Development
 
@@ -52,6 +72,7 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 make hooks   # once: install the pre-commit gate
 make check   # lint (layering rules included) + unit/contract/architecture tests with -race
 make e2e     # real terraform + official nebius provider against the mock
+make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
 ```
 
 Read [docs/architecture](docs/architecture/README.md) first. The Go rules for this repo live in `.claude/skills/`

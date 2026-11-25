@@ -59,9 +59,33 @@ type Config struct {
 	TenantID string
 	// ProjectID is the seeded default project (child of TenantID, region eu-north1).
 	ProjectID string
-	LogLevel  slog.Level
+	// Regions are the emulated regions and their NID routing codes. The first
+	// region is the default (the seeded project's region).
+	Regions  []Region
+	LogLevel slog.Level
 	// ObjStore selects the object-storage backend shared by modules that keep blobs.
 	ObjStore ObjStoreConfig
+	// ComputeImagesFile, when set, replaces the built-in public image catalog
+	// (YAML or JSON; see docs/services/compute.md).
+	ComputeImagesFile string
+}
+
+// Region is one emulated Nebius region.
+type Region struct {
+	Name        string // e.g. "eu-north1"
+	RoutingCode string // NID routing code, e.g. "e00"
+}
+
+// DefaultRegions are the regions emulated when NEBIUS_MOCKER_REGIONS is unset.
+// The routing codes are placeholders, not confirmed upstream values (except
+// e00 for eu-north1, which appears in public IDs).
+func DefaultRegions() []Region {
+	return []Region{
+		{Name: "eu-north1", RoutingCode: "e00"},
+		{Name: "eu-west1", RoutingCode: "e01"},
+		{Name: "us-central1", RoutingCode: "u00"},
+		{Name: "me-west1", RoutingCode: "m00"},
+	}
 }
 
 // ObjStoreBackend selects the pkg/objstore implementation.
@@ -101,6 +125,7 @@ func Default() Config {
 		RoutingCode:    "e00",
 		TenantID:       DefaultTenantID,
 		ProjectID:      DefaultProjectID,
+		Regions:        DefaultRegions(),
 		LogLevel:       slog.LevelInfo,
 		ObjStore: ObjStoreConfig{
 			Backend:   ObjStoreMemory,
@@ -144,6 +169,12 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"OBJSTORE_ACCESS_KEY", func(v string) error { c.ObjStore.AccessKey = v; return nil }},
 		{"OBJSTORE_SECRET_KEY", func(v string) error { c.ObjStore.SecretKey = v; return nil }},
 		{"OBJSTORE_REGION", func(v string) error { c.ObjStore.Region = v; return nil }},
+		{"REGIONS", func(v string) error {
+			r, err := parseRegions(v)
+			c.Regions = r
+			return err
+		}},
+		{"COMPUTE_IMAGES_FILE", func(v string) error { c.ComputeImagesFile = v; return nil }},
 	}
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
@@ -203,6 +234,28 @@ func parseTokens(v string) (map[string]string, error) {
 		tokens[tok] = principal
 	}
 	return tokens, nil
+}
+
+// parseRegions parses "name=code,…" (e.g. "eu-north1=e00,us-central1=u00").
+func parseRegions(v string) ([]Region, error) {
+	var out []Region
+	seen := map[string]bool{}
+	for _, pair := range splitList(v) {
+		name, code, ok := strings.Cut(pair, "=")
+		name, code = strings.TrimSpace(name), strings.TrimSpace(code)
+		if !ok || name == "" || len(code) != 3 {
+			return nil, fmt.Errorf("want region=routing-code pairs (3-character codes), got %q", pair)
+		}
+		if seen[name] || seen["="+code] {
+			return nil, fmt.Errorf("duplicate region or routing code in %q", pair)
+		}
+		seen[name], seen["="+code] = true, true
+		out = append(out, Region{Name: name, RoutingCode: code})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no regions in %q", v)
+	}
+	return out, nil
 }
 
 func parseDuration(v string, out *time.Duration) error {

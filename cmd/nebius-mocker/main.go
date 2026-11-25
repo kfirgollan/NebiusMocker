@@ -8,9 +8,10 @@ import (
 	"os"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/services/compute"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
 )
 
 func main() {
-	os.Exit(mocker.Main(iam.New()))
+	os.Exit(mocker.Main(iam.New(), compute.New()))
 }

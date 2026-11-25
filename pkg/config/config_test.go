@@ -34,6 +34,24 @@ func TestFromLookup(t *testing.T) {
 	}
 }
 
+func TestRegions(t *testing.T) {
+	t.Parallel()
+	if d := Default().Regions; len(d) == 0 || d[0] != (Region{Name: "eu-north1", RoutingCode: "e00"}) {
+		t.Fatalf("default regions = %v, want eu-north1=e00 first", d)
+	}
+	c, err := FromLookup(lookup(map[string]string{
+		"NEBIUS_MOCKER_REGIONS":             "eu-north1=e00, us-central1=u00",
+		"NEBIUS_MOCKER_COMPUTE_IMAGES_FILE": "/tmp/images.yaml",
+	}))
+	if err != nil {
+		t.Fatalf("FromLookup: %v", err)
+	}
+	want := []Region{{"eu-north1", "e00"}, {"us-central1", "u00"}}
+	if len(c.Regions) != 2 || c.Regions[0] != want[0] || c.Regions[1] != want[1] || c.ComputeImagesFile != "/tmp/images.yaml" {
+		t.Fatalf("regions = %v, images file = %q", c.Regions, c.ComputeImagesFile)
+	}
+}
+
 func TestFromLookupErrors(t *testing.T) {
 	t.Parallel()
 	for _, env := range []map[string]string{
@@ -42,6 +60,8 @@ func TestFromLookupErrors(t *testing.T) {
 		{"NEBIUS_MOCKER_OP_DELAY": "-1s"},
 		{"NEBIUS_MOCKER_IDS": "uuid"},
 		{"NEBIUS_MOCKER_AUTHZ": "maybe"},
+		{"NEBIUS_MOCKER_REGIONS": "eu-north1"},
+		{"NEBIUS_MOCKER_REGIONS": "eu-north1=e00,eu-west1=e00"},
 	} {
 		if _, err := FromLookup(lookup(env)); err == nil {
 			t.Errorf("FromLookup(%v) succeeded, want error", env)

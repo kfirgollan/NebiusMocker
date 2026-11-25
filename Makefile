@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images check hooks run tidy clean
 
 all: check
 
@@ -31,6 +31,11 @@ RUSTFS_CLEANUP := docker ps -aq --filter label=$(RUSTFS_LABEL) | xargs docker rm
 e2e-storage: ## RustFS-backed tests (needs Docker); RustFS is started and removed by the tests
 	@$(RUSTFS_CLEANUP)
 	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./test/... || status=$$?; \
+	$(RUSTFS_CLEANUP); exit $$status
+
+e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (needs Docker)
+	@$(RUSTFS_CLEANUP)
+	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... || status=$$?; \
 	$(RUSTFS_CLEANUP); exit $$status
 
 check: lint test ## Everything the pre-commit hook runs

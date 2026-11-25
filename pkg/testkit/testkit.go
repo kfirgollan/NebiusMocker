@@ -73,6 +73,12 @@ func WithObjStore(s objstore.Store) Option {
 	return func(st *settings) { st.objStore = s }
 }
 
+// WithConfig lets a test adjust any configuration field before start (e.g.
+// ComputeImagesFile or Regions).
+func WithConfig(fn func(*config.Config)) Option {
+	return func(s *settings) { fn(&s.cfg) }
+}
+
 // WithLogs writes the mocker's request log to the test output.
 func WithLogs() Option {
 	return func(s *settings) { s.logs = true }

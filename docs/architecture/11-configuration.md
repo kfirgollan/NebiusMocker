@@ -21,7 +21,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_TOKEN_TTL` | `12h` | Access-token lifetime |
 | `NEBIUS_MOCKER_TIMING` | profile | `instant` \| `fast` \| `realistic` \| path to a durations YAML |
 | `NEBIUS_MOCKER_IDS` | `random` | `random` \| `sequential` \| `seeded:<int>` |
-| `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Region → NID routing code (configurable; the defaults are placeholders) |
+| `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Region → NID routing code (configurable; the defaults are placeholders). **Implemented**: the first region is the default; Compute seeds a public image catalog per region |
 | `NEBIUS_MOCKER_PERSISTENCE` | `0` | Persist state across restarts |
 | `NEBIUS_MOCKER_DATA_DIR` | `/var/lib/nebius-mocker` | State and snapshot location |
 | `NEBIUS_MOCKER_OP_CONFLICT` | `reject` | `reject` \| `abort-previous` |

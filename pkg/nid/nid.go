@@ -5,6 +5,7 @@
 package nid
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -89,4 +90,33 @@ func (g *generator) uniqueLocked(typ string) string {
 		b.WriteByte(alphabet[g.rng.IntN(len(alphabet))])
 	}
 	return b.String()
+}
+
+// Deterministic returns the NID of type typ in routingCode whose unique part is
+// derived from key. The same inputs always give the same ID, so seeded catalog
+// resources (e.g. public images) keep stable IDs across restarts.
+func Deterministic(typ, routingCode, key string) (string, error) {
+	t, err := gosdknid.NewType(typ)
+	if err != nil {
+		return "", fmt.Errorf("nid: type %q: %w", typ, err)
+	}
+	rc, err := gosdknid.NewRoutingCode(routingCode)
+	if err != nil {
+		return "", fmt.Errorf("nid: routing code %q: %w", routingCode, err)
+	}
+	sum := sha256.Sum256([]byte(typ + "\x00" + routingCode + "\x00" + key))
+	var b strings.Builder
+	b.Grow(uniqueLen)
+	for i := range uniqueLen {
+		b.WriteByte(alphabet[int(sum[i])%len(alphabet)])
+	}
+	weak, err := gosdknid.NewWeakID(b.String())
+	if err != nil {
+		return "", fmt.Errorf("nid: weak id: %w", err)
+	}
+	id, err := gosdknid.NewWithRoutingCode(t, rc, weak)
+	if err != nil {
+		return "", fmt.Errorf("nid: build: %w", err)
+	}
+	return id.String(), nil
 }

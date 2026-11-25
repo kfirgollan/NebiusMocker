@@ -3,6 +3,72 @@
 > Module: `services/compute` · Image: `nebius-mocker-compute` · `NEBIUS_MOCKER_SERVICES=compute`
 > M1 tier: **T2** · Endpoint: `compute.api.nebius.cloud`
 
+## Implementation status
+
+| Piece | Status |
+|---|---|
+| `nebius.compute.v1.ImageService`: Get, GetByName, GetLatestByFamily, List (paged), ListPublic (per region, paged), Create, Update (reset mask, `resource_version`, immutable fields), Delete, ListOperationsByParent | ✅ T2 |
+| Public image catalog per region in `project-<routing code>public-images`, seeded from a built-in or file catalog, payloads in the object store | ✅ |
+| Custom images imported from Object Storage (`spec.source_storage`), payload copied into the object store; size, checksum, format and minimum disk size derived from the bytes | ✅ |
+| `spec.source_disk_id` / `spec.source_disk_snapshot_id` | Deferred: disks and snapshots are not implemented, so every disk/snapshot ID is `NOT_FOUND` |
+| Authorization: public images readable by any authenticated principal; custom images by project roles (`compute.images.*`) | ✅ |
+| `nebius_compute_v1_image` data source (the provider has no image resource) with the official Terraform provider | ✅ e2e: `test/terraform/compute` (`make e2e`) |
+| `nebius compute image …` CLI flows (list-public, get, get-by-name, get-latest-by-family, create from a bucket, list, update, list-operations-by-parent, delete) on RustFS | ✅ e2e: `test/compute` (`make e2e-images`) |
+| Instances, disks, snapshots, filesystems, GPU clusters, NVL groups, platforms, maintenance, nodes | Planned |
+
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
+
+Tests: domain unit tests with fakes (`services/compute/domain`, incl. a fuzzed payload inspector), DAL tests on the
+memory store, the blob adapter on the memory object store, gosdk contract tests (`test/contract/compute_image_test.go`,
+memory object store, in `make check`), the Terraform data-source suite (`make e2e`), and the same gosdk scenarios plus
+the nebius CLI against RustFS (`make e2e-images`, Docker).
+
+### Image storage design
+
+- **Metadata** (the `Image` proto) lives in `pkg/store` through `services/compute/dal`, like every other resource.
+- **Payloads** live in the shared object store (`pkg/objstore`: RustFS with `NEBIUS_MOCKER_OBJSTORE=rustfs`, memory by
+  default), bucket `nebius-mocker-compute-images` (the `nebius-mocker-` prefix is reserved for internal buckets), key
+  `images/<image-id>`. Each object carries user metadata `sha256`, `format` (`qcow2|vmdk|vhd|raw`), `virtual-size`,
+  `image-id` and, for imports, `source` (`s3://bucket/object`). The adapter is `services/compute/backend/blobstore`; the
+  domain only sees its `Blobs` port.
+- **Import** (`Create` with `source_storage`): `Prepare` checks that the source object exists (otherwise
+  `INVALID_ARGUMENT` on `spec.source_storage.object_name`) and stores the image as `CREATING` (`reconciling=true`). The
+  operation's `Work` reads the source once to hash and inspect it, then streams it into the image bucket with that
+  metadata while hashing again; a source that changed in between fails the import. The image becomes `READY` with
+  `storage_size_bytes` = payload size and `min_disk_size_bytes` = virtual size (from the qcow2/vmdk/vhd header; the byte
+  size for raw) rounded up to a GiB. A failed import marks the image `ERROR` with `state_description` and fails the
+  operation. User buckets map 1:1 to object-store buckets, so an object uploaded through Object Storage (or straight to
+  RustFS) is importable. Delete removes the payload, then the record.
+- **Public catalog**: for every region in `NEBIUS_MOCKER_REGIONS` and every family version, a `READY` image named
+  `<family>-<version>` in `project-<routing code>public-images` (the upstream default parent of `GetLatestByFamily`
+  is `project-{region}public-images`). IDs are derived from (routing code, family, version), so they are stable across
+  restarts. The payload is a small (32 KiB) deterministic synthetic qcow2 whose header declares the family's minimum disk
+  size; it is a real object with a real checksum. Seeding is idempotent: blobs with the right checksum are kept.
+  Public images have no `source`. They cannot be updated or deleted (`PERMISSION_DENIED`), and nobody can create images
+  in a public-images project.
+- **Families**: `GetLatestByFamily` picks, among `READY` images of the family in the parent (default: the first
+  region's public project), the highest `version` (ties: newest `created_at`) whose
+  `status.image_family_deprecation.deprecated_at` is not in the past. If every version is deprecated it returns the
+  newest one, with its deprecation status, so callers can see the family is deprecated. Custom images may set
+  `image_family`/`version`; a (family, version) pair is unique per project (`ALREADY_EXISTS`).
+- **Immutability**: `image_family`, `version`, `cpu_architecture`, `image_family_human_readable` and the source are
+  `IMMUTABLE`. An Update that leaves them empty keeps them; one that changes them is `INVALID_ARGUMENT`. `cpu_architecture`
+  defaults to `AMD64` on Create.
+- **Partial updates**: the official CLI's `update` sends only the changed fields with an empty reset mask, so the shared
+  validation interceptor skips presence rules (`required`, required oneofs) on `…/Update` RPCs; value rules still apply.
+- `List.filter` is deprecated upstream ("not implemented") and ignored. `ListOperationsByParent` lists operations of a
+  project's images, newest first, including images deleted since (an index kept by the DAL).
+- Operations with `NEBIUS_MOCKER_OP_DELAY` run their `Work` on the engine's single scheduler goroutine, so a large
+  import delays other operations. Payloads in tests are small.
+
+### Not yet / approximations
+
+- Catalog contents (versions, labels, sizes, dates, recommended platforms) are **illustrative**. The family names follow
+  the docs; the real catalog should come from parity recording.
+- The routing codes of regions other than `eu-north1` (`e00`) are placeholders.
+- Payloads are never booted or converted; only their headers are read.
+- No quota accounting for image storage.
+
 ## Overview
 
 Compute covers VM and GPU **instances**, block **disks** and **disk snapshots**, shared **filesystems**, **images**
@@ -32,7 +98,30 @@ catalog (CPU/GPU types and presets), host **maintenance** events and bare-metal 
 - **Public images**: a catalog under `project-<routing>public-images` with families (`ubuntu22.04-driverless`,
   `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-…`). Every family has at least one version.
   `GetLatestByFamily` returns the newest. `ListPublic` lists the catalog. Each image has a CPU architecture, a minimum disk
-  size, and a status of `READY`.
+  size, and a status of `READY`. Implemented; see [Image storage design](#image-storage-design). The built-in catalog is
+  `services/compute/domain/catalog.yaml`. The upstream Terraform examples use `image_family = "ubuntu22.04"`, which is
+  not a documented family and is not in the catalog yet (it matters once disks exist).
+
+  Catalog file format (`NEBIUS_MOCKER_COMPUTE_IMAGES_FILE`, YAML or JSON; it replaces the built-in catalog):
+
+  ```yaml
+  families:
+    - name: acme-os                     # spec.image_family
+      human_readable: Acme OS           # spec.image_family_human_readable
+      description: Acme OS base image
+      cpu_architecture: AMD64           # or ARM64; default AMD64
+      min_disk_size_gibibytes: 20       # becomes status.min_disk_size_bytes
+      labels: { os_name: Acme }
+      recommended_platforms: [cpu-e2]
+      unsupported_platforms: { gpu-l40s-a: "no drivers" }
+      regions: [eu-north1]              # default: every region
+      deprecation: { at: 2026-01-01T00:00:00Z, message: "use acme-os2" }   # whole family
+      versions:
+        - version: "20250101"           # created_at = this date when it is YYYYMMDD
+        - version: "20250601"
+          released_at: 2025-06-01T12:00:00Z
+          deprecation: { at: 2025-07-01T00:00:00Z, message: "bad build" } # this version only
+  ```
 
 ### Instances
 - `resources.platform` (immutable) + `resources.preset` must exist in the platform catalog. Changing the preset needs the
@@ -100,8 +189,10 @@ must work verbatim, so the default image catalog has to include whatever familie
 
 | Env | Default | Description |
 |---|---|---|
-| `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in | Platform/preset catalog |
-| `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in | Public image catalog |
+| `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in | (later) Platform/preset catalog |
+| `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in (`services/compute/domain/catalog.yaml`) | Public image catalog file (YAML/JSON, format above); replaces the built-in one. **Implemented** |
+| `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions with a public image catalog (`ListPublic --region`); the first is the `GetLatestByFamily` default. **Implemented** |
+| `NEBIUS_MOCKER_OBJSTORE` (+ `_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION`) | `memory` | Where image payloads live: `memory` or `rustfs` (shared with Object Storage; see [storage.md](storage.md)) |
 | `NEBIUS_MOCKER_COMPUTE_CHARGE_STOPPED` | `0` | Count vCPU/GPU quota for stopped instances |
 | `NEBIUS_MOCKER_COMPUTE_BACKEND` | `mock` | (later) `container` to run instances as containers with cloud-init |
 
