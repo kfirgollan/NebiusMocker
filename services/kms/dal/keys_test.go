@@ -95,12 +95,14 @@ func TestMissing(t *testing.T) {
 	}{
 		{"Get", func() error { _, err := r.Get(ctx, "nope"); return err }},
 		{"GetByName", func() error { _, err := r.GetByName(ctx, parent, "nope"); return err }},
-		{"Update", func() error { return r.Update(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE)) }},
+		{"Update", func() error {
+			return r.Update(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE), symKey("nope", "x", kmspb.KeyState_ACTIVE))
+		}},
 		{"Material", func() error { _, err := r.Material(ctx, "nope"); return err }},
 		{"UpdateWithMaterial", func() error {
-			return r.UpdateWithMaterial(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE), []byte("m"), 0)
+			return r.UpdateWithMaterial(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE), []byte("m"), symKey("nope", "x", kmspb.KeyState_ACTIVE))
 		}},
-		{"Delete", func() error { return r.Delete(ctx, "nope") }},
+		{"Delete", func() error { return r.Delete(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE)) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,7 +147,9 @@ func TestScheduledKeyFreesName(t *testing.T) {
 	if err := r.Create(ctx, symKey("k1", "a", kmspb.KeyState_ACTIVE), []byte("m")); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Update(ctx, symKey("k1", "a", kmspb.KeyState_SCHEDULED_FOR_DELETION)); err != nil {
+	active := symKey("k1", "a", kmspb.KeyState_ACTIVE)
+	scheduled := symKey("k1", "a", kmspb.KeyState_SCHEDULED_FOR_DELETION)
+	if err := r.Update(ctx, scheduled, active); err != nil {
 		t.Fatalf("schedule: %v", err)
 	}
 	if _, err := r.GetByName(ctx, parent, "a"); !errs.IsKind(err, errs.KindNotFound) {
@@ -158,14 +162,14 @@ func TestScheduledKeyFreesName(t *testing.T) {
 		t.Fatalf("reuse name: %v", err)
 	}
 	// Undelete while the name is taken must fail.
-	if err := r.Update(ctx, symKey("k1", "a", kmspb.KeyState_ACTIVE)); !errs.IsKind(err, errs.KindAlreadyExists) {
+	if err := r.Update(ctx, active, scheduled); !errs.IsKind(err, errs.KindAlreadyExists) {
 		t.Fatalf("undelete err = %v, want AlreadyExists", err)
 	}
 	// Once the name is free again, undelete re-indexes it.
-	if err := r.Delete(ctx, "k2"); err != nil {
+	if err := r.Delete(ctx, symKey("k2", "a", kmspb.KeyState_ACTIVE)); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Update(ctx, symKey("k1", "a", kmspb.KeyState_ACTIVE)); err != nil {
+	if err := r.Update(ctx, active, scheduled); err != nil {
 		t.Fatalf("undelete: %v", err)
 	}
 	if k, err := r.GetByName(ctx, parent, "a"); err != nil || k.GetMetadata().GetId() != "k1" {
@@ -180,16 +184,10 @@ func TestMaterialLifecycle(t *testing.T) {
 	if err := r.Create(ctx, symKey("k1", "a", kmspb.KeyState_ACTIVE), []byte("v1")); err != nil {
 		t.Fatal(err)
 	}
+	created := symKey("k1", "a", kmspb.KeyState_ACTIVE)
 	rotated := symKey("k1", "a", kmspb.KeyState_ACTIVE)
 	rotated.Metadata.ResourceVersion = 1
-	// A stale resource_version is a conflict and changes nothing.
-	if err := r.UpdateWithMaterial(ctx, rotated, []byte("v2"), 7); !errs.IsKind(err, errs.KindConflict) {
-		t.Fatalf("UpdateWithMaterial with stale version err = %v, want Conflict", err)
-	}
-	if m, err := r.Material(ctx, "k1"); err != nil || string(m) != "v1" {
-		t.Fatalf("Material after conflict = %q, %v, want v1", m, err)
-	}
-	if err := r.UpdateWithMaterial(ctx, rotated, []byte("v2"), 0); err != nil {
+	if err := r.UpdateWithMaterial(ctx, rotated, []byte("v2"), created); err != nil {
 		t.Fatalf("UpdateWithMaterial: %v", err)
 	}
 	if m, err := r.Material(ctx, "k1"); err != nil || string(m) != "v2" {
@@ -198,7 +196,7 @@ func TestMaterialLifecycle(t *testing.T) {
 	if k, err := r.Get(ctx, "k1"); err != nil || k.GetMetadata().GetResourceVersion() != 1 {
 		t.Fatalf("key after UpdateWithMaterial = %v, %v", k, err)
 	}
-	if err := r.Delete(ctx, "k1"); err != nil {
+	if err := r.Delete(ctx, rotated); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := r.Material(ctx, "k1"); !errs.IsKind(err, errs.KindNotFound) {
@@ -213,5 +211,42 @@ func TestMaterialLifecycle(t *testing.T) {
 	}
 	if p, err := r.List(ctx, parent, 10, ""); err != nil || len(p.Items) != 1 {
 		t.Fatalf("List = %+v, %v", p, err)
+	}
+}
+
+// TestWritesCompareAndSwap: every write of an existing key fails with
+// Conflict, changing nothing, unless the stored key still equals prev.
+func TestWritesCompareAndSwap(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	stale := symKey("k1", "a", kmspb.KeyState_ACTIVE)
+	stale.Metadata.Labels = map[string]string{"old": "1"}
+	next := symKey("k1", "a", kmspb.KeyState_SCHEDULED_FOR_DELETION)
+	writes := map[string]func(r *dal.KeyRepo[*kmspb.SymmetricKey]) error{
+		"Update": func(r *dal.KeyRepo[*kmspb.SymmetricKey]) error { return r.Update(ctx, next, stale) },
+		"UpdateWithMaterial": func(r *dal.KeyRepo[*kmspb.SymmetricKey]) error {
+			return r.UpdateWithMaterial(ctx, next, []byte("v2"), stale)
+		},
+		"Delete": func(r *dal.KeyRepo[*kmspb.SymmetricKey]) error { return r.Delete(ctx, stale) },
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := dal.NewSymmetricKeyRepo(store.NewMemory())
+			stored := symKey("k1", "a", kmspb.KeyState_ACTIVE) // differs from stale only in labels
+			if err := r.Create(ctx, stored, []byte("v1")); err != nil {
+				t.Fatal(err)
+			}
+			if err := write(r); !errs.IsKind(err, errs.KindConflict) {
+				t.Fatalf("err = %v, want Conflict", err)
+			}
+			k, err := r.Get(ctx, "k1")
+			if err != nil || !proto.Equal(k, stored) {
+				t.Fatalf("key after conflict = %v, %v; want unchanged", k, err)
+			}
+			if m, err := r.Material(ctx, "k1"); err != nil || string(m) != "v1" {
+				t.Fatalf("material after conflict = %q, %v; want v1", m, err)
+			}
+		})
 	}
 }

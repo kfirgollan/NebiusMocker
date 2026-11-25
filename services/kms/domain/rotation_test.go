@@ -2,7 +2,9 @@ package domain
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,8 @@ import (
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	kmspb "github.com/nebius/gosdk/proto/nebius/kms/v1"
+
+	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 )
 
 const day = 24 * time.Hour
@@ -240,5 +244,103 @@ func TestConcurrentAccessRotatesOnce(t *testing.T) {
 	wantKeyAt(t, e, id, 2, t0.Add(day))
 	if _, v := encryptVersion(t, e, id); v != 2 {
 		t.Errorf("version = %d, want 2", v)
+	}
+}
+
+// TestDeleteRacingRotationStaysDeleted: a lazy rotation that read the key
+// while it was ACTIVE must not write it back over a concurrent Delete
+// (deletion does not bump resource_version, so the whole record is compared).
+func TestDeleteRacingRotationStaysDeleted(t *testing.T) {
+	t.Parallel()
+	for range 50 {
+		e := newSymEnv(t)
+		ctx := t.Context()
+		id := createSym(t, e, "k", rotatingSpec(day))
+		e.clk.Advance(day)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			if _, err := e.svc.Delete(ctx, id, nil); err != nil && !errs.IsKind(err, errs.KindConflict) {
+				t.Errorf("Delete: %v", err)
+			}
+		})
+		wg.Go(func() {
+			// Fails once the key is scheduled; either outcome is fine here.
+			_, _ = e.svc.Encrypt(ctx, id, []byte("x"), nil)
+		})
+		wg.Wait()
+		k, err := e.svc.Get(ctx, id, IncludeScheduled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := k.GetStatus().GetState(); st != kmspb.KeyState_SCHEDULED_FOR_DELETION {
+			t.Fatalf("state after Delete = %v, want SCHEDULED_FOR_DELETION", st)
+		}
+	}
+}
+
+// TestConcurrentWritesAndRotationLoseNothing races Updates against accesses
+// that trigger lazy rotation while time passes. Every write is a
+// compare-and-swap, so none is lost: resource_version ends at exactly
+// 1 + successful updates + rotations performed.
+func TestConcurrentWritesAndRotationLoseNothing(t *testing.T) {
+	t.Parallel()
+	e := newSymEnv(t)
+	ctx := t.Context()
+	id := createSym(t, e, "k", rotatingSpec(day))
+	const updaters, perUpdater, days = 8, 6, 12
+	var updated atomic.Int64
+	var wg sync.WaitGroup
+	for w := range updaters {
+		wg.Go(func() {
+			for i := range perUpdater {
+				_, err := e.svc.Update(ctx, UpdateSymmetricKeyCmd{
+					Metadata: &commonpb.ResourceMetadata{
+						Id: id, ParentId: testProject, Name: "k",
+						Labels: map[string]string{"writer": fmt.Sprintf("%d-%d", w, i)},
+					},
+					Spec: rotatingSpec(day),
+				})
+				switch {
+				case err == nil:
+					updated.Add(1)
+				case !errs.IsKind(err, errs.KindConflict):
+					t.Errorf("Update: %v", err)
+				}
+			}
+		})
+	}
+	for range 4 {
+		wg.Go(func() {
+			for range days {
+				if _, err := e.svc.Encrypt(ctx, id, []byte("x"), nil); err != nil {
+					t.Errorf("Encrypt: %v", err)
+				}
+				if _, err := e.svc.List(ctx, testProject, 0, "", ActiveOnly); err != nil {
+					t.Errorf("List: %v", err)
+				}
+			}
+		})
+	}
+	wg.Go(func() {
+		for range days {
+			e.clk.Advance(day)
+		}
+	})
+	wg.Wait()
+
+	if updated.Load() == 0 {
+		t.Fatal("no Update succeeded")
+	}
+	_, primary := encryptVersion(t, e, id) // also applies any rotation still due
+	rotations := int64(primary) - 1
+	if rotations == 0 {
+		t.Fatal("no rotation happened")
+	}
+	k, err := e.svc.Get(ctx, id, ActiveOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := k.GetMetadata().GetResourceVersion(), 1+updated.Load()+rotations; got != want {
+		t.Fatalf("resource_version = %d, want %d (1 + %d updates + %d rotations)", got, want, updated.Load(), rotations)
 	}
 }

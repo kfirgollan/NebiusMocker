@@ -105,32 +105,90 @@ func (l *lifecycle[T]) load(ctx context.Context, id string) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	purged, err := l.purgeIfDue(ctx, k)
+	k, purged, err := l.settle(ctx, k)
 	if err != nil {
 		return zero, err
 	}
 	if purged {
 		return zero, errs.NotFound(id)
 	}
-	return l.current(ctx, k)
+	return k, nil
 }
 
-// purgeIfDue permanently deletes a scheduled key whose purge time has come.
-// Purging is lazy (on access), which on the injected clock is
-// indistinguishable from a background sweep.
-func (l *lifecycle[T]) purgeIfDue(ctx context.Context, k T) (bool, error) {
-	st := l.status(k)
-	if st.State != kmspb.KeyState_SCHEDULED_FOR_DELETION || st.PurgeAt == nil {
-		return false, nil
-	}
-	if l.clk.Now().Before(st.PurgeAt.AsTime()) {
-		return false, nil
-	}
+// settle applies the time-driven changes due by now to k, as read from the
+// repository: it purges a scheduled key whose deletion delay is over
+// (purged = true), and catches up an ACTIVE key (see catchUp). Both are lazy
+// (on access), which on the injected clock is indistinguishable from a
+// background sweep. A purge that lost a race to another write re-reads the key.
+func (l *lifecycle[T]) settle(ctx context.Context, k T) (_ T, purged bool, _ error) {
+	var zero T
 	id := k.GetMetadata().GetId()
-	if err := l.repo.Delete(ctx, id); err != nil && !errs.IsKind(err, errs.KindNotFound) {
-		return false, fmt.Errorf("purge %s: %w", id, err)
+	for range maxWriteAttempts {
+		if !l.purgeDue(k) {
+			cur, err := l.current(ctx, k)
+			return cur, false, err
+		}
+		err := l.repo.Delete(ctx, k)
+		switch {
+		case err == nil || errs.IsKind(err, errs.KindNotFound):
+			return zero, true, nil
+		case !errs.IsKind(err, errs.KindConflict):
+			return zero, false, fmt.Errorf("purge %s: %w", id, err)
+		}
+		if k, err = l.repo.Get(ctx, id); errs.IsKind(err, errs.KindNotFound) {
+			return zero, true, nil
+		} else if err != nil {
+			return zero, false, err
+		}
 	}
-	return true, nil
+	return zero, false, errConcurrent(id)
+}
+
+// purgeDue reports whether k is scheduled for deletion and its delay is over.
+func (l *lifecycle[T]) purgeDue(k T) bool {
+	st := l.status(k)
+	return st.State == kmspb.KeyState_SCHEDULED_FOR_DELETION && st.PurgeAt != nil &&
+		!l.clk.Now().Before(st.PurgeAt.AsTime())
+}
+
+// maxWriteAttempts bounds the compare-and-swap retries of a write that races
+// with other writes to the same key.
+const maxWriteAttempts = 8
+
+// errConcurrent is returned when a write lost every compare-and-swap attempt.
+func errConcurrent(id string) error {
+	return errs.Conflict(id, "the key is being changed concurrently; retry")
+}
+
+// write stores a change to an existing key with compare-and-swap. read loads
+// the key (applying due lazy changes such as rotation) and change derives its
+// new state; change returns write = false when there is nothing to store.
+// When another request changed the key in between, the key is read again and
+// change re-applied. Errors from read and change (e.g. a client's stale
+// resource_version) are returned as they are, without retrying.
+func (l *lifecycle[T]) write(ctx context.Context, id string, read func(context.Context) (T, error), change func(cur T) (upd T, write bool, err error)) (T, error) {
+	var zero T
+	for range maxWriteAttempts {
+		cur, err := read(ctx)
+		if err != nil {
+			return zero, err
+		}
+		upd, ok, err := change(cur)
+		if err != nil {
+			return zero, err
+		}
+		if !ok {
+			return cur, nil
+		}
+		err = l.repo.Update(ctx, upd, cur)
+		if err == nil {
+			return upd, nil
+		}
+		if !errs.IsKind(err, errs.KindConflict) {
+			return zero, err
+		}
+	}
+	return zero, errConcurrent(id)
 }
 
 // Get returns a key; a key scheduled for deletion is NotFound unless vis is
@@ -176,15 +234,12 @@ func (l *lifecycle[T]) List(ctx context.Context, parentID string, pageSize int64
 	}
 	items := make([]T, 0, len(page.Items))
 	for _, k := range page.Items {
-		purged, err := l.purgeIfDue(ctx, k)
+		k, purged, err := l.settle(ctx, k)
 		if err != nil {
 			return Page[T]{}, err
 		}
 		if purged || (vis == ActiveOnly && l.status(k).State != kmspb.KeyState_ACTIVE) {
 			continue
-		}
-		if k, err = l.current(ctx, k); err != nil {
-			return Page[T]{}, err
 		}
 		items = append(items, k)
 	}
@@ -263,18 +318,17 @@ func (l *lifecycle[T]) submit(ctx context.Context, id, description string, reque
 // key stops being usable at once, and its name is freed.
 func (l *lifecycle[T]) Delete(ctx context.Context, id string, request proto.Message) (*operations.Operation, error) {
 	return l.submit(ctx, id, "Schedule "+l.label+" for deletion", request, func(ctx context.Context) error {
-		k, err := l.Get(ctx, id, ActiveOnly)
-		if err != nil {
-			return err
-		}
-		now := l.clk.Now()
-		upd := proto.CloneOf(k)
-		l.setStatus(upd, keyStatus{
-			State:     kmspb.KeyState_SCHEDULED_FOR_DELETION,
-			DeletedAt: timestamppb.New(now),
-			PurgeAt:   timestamppb.New(now.Add(DefaultDeletionDelay)),
+		_, err := l.write(ctx, id, l.activeReader(id), func(k T) (T, bool, error) {
+			now := l.clk.Now()
+			upd := proto.CloneOf(k)
+			l.setStatus(upd, keyStatus{
+				State:     kmspb.KeyState_SCHEDULED_FOR_DELETION,
+				DeletedAt: timestamppb.New(now),
+				PurgeAt:   timestamppb.New(now.Add(DefaultDeletionDelay)),
+			})
+			return upd, true, nil
 		})
-		return l.repo.Update(ctx, upd)
+		return err
 	})
 }
 
@@ -286,15 +340,14 @@ func (l *lifecycle[T]) UpdateDeletionDelay(ctx context.Context, id string, delay
 		})
 	}
 	return l.submit(ctx, id, "Update "+l.label+" deletion delay", request, func(ctx context.Context) error {
-		k, err := l.scheduled(ctx, id)
-		if err != nil {
-			return err
-		}
-		upd := proto.CloneOf(k)
-		st := l.status(k)
-		st.PurgeAt = timestamppb.New(l.clk.Now().Add(delay))
-		l.setStatus(upd, st)
-		return l.repo.Update(ctx, upd)
+		_, err := l.write(ctx, id, l.scheduledReader(id), func(k T) (T, bool, error) {
+			upd := proto.CloneOf(k)
+			st := l.status(k)
+			st.PurgeAt = timestamppb.New(l.clk.Now().Add(delay))
+			l.setStatus(upd, st)
+			return upd, true, nil
+		})
+		return err
 	})
 }
 
@@ -302,18 +355,17 @@ func (l *lifecycle[T]) UpdateDeletionDelay(ctx context.Context, id string, delay
 // (its old name may have been reused meanwhile).
 func (l *lifecycle[T]) Undelete(ctx context.Context, id, newName string, request proto.Message) (*operations.Operation, error) {
 	return l.submit(ctx, id, "Undelete "+l.label, request, func(ctx context.Context) error {
-		k, err := l.scheduled(ctx, id)
+		upd, err := l.write(ctx, id, l.scheduledReader(id), func(k T) (T, bool, error) {
+			upd := proto.CloneOf(k)
+			if newName != "" && newName != upd.GetMetadata().GetName() {
+				upd.GetMetadata().Name = newName
+				upd.GetMetadata().ResourceVersion++
+				upd.GetMetadata().UpdatedAt = timestamppb.New(l.clk.Now())
+			}
+			l.setStatus(upd, keyStatus{State: kmspb.KeyState_ACTIVE})
+			return upd, true, nil
+		})
 		if err != nil {
-			return err
-		}
-		upd := proto.CloneOf(k)
-		if newName != "" && newName != upd.GetMetadata().GetName() {
-			upd.GetMetadata().Name = newName
-			upd.GetMetadata().ResourceVersion++
-			upd.GetMetadata().UpdatedAt = timestamppb.New(l.clk.Now())
-		}
-		l.setStatus(upd, keyStatus{State: kmspb.KeyState_ACTIVE})
-		if err := l.repo.Update(ctx, upd); err != nil {
 			return err
 		}
 		if l.restored == nil {
@@ -321,6 +373,16 @@ func (l *lifecycle[T]) Undelete(ctx context.Context, id, newName string, request
 		}
 		return l.restored(ctx, upd)
 	})
+}
+
+// activeReader reads the ACTIVE key id for write.
+func (l *lifecycle[T]) activeReader(id string) func(context.Context) (T, error) {
+	return func(ctx context.Context) (T, error) { return l.Get(ctx, id, ActiveOnly) }
+}
+
+// scheduledReader reads the SCHEDULED_FOR_DELETION key id for write.
+func (l *lifecycle[T]) scheduledReader(id string) func(context.Context) (T, error) {
+	return func(ctx context.Context) (T, error) { return l.scheduled(ctx, id) }
 }
 
 // scheduled returns a key that must be SCHEDULED_FOR_DELETION.
@@ -344,46 +406,47 @@ func (l *lifecycle[T]) update(ctx context.Context, md *commonpb.ResourceMetadata
 	if id == "" {
 		return nil, errs.BadRequest(errs.Violation{Field: "metadata.id", Message: "required"})
 	}
+	if resetMask == nil {
+		resetMask = mask.New()
+	}
+	change := func(stored T) (T, bool, error) {
+		var zero T
+		smd := stored.GetMetadata()
+		if p := md.GetParentId(); p != "" && p != smd.GetParentId() {
+			return zero, false, errs.BadRequest(errs.Violation{Field: "metadata.parent_id", Message: "field is immutable"})
+		}
+		if v := md.GetResourceVersion(); v != 0 && v != smd.GetResourceVersion() {
+			return zero, false, errs.Conflict(id, fmt.Sprintf("resource_version %d does not match current version %d", v, smd.GetResourceVersion()))
+		}
+		updated := proto.CloneOf(stored)
+		if err := fieldmaskpb.PatchWithResetMask(updated, patch, resetMask); err != nil {
+			return zero, false, errs.BadRequest(errs.Violation{Field: "X-ResetMask", Message: err.Error()})
+		}
+		umd := updated.GetMetadata()
+		if umd == nil {
+			return zero, false, errs.BadRequest(errs.Violation{Field: "metadata", Message: "must not be reset"})
+		}
+		umd.Id, umd.ParentId = smd.GetId(), smd.GetParentId()
+		umd.ResourceVersion, umd.CreatedAt, umd.UpdatedAt = smd.GetResourceVersion(), smd.GetCreatedAt(), smd.GetUpdatedAt()
+		l.setStatus(updated, l.status(stored))
+		if err := fixSpec(stored, updated); err != nil {
+			return zero, false, err
+		}
+		if proto.Equal(updated, stored) {
+			return stored, false, nil // nothing changed: keep resource_version and updated_at
+		}
+		umd.ResourceVersion++
+		umd.UpdatedAt = timestamppb.New(l.clk.Now())
+		return updated, true, nil
+	}
 	return l.ops.Submit(ctx, operations.Spec{
 		ResourceID:  id,
 		Description: "Update " + l.label,
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     request,
 		Prepare: func(ctx context.Context) error {
-			stored, err := l.Get(ctx, id, ActiveOnly)
-			if err != nil {
-				return err
-			}
-			smd := stored.GetMetadata()
-			if p := md.GetParentId(); p != "" && p != smd.GetParentId() {
-				return errs.BadRequest(errs.Violation{Field: "metadata.parent_id", Message: "field is immutable"})
-			}
-			if v := md.GetResourceVersion(); v != 0 && v != smd.GetResourceVersion() {
-				return errs.Conflict(id, fmt.Sprintf("resource_version %d does not match current version %d", v, smd.GetResourceVersion()))
-			}
-			if resetMask == nil {
-				resetMask = mask.New()
-			}
-			updated := proto.CloneOf(stored)
-			if err := fieldmaskpb.PatchWithResetMask(updated, patch, resetMask); err != nil {
-				return errs.BadRequest(errs.Violation{Field: "X-ResetMask", Message: err.Error()})
-			}
-			umd := updated.GetMetadata()
-			if umd == nil {
-				return errs.BadRequest(errs.Violation{Field: "metadata", Message: "must not be reset"})
-			}
-			umd.Id, umd.ParentId = smd.GetId(), smd.GetParentId()
-			umd.ResourceVersion, umd.CreatedAt, umd.UpdatedAt = smd.GetResourceVersion(), smd.GetCreatedAt(), smd.GetUpdatedAt()
-			l.setStatus(updated, l.status(stored))
-			if err := fixSpec(stored, updated); err != nil {
-				return err
-			}
-			if proto.Equal(updated, stored) {
-				return nil // nothing changed: keep resource_version and updated_at
-			}
-			umd.ResourceVersion++
-			umd.UpdatedAt = timestamppb.New(l.clk.Now())
-			return l.repo.Update(ctx, updated)
+			_, err := l.write(ctx, id, l.activeReader(id), change)
+			return err
 		},
 	})
 }

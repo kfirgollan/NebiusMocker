@@ -152,16 +152,35 @@ func (r *KeyRepo[T]) Create(ctx context.Context, key T, material []byte) error {
 	return toDomain(err, id)
 }
 
-// Update replaces an existing key, leaving its material untouched.
-func (r *KeyRepo[T]) Update(ctx context.Context, key T) error {
+// unchanged fails with errs.Conflict unless the stored key still equals prev
+// (compare-and-swap). A missing key is store.ErrNotFound.
+func (r *KeyRepo[T]) unchanged(tx store.Tx, prev T) error {
+	id := prev.GetMetadata().GetId()
+	cur, err := tx.Get(r.kind, id)
+	if err != nil {
+		return err
+	}
+	stored, err := decode(cur, r.newMsg)
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(stored, prev) {
+		return errs.Conflict(id, "the key was changed concurrently")
+	}
+	return nil
+}
+
+// Update replaces an existing key that still equals prev, leaving its
+// material untouched.
+func (r *KeyRepo[T]) Update(ctx context.Context, key, prev T) error {
 	id := key.GetMetadata().GetId()
 	rec, err := r.record(key)
 	if err != nil {
 		return err
 	}
 	err = r.st.Update(ctx, func(tx store.Tx) error {
-		if _, gerr := tx.Get(r.kind, id); gerr != nil {
-			return gerr
+		if cerr := r.unchanged(tx, prev); cerr != nil {
+			return cerr
 		}
 		_, perr := tx.Put(rec)
 		return perr
@@ -183,26 +202,17 @@ func (r *KeyRepo[T]) Material(ctx context.Context, id string) ([]byte, error) {
 	return rec.Data, nil
 }
 
-// UpdateWithMaterial replaces an existing key and its material in one
-// transaction, if the stored key's resource_version is still prevVersion
-// (compare-and-swap). A mismatch is errs.Conflict.
-func (r *KeyRepo[T]) UpdateWithMaterial(ctx context.Context, key T, material []byte, prevVersion int64) error {
+// UpdateWithMaterial replaces an existing key that still equals prev and its
+// material in one transaction.
+func (r *KeyRepo[T]) UpdateWithMaterial(ctx context.Context, key T, material []byte, prev T) error {
 	id := key.GetMetadata().GetId()
 	rec, err := r.record(key)
 	if err != nil {
 		return err
 	}
 	err = r.st.Update(ctx, func(tx store.Tx) error {
-		cur, gerr := tx.Get(r.kind, id)
-		if gerr != nil {
-			return gerr
-		}
-		stored, derr := decode(cur, r.newMsg)
-		if derr != nil {
-			return derr
-		}
-		if v := stored.GetMetadata().GetResourceVersion(); v != prevVersion {
-			return errs.Conflict(id, fmt.Sprintf("resource_version is %d, not %d", v, prevVersion))
+		if cerr := r.unchanged(tx, prev); cerr != nil {
+			return cerr
 		}
 		if _, perr := tx.Put(rec); perr != nil {
 			return perr
@@ -213,9 +223,13 @@ func (r *KeyRepo[T]) UpdateWithMaterial(ctx context.Context, key T, material []b
 	return toDomain(err, id)
 }
 
-// Delete removes the key and its material.
-func (r *KeyRepo[T]) Delete(ctx context.Context, id string) error {
+// Delete removes a key that still equals prev, and its material.
+func (r *KeyRepo[T]) Delete(ctx context.Context, prev T) error {
+	id := prev.GetMetadata().GetId()
 	err := r.st.Update(ctx, func(tx store.Tx) error {
+		if cerr := r.unchanged(tx, prev); cerr != nil {
+			return cerr
+		}
 		if derr := tx.Delete(r.kind, id); derr != nil {
 			return derr
 		}

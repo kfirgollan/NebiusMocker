@@ -48,9 +48,14 @@ suite and the CLI e2e suite (`make e2e`).
     rotates once at that moment, and its schedule restarts from there.
   - Like purging, rotation is evaluated lazily on access (`Get`, `GetByName`, `List`, `Update`, `Rotate`, `Delete`,
     and every crypto call) against the mock clock. Every rotation that came due is applied at its own boundary time,
-    so the result is the same as a background rotator. The key and its material are written together,
-    compare-and-swap on `resource_version`, so concurrent requests rotate exactly once. Asymmetric keys have no
-    `rotation_period` and never rotate.
+    so the result is the same as a background rotator. A rotation writes the key and its material in one
+    transaction. Asymmetric keys have no `rotation_period` and never rotate.
+- **Concurrency.** Every key write (Update, Rotate, Delete, UpdateDeletionDelay, Undelete, rotation, purge) is a
+  compare-and-swap against the whole stored record: not every change bumps `resource_version`, so comparing only the
+  version wouldn't be enough. A write that loses a race re-reads the key, applies any rotation that is due, and
+  re-applies its change, up to 8 times. After that it fails with `ABORTED`. Concurrent requests therefore rotate a
+  key exactly once and never lose an update. A client's own stale `metadata.resource_version` on Update fails with
+  `ABORTED` and is not retried.
 - **Symmetric ciphertext format** (opaque to clients): `0x01` · key version (uint32 big endian) · 12-byte nonce ·
   AES-GCM ciphertext and tag. The GCM additional data is the 5-byte header, the key ID and the caller's
   `aad_context`, so every byte is authenticated and a ciphertext only decrypts under its own key with its own AAD.

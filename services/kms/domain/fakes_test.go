@@ -126,13 +126,25 @@ func (r *fakeRepo[T]) Create(_ context.Context, key T, material []byte) error {
 	return nil
 }
 
-func (r *fakeRepo[T]) Update(_ context.Context, key T) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id := key.GetMetadata().GetId()
+// unchanged is the compare-and-swap check; r.mu must be held.
+func (r *fakeRepo[T]) unchanged(prev T) (*fakeEntry[T], error) {
+	id := prev.GetMetadata().GetId()
 	e, ok := r.entries[id]
 	if !ok {
-		return errs.NotFound(id)
+		return nil, errs.NotFound(id)
+	}
+	if !proto.Equal(e.key, prev) {
+		return nil, errs.Conflict(id, "changed concurrently")
+	}
+	return e, nil
+}
+
+func (r *fakeRepo[T]) Update(_ context.Context, key, prev T) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, err := r.unchanged(prev)
+	if err != nil {
+		return err
 	}
 	if r.state(key) == kmspb.KeyState_ACTIVE && r.nameTaken(key) {
 		return errs.AlreadyExists("", "name "+key.GetMetadata().GetName()+" is taken")
@@ -151,28 +163,25 @@ func (r *fakeRepo[T]) Material(_ context.Context, id string) ([]byte, error) {
 	return slices.Clone(e.material), nil
 }
 
-func (r *fakeRepo[T]) UpdateWithMaterial(_ context.Context, key T, material []byte, prevVersion int64) error {
+func (r *fakeRepo[T]) UpdateWithMaterial(_ context.Context, key T, material []byte, prev T) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	id := key.GetMetadata().GetId()
-	e, ok := r.entries[id]
-	if !ok {
-		return errs.NotFound(id)
-	}
-	if v := e.key.GetMetadata().GetResourceVersion(); v != prevVersion {
-		return errs.Conflict(id, fmt.Sprintf("resource_version is %d, not %d", v, prevVersion))
+	e, err := r.unchanged(prev)
+	if err != nil {
+		return err
 	}
 	e.key = proto.CloneOf(key)
 	e.material = slices.Clone(material)
 	return nil
 }
 
-func (r *fakeRepo[T]) Delete(_ context.Context, id string) error {
+func (r *fakeRepo[T]) Delete(_ context.Context, prev T) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.entries[id]; !ok {
-		return errs.NotFound(id)
+	if _, err := r.unchanged(prev); err != nil {
+		return err
 	}
+	id := prev.GetMetadata().GetId()
 	delete(r.entries, id)
 	r.order = slices.DeleteFunc(r.order, func(x string) bool { return x == id })
 	return nil

@@ -34,6 +34,12 @@ type Page[T any] struct {
 //
 // Material is an opaque blob the domain encodes. Implementations must never log
 // it or return it from anything but Material.
+//
+// Every write of an existing key is a compare-and-swap: prev is the key as the
+// caller read it, and the write fails with errs.Conflict (changing nothing)
+// unless the stored key is still equal to prev. Not every change bumps
+// resource_version (deletion state, deletion delay), so the whole record is
+// compared, not only the version.
 type KeyRepository[T any] interface {
 	// Get returns the key in any state, or errs.NotFound.
 	Get(ctx context.Context, id string) (T, error)
@@ -44,19 +50,19 @@ type KeyRepository[T any] interface {
 	// Create stores a new key and its material atomically. It fails with
 	// errs.AlreadyExists if an ACTIVE key of the parent has the same name.
 	Create(ctx context.Context, key T, material []byte) error
-	// Update replaces an existing key (not its material). It fails with
-	// errs.NotFound if the key does not exist and errs.AlreadyExists if the key
-	// is ACTIVE and another ACTIVE key of the parent has its name.
-	Update(ctx context.Context, key T) error
+	// Update replaces an existing key (not its material) if it still equals
+	// prev. It fails with errs.NotFound if the key does not exist, errs.Conflict
+	// if it changed, and errs.AlreadyExists if the key is ACTIVE and another
+	// ACTIVE key of the parent has its name.
+	Update(ctx context.Context, key, prev T) error
 	// Material returns the key's material, or errs.NotFound.
 	Material(ctx context.Context, id string) ([]byte, error)
 	// UpdateWithMaterial replaces an existing key and its material atomically
-	// (rotation), if the stored key's resource_version is still prevVersion.
-	// It fails with errs.NotFound if the key does not exist and errs.Conflict
-	// if its resource_version changed.
-	UpdateWithMaterial(ctx context.Context, key T, material []byte, prevVersion int64) error
-	// Delete permanently removes the key and its material (purge).
-	Delete(ctx context.Context, id string) error
+	// (rotation) if the key still equals prev; errors as for Update.
+	UpdateWithMaterial(ctx context.Context, key T, material []byte, prev T) error
+	// Delete permanently removes the key and its material (purge) if the key
+	// still equals prev; errs.NotFound or errs.Conflict otherwise.
+	Delete(ctx context.Context, prev T) error
 }
 
 // SymmetricKeyRepository stores symmetric keys.

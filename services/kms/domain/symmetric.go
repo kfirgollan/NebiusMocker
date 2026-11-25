@@ -170,7 +170,7 @@ func (s *SymmetricKeyService) Undelete(ctx context.Context, id, newName string, 
 // rotation_period after this one.
 func (s *SymmetricKeyService) Rotate(ctx context.Context, id string, request proto.Message) (*operations.Operation, error) {
 	return s.lc.submit(ctx, id, "Rotate symmetric key", request, func(ctx context.Context) error {
-		for range maxRotateAttempts {
+		for range maxWriteAttempts {
 			k, err := s.lc.Get(ctx, id, ActiveOnly)
 			if err != nil {
 				return err
@@ -191,13 +191,9 @@ func (s *SymmetricKeyService) Rotate(ctx context.Context, id string, request pro
 				return err
 			}
 		}
-		return errs.Conflict(id, "the key changed concurrently; retry")
+		return errConcurrent(id)
 	})
 }
-
-// maxRotateAttempts bounds the compare-and-swap retries of a rotation that
-// races with another write to the same key.
-const maxRotateAttempts = 8
 
 // rotateDue performs the automatic rotations of an ACTIVE key that are due by
 // now: one at every rotation_period boundary after the last rotation (or
@@ -254,7 +250,7 @@ func firstDue(k *kmspb.SymmetricKey, m symMaterial, period time.Duration) time.T
 // rotation period, retrying when another request changed the key first.
 func (s *SymmetricKeyService) autoRotate(ctx context.Context, k *kmspb.SymmetricKey, plan rotationPlan) (*kmspb.SymmetricKey, error) {
 	id := k.GetMetadata().GetId()
-	for range maxRotateAttempts {
+	for range maxWriteAttempts {
 		period := k.GetSpec().GetRotationPeriod().AsDuration()
 		if period <= 0 || k.GetStatus().GetState() != kmspb.KeyState_ACTIVE {
 			return k, nil
@@ -286,7 +282,7 @@ func (s *SymmetricKeyService) autoRotate(ctx context.Context, k *kmspb.Symmetric
 			return nil, err
 		}
 	}
-	return nil, errs.Conflict(id, "the key changed concurrently; retry")
+	return nil, errConcurrent(id)
 }
 
 // rotateAt returns k and m after one rotation at time at.
@@ -301,14 +297,14 @@ func rotateAt(k *kmspb.SymmetricKey, m symMaterial, at time.Time) (*kmspb.Symmet
 	return upd, next, nil
 }
 
-// save stores the rotated key and material if the key is still at the
-// resource_version it had when read (errs.Conflict otherwise).
+// save stores the rotated key and material if the stored key still equals
+// read (errs.Conflict otherwise).
 func (s *SymmetricKeyService) save(ctx context.Context, read, upd *kmspb.SymmetricKey, m symMaterial) error {
 	blob, err := encodeSymMaterial(m)
 	if err != nil {
 		return err
 	}
-	return s.lc.repo.UpdateWithMaterial(ctx, upd, blob, read.GetMetadata().GetResourceVersion())
+	return s.lc.repo.UpdateWithMaterial(ctx, upd, blob, read)
 }
 
 func (s *SymmetricKeyService) material(ctx context.Context, id string) (symMaterial, error) {
