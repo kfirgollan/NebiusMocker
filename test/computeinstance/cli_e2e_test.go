@@ -144,6 +144,7 @@ func TestVMLifecycle(t *testing.T) {
 	if len(in.Status.NetworkInterfaces) != 1 || in.Status.NetworkInterfaces[0].IPAddress.Address == "" || in.Status.NetworkInterfaces[0].PublicIPAddress.Address == "" {
 		t.Fatalf("network interfaces = %+v, want private and public addresses", in.Status.NetworkInterfaces)
 	}
+	publicAddr := in.Status.NetworkInterfaces[0].PublicIPAddress.Address
 	if got := idOf(t, cli, "compute", "instance", "get-by-name", "--name", "vm1"); got != id {
 		t.Fatalf("get-by-name = %q, want %q", got, id)
 	}
@@ -169,6 +170,11 @@ func TestVMLifecycle(t *testing.T) {
 	in = getInstance(t, cli, id)
 	if in.Status.State != "RUNNING" || in.Spec.Resources.Preset != "4vcpu-16gb" {
 		t.Fatalf("instance after start = %+v", in)
+	}
+	// A start within the hour keeps the dynamic public address
+	// (docs compute/virtual-machines/network).
+	if got, want := in.Status.NetworkInterfaces[0].PublicIPAddress.Address, publicAddr; got != want {
+		t.Fatalf("public address after stop/start = %q, want %q kept", got, want)
 	}
 	out = fails(t, cli, "compute", "instance", "update", "--id", id, "--resources-preset", "2vcpu-8gb")
 	wantContains(t, "running preset change error", out, "STOPPED")
