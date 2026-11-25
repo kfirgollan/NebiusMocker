@@ -20,7 +20,7 @@
 | `resource.state`: `previous` (before an update or delete) and `current` (after a create or update), each the resource's own `Get` view (metadata, spec, status), redacted | ✅ contract + e2e: `test/terraform/audit` (IAM, KMS, VPC) |
 | `DATA_PLANE` in List and exports: selected by `event_type`, never mixed with `CONTROL_PLANE` | ✅ |
 | `peer.AuditSink`: data planes record `DATA_PLANE` events from structured fields; the audit module provides it | ✅ |
-| Object Storage S3 front emitting `DATA_PLANE` events (bucket `object_audit_logging`) | Not yet: in progress (waits on the storage front rework) |
+| Object Storage S3 front: `DATA_PLANE` events for every documented object operation, per the bucket's `object_audit_logging`, including denied, failed and badly signed requests | ✅ e2e: `test/audit` (`make e2e-storage`: AWS SDK v2, aws CLI, `nebius` CLI, export) |
 | `authentication.federation` | Not yet |
 | Persistence of events across restarts | Not yet (the log sits behind a port; a persistent implementation can replace it) |
 
@@ -186,7 +186,13 @@ policy itself, so a caller reports every request it serves:
 | `MUTATE_ONLY` | `PutObject`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `AbortMultipartUpload`, `CompleteMultipartUpload`, `DeleteObject`, `DeleteObjects`, `DeleteObjectVersion` |
 | `ALL` | the above plus `GetObject`, `HeadObject`, `ListParts`, `ListObjectVersions`, `ListObjects` (and `ListObjectsV2`), `ListMultipartUploads` |
 
-Other S3 calls (`GetObjectAcl`, bucket calls) and responses with HTTP 400 or 429 are never recorded.
+Other S3 calls (`GetObjectAcl`, tagging, bucket calls) and responses with HTTP 400 or 429 are never recorded, nor
+are requests for a bucket that does not exist. `DeleteObject` with a `versionId` is recorded as `DeleteObjectVersion`.
+
+The S3 front (`services/storage/s3/audit.go`) reports each request after its response is complete. It wraps the
+response writer to see the final status and the S3 error code. It looks the sink up per request: when the audit
+module is disabled there is nothing to do. It passes only structured fields: headers, the `Authorization` value and
+presigned-URL credentials never reach the sink. Recording is an in-memory append. It cannot fail the request.
 
 | Event field | Value |
 |---|---|
@@ -194,8 +200,8 @@ Other S3 calls (`GetObjectAcl`, bucket calls) and responses with HTTP 400 or 429
 | `service.name` | `STORAGE` |
 | `resource` | the bucket (`id`, `name`, `type` `storagebucket`) and its hierarchy, tenant first |
 | `authentication` | `authentication_type` `STATIC_KEY`; `subject.service_account_id` the key's service account; `static_key_credential.id` the Nebius access key ID (`accesskey-…`); `authenticated` false for an unknown key or a bad signature |
-| `request` | `client_ip`, `user_agent`, `request_id`; `parameters` `bucket_name`, `object_key` (or `object_keys` for `DeleteObjects`), `version`, plus e.g. `prefix`, `upload_id`. Never credentials or signatures |
-| `response` | `status_code` from the HTTP status (403 → `PERMISSION_DENIED`, a credential error → `UNAUTHENTICATED`, 404 → `NOT_FOUND`, 5xx → `INTERNAL`); `error_message` the S3 error code and message; `payload` `http_status`, `error_code` and e.g. `etag` |
+| `request` | `client_ip`, `user_agent`, `request_id` (the object store's `x-amz-request-id`); `parameters` `bucket_name`, `object_key` (or `object_keys` for `DeleteObjects`), `version`, `prefix`, `upload_id`, `part_number`, `copy_source`. Never credentials or signatures |
+| `response` | `status_code` from the HTTP status (403 → `PERMISSION_DENIED`, a credential error → `UNAUTHENTICATED`, 404 → `NOT_FOUND`, 5xx → `INTERNAL`); `error_message` the S3 error code and message; `payload` `http_status`, `error_code`, `etag`, `version_id`; for `DeleteObjects` `deleted` and `errors` (key → S3 code) |
 | `status` | `DONE`, or `ERROR` for HTTP ≥ 400 |
 
 ## Terraform
@@ -213,7 +219,10 @@ _No Terraform provider objects use this area._ The e2e instead checks that Terra
 
 ## Known gaps
 
-- The S3 front does not emit data-plane events yet; federation is not modeled.
+- Federation is not modeled.
+- A `DeleteObjects` event lists the requested keys in `request.parameters.object_keys` (deleted ones first, then the
+  failed ones sorted, not the request's order), and the outcome in `response.payload.deleted` and
+  `response.payload.errors` (key → S3 code, e.g. `AccessDenied` from the bucket policy).
 - `source`, `action` and `type` of data-plane events are not documented by Nebius; the mocker derives them like
   control-plane ones (`s3/<Operation>`, UPPER_SNAKE action).
 - `authentication.subject.name` is the principal ID; the mocker has no user names.

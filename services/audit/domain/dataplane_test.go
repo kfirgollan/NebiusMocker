@@ -197,6 +197,9 @@ func TestRecordObjectAccessEvent(t *testing.T) {
 	del := base("DeleteObjects")
 	del.ObjectKeys = []string{"k1", "k2"}
 
+	delDenied := del
+	delDenied.KeyErrors = map[string]string{"k2": "AccessDenied"}
+
 	list := base("ListObjectsV2")
 	list.Params = map[string]string{"prefix": "logs/"}
 
@@ -227,6 +230,13 @@ func TestRecordObjectAccessEvent(t *testing.T) {
 		}},
 	}
 
+	delDeniedKeys := &auditv2pb.Request{
+		ClientIp: "10.0.0.1", UserAgent: "aws-cli", RequestId: "req-1", TraceId: "req-1",
+		Parameters: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"bucket_name": structpb.NewStringValue("photos"), "object_keys": strList("k1", "k2"),
+		}},
+	}
+
 	tests := []struct {
 		name string
 		a    peer.ObjectAccess
@@ -238,7 +248,8 @@ func TestRecordObjectAccessEvent(t *testing.T) {
 				reqOf(map[string]any{"bucket_name": "photos", "object_key": "a/b.txt", "version": "v1", "content_type": "text/plain"}),
 				ok(map[string]any{"etag": "abc"}), auditv2pb.Status_DONE),
 		},
-		{"delete objects lists keys", del, event("DeleteObjects", "DELETE_OBJECTS", authn, delKeys, ok(nil), auditv2pb.Status_DONE)},
+		{"delete objects lists keys", del, event("DeleteObjects", "DELETE_OBJECTS", authn, delKeys, ok(map[string]any{"deleted": []any{"k1", "k2"}}), auditv2pb.Status_DONE)},
+		{"delete objects reports per-key errors", delDenied, event("DeleteObjects", "DELETE_OBJECTS", authn, delDeniedKeys, ok(map[string]any{"deleted": []any{"k1"}, "errors": map[string]any{"k2": "AccessDenied"}}), auditv2pb.Status_DONE)},
 		{
 			"list objects v2", list,
 			event("ListObjectsV2", "LIST_OBJECTS_V2", authn,

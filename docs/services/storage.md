@@ -16,7 +16,7 @@
 | `spec.bucket_policy`: group and anonymous rules, `storage.*` roles, path patterns, evaluated at the S3 front; `status.anonymous_access_enabled` | ✅ |
 | `spec.lifecycle_configuration`: expiration (days/date), expired delete markers, noncurrent expiration (+ `newer_noncurrent_versions`), abort incomplete multipart uploads, with prefix/size/tag filters, applied on the mock clock | ✅ |
 | `spec.default_storage_class`, `spec.force_storage_class`: `STANDARD` and `ENHANCED_THROUGHPUT` | ✅ |
-| Lifecycle transitions (`transition`, `noncurrent_version_transition`), `last_access_filter`, `spec.last_access`, storage class `INTELLIGENT`, `spec.object_audit_logging` other than `NONE` | ❌ rejected with `INVALID_ARGUMENT` naming the field (see below) |
+| Lifecycle transitions (`transition`, `noncurrent_version_transition`), `last_access_filter`, `spec.last_access`, storage class `INTELLIGENT` | ❌ rejected with `INVALID_ARGUMENT` naming the field (see below) |
 | Backing buckets in RustFS (created, versioned, force-deleted with all versions on purge) | ✅ |
 | S3 data plane: S3 front on `:4580`, SigV4 with Nebius access keys (credential-scope region checked), anonymous requests for policy grants, IAM-authorized, relayed to RustFS | ✅ (`NEBIUS_MOCKER_OBJSTORE=rustfs`) |
 | S3 bucket calls: CreateBucket (`aws s3 mb`), DeleteBucket (`aws s3 rb`), Get/Put/Delete BucketLifecycleConfiguration, Get/Put/Delete BucketCors, Get/PutBucketVersioning, GetBucketLocation, on the Nebius bucket records | ✅ |
@@ -180,8 +180,9 @@ stored without effect.
   (`STANDARD` always present), with current and noncurrent simple/multipart object counts and bytes (multipart = the
   object's ETag has a part-count suffix), multipart uploads in flight with their uploaded parts. Delete markers count
   nowhere.
-- **`object_audit_logging`**: only `NONE` (or unset) is accepted; `MUTATE_ONLY`/`ALL` are rejected by name, because S3
-  object requests are not written to the audit log.
+- **`object_audit_logging`**: honored. With `MUTATE_ONLY` or `ALL` the S3 front reports object requests to the audit
+  module, which records them as `DATA_PLANE` events ([audit.md](audit.md#data-plane-events)). With the audit module
+  disabled nothing is recorded.
 
 ## Terraform
 

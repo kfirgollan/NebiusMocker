@@ -405,7 +405,6 @@ func TestStorageClassSettings(t *testing.T) {
 		want string
 	}{
 		{"default INTELLIGENT", &storagepb.BucketSpec{DefaultStorageClass: storagepb.StorageClass_INTELLIGENT}, "spec.default_storage_class"},
-		{"audit ALL", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_ALL}, "spec.object_audit_logging"},
 		{"transition", &storagepb.BucketSpec{LifecycleConfiguration: &storagepb.LifecycleConfiguration{Rules: []*storagepb.LifecycleRule{{
 			Id: "t", Status: storagepb.LifecycleRule_ENABLED,
 			Transition: &storagepb.LifecycleTransition{TransitedWith: &storagepb.LifecycleTransition_Days{Days: 30}, StorageClass: storagepb.StorageClass_ENHANCED_THROUGHPUT},

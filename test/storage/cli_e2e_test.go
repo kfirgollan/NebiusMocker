@@ -306,8 +306,10 @@ func TestCLIBucketLifecycle(t *testing.T) {
 	// Invalid settings name the field.
 	msg := nbFails(t, cli, "storage", "bucket", "update", "--id", id, "--default-storage-class", "intelligent")
 	mustContain(t, "invalid default_storage_class", strings.ToLower(msg), "storage_class")
-	msg = nbFails(t, cli, "storage", "bucket", "update", "--id", id, "--object-audit-logging", "all")
-	mustContain(t, "invalid object_audit_logging", strings.ToLower(msg), "audit")
+	// object_audit_logging is honored (data-plane audit events; docs/services/audit.md).
+	nb(t, cli, "storage", "bucket", "update", "--id", id, "--object-audit-logging", "mutate_only")
+	audited, _ := json.Marshal(nbJSON(t, cli, "storage", "bucket", "get", "--id", id))
+	mustContain(t, "after object_audit_logging update", string(audited), `"object_audit_logging":"MUTATE_ONLY"`)
 
 	// delete -> SCHEDULED_FOR_DELETION, undelete -> ACTIVE.
 	nb(t, cli, "storage", "bucket", "delete", "--id", id)

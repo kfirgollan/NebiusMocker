@@ -46,8 +46,8 @@ func TestValidateSpecThroughCreate(t *testing.T) {
 		wantField string // empty means accepted
 	}{
 		{"audit logging NONE", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_NONE}, ""},
-		{"audit logging ALL", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_ALL}, "spec.object_audit_logging"},
-		{"audit logging MUTATE_ONLY", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_MUTATE_ONLY}, "spec.object_audit_logging"},
+		{"audit logging ALL", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_ALL}, ""},
+		{"audit logging MUTATE_ONLY", &storagepb.BucketSpec{ObjectAuditLogging: storagepb.BucketSpec_MUTATE_ONLY}, ""},
 		{"last access with a condition", &storagepb.BucketSpec{LastAccess: &storagepb.LastAccessConfiguration{
 			Conditions: []*storagepb.LastAccessConfiguration_Condition{{}},
 		}}, "spec.last_access"},

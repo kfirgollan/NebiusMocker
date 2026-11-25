@@ -53,7 +53,11 @@ type ObjectAccess struct {
 	// requested object version, if any.
 	ObjectKey  string
 	ObjectKeys []string
-	VersionID  string
+	// KeyErrors are the per-key failures of a DeleteObjects batch (key →
+	// S3 error code, e.g. AccessDenied from the bucket policy); the other
+	// ObjectKeys were deleted.
+	KeyErrors map[string]string
+	VersionID string
 	// Params are further request parameters worth auditing, e.g. "prefix",
 	// "upload_id", "part_number", "copy_source". Never credentials.
 	Params map[string]string

@@ -185,11 +185,7 @@ func requestParams(a peer.ObjectAccess) *structpb.Struct {
 		fields["object_key"] = structpb.NewStringValue(a.ObjectKey)
 	}
 	if len(a.ObjectKeys) > 0 {
-		keys := make([]*structpb.Value, 0, len(a.ObjectKeys))
-		for _, k := range a.ObjectKeys {
-			keys = append(keys, structpb.NewStringValue(k))
-		}
-		fields["object_keys"] = structpb.NewListValue(&structpb.ListValue{Values: keys})
+		fields["object_keys"] = stringList(a.ObjectKeys)
 	}
 	if a.VersionID != "" {
 		fields["version"] = structpb.NewStringValue(a.VersionID)
@@ -202,10 +198,35 @@ func requestParams(a peer.ObjectAccess) *structpb.Struct {
 	return &structpb.Struct{Fields: fields}
 }
 
+func stringList(ss []string) *structpb.Value {
+	vs := make([]*structpb.Value, 0, len(ss))
+	for _, s := range ss {
+		vs = append(vs, structpb.NewStringValue(s))
+	}
+	return structpb.NewListValue(&structpb.ListValue{Values: vs})
+}
+
 func responsePayload(a peer.ObjectAccess) *structpb.Struct {
 	fields := map[string]*structpb.Value{"http_status": structpb.NewNumberValue(float64(a.HTTPStatus))}
 	if a.ErrorCode != "" {
 		fields["error_code"] = structpb.NewStringValue(a.ErrorCode)
+	}
+	if len(a.ObjectKeys) > 0 {
+		// DeleteObjects: which keys went and which failed, with their codes.
+		deleted := make([]string, 0, len(a.ObjectKeys))
+		for _, k := range a.ObjectKeys {
+			if _, failed := a.KeyErrors[k]; !failed {
+				deleted = append(deleted, k)
+			}
+		}
+		fields["deleted"] = stringList(deleted)
+		if len(a.KeyErrors) > 0 {
+			errs := make(map[string]*structpb.Value, len(a.KeyErrors))
+			for k, c := range a.KeyErrors {
+				errs[k] = structpb.NewStringValue(c)
+			}
+			fields["errors"] = structpb.NewStructValue(&structpb.Struct{Fields: errs})
+		}
 	}
 	for k, v := range a.Response {
 		if _, taken := fields[k]; !taken {

@@ -118,6 +118,7 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 		return fmt.Errorf("storage: %w", err)
 	}
 	m.s3 = s3.NewServer(s3.Config{Listen: listen, Domain: cfg.S3Domain, Region: cfg.Region}, gate, svc, upstreamFor(deps), deps.Clock, deps.Log)
+	m.s3.AuditTo(deps.Peers) // data-plane audit events, when the audit module is enabled
 	return nil
 }
 

@@ -34,6 +34,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/rustfs"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 	"github.com/kfirgollan/NebiusMocker/pkg/sigv4"
 	"github.com/kfirgollan/NebiusMocker/services/storage/domain"
@@ -83,6 +84,7 @@ type Server struct {
 	upstream Upstream
 	clk      clock.Clock
 	log      *slog.Logger
+	peers    *peer.Directory // data-plane audit sink lookup (AuditTo)
 
 	mu   sync.Mutex
 	srv  *http.Server
@@ -141,7 +143,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.preflight(w, r, t)
 		return
 	}
-	rw := &responseWriter{ResponseWriter: w}
+	sr := &statusRecorder{ResponseWriter: w}
+	rw := &responseWriter{ResponseWriter: sr}
+	defer func() { s.recordAccess(r, t, sr, rw.bulkDelete) }() // after finish: the final status
 	defer rw.finish()
 	if origin := r.Header.Get("Origin"); origin != "" && t.Bucket != "" {
 		rw.vary = true

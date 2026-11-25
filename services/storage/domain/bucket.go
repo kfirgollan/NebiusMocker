@@ -542,9 +542,6 @@ func validateSpec(spec *storagepb.BucketSpec) error {
 	if err := checkStorageClass("spec.default_storage_class", spec.GetDefaultStorageClass()); err != nil {
 		return err
 	}
-	if l := spec.GetObjectAuditLogging(); l != storagepb.BucketSpec_OBJECT_AUDIT_LOGGING_UNSPECIFIED && l != storagepb.BucketSpec_NONE {
-		return errs.BadRequest(errs.Violation{Field: "spec.object_audit_logging", Message: "not supported by NebiusMocker: S3 object requests are not audit-logged; use NONE"})
-	}
 	if len(spec.GetLastAccess().GetConditions()) > 0 {
 		return errs.BadRequest(errs.Violation{Field: "spec.last_access", Message: "not supported by NebiusMocker: last-access tracking is not emulated"})
 	}
