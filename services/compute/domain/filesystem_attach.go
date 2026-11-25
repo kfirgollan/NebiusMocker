@@ -80,6 +80,31 @@ func (a *FilesystemAttach) Detach(ctx context.Context, fsID, instanceID string) 
 	return err
 }
 
+var _ FilesystemExposures = (*FilesystemAttach)(nil)
+
+// Expose implements FilesystemExposures.
+func (a *FilesystemAttach) Expose(ctx context.Context, fsID, bucketID, projectID string) error {
+	if fsID == "" || bucketID == "" {
+		return errs.BadRequest(errs.Violation{Field: "spec.filesystem_bucket.filesystem_id", Message: "required"})
+	}
+	return a.filesystems.Expose(ctx, fsID, bucketID, func(fs *computepb.Filesystem) error {
+		if fs.GetMetadata().GetParentId() != projectID {
+			return errs.BadRequest(errs.Violation{
+				Field: "spec.filesystem_bucket.filesystem_id", Message: fmt.Sprintf("filesystem %s is not in project %s", fsID, projectID),
+			})
+		}
+		if st := fs.GetStatus().GetState(); st != computepb.FilesystemStatus_READY && st != computepb.FilesystemStatus_UPDATING {
+			return errs.BadState(fsID, fmt.Sprintf("filesystem %s is %s, not READY", fsID, st))
+		}
+		return nil
+	})
+}
+
+// Unexpose implements FilesystemExposures.
+func (a *FilesystemAttach) Unexpose(ctx context.Context, fsID, bucketID string) error {
+	return a.filesystems.Unexpose(ctx, fsID, bucketID)
+}
+
 // CheckFilesystemDeletable reports why a filesystem cannot be deleted, or nil.
 func CheckFilesystemDeletable(fs *computepb.Filesystem) error {
 	id, st := fs.GetMetadata().GetId(), fs.GetStatus()

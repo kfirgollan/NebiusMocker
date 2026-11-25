@@ -225,6 +225,14 @@ type FilesystemRepository interface {
 	// stored filesystem, or errs.NotFound.
 	Mutate(ctx context.Context, id string, fn func(*computepb.Filesystem) error) (*computepb.Filesystem, error)
 	Delete(ctx context.Context, id string) error
+	// Expose atomically loads the filesystem, runs check on it and, if check
+	// passes, records bucketID as exposing it (errs.NotFound if missing).
+	Expose(ctx context.Context, fsID, bucketID string, check func(*computepb.Filesystem) error) error
+	// Unexpose removes that record; a missing record is not an error.
+	Unexpose(ctx context.Context, fsID, bucketID string) error
+	// MutateExposed is Mutate whose fn also gets the IDs of the buckets
+	// exposing the filesystem, read in the same transaction.
+	MutateExposed(ctx context.Context, id string, fn func(fs *computepb.Filesystem, exposedBy []string) error) (*computepb.Filesystem, error)
 }
 
 // FilesystemAttachments records which instances a shared filesystem is
@@ -256,10 +264,16 @@ type FilesystemData interface {
 	Purge(ctx context.Context, fsID string) error
 }
 
-// FilesystemBucketUsers lists the Object Storage filesystem buckets that
-// expose a filesystem (satisfied through peer.FilesystemBuckets, provided by
-// the storage module when it is enabled).
-type FilesystemBucketUsers interface {
-	// BucketsOf returns the names of the buckets exposing fsID (none: empty).
-	BucketsOf(ctx context.Context, fsID string) ([]string, error)
+// FilesystemExposures records which Object Storage filesystem buckets expose
+// a filesystem (the storage module calls it through peer.Filesystems on
+// bucket create and delete). Satisfied by *FilesystemAttach.
+type FilesystemExposures interface {
+	// Expose atomically checks that the filesystem exists (errs.NotFound),
+	// is in projectID (errs.BadRequest) and is READY or UPDATING
+	// (errs.BadState), then records bucketID. FilesystemService.Delete checks
+	// the records in the transaction that marks the filesystem DELETING, so
+	// an Expose and a Delete never both succeed.
+	Expose(ctx context.Context, fsID, bucketID, projectID string) error
+	// Unexpose removes the record; missing is not an error.
+	Unexpose(ctx context.Context, fsID, bucketID string) error
 }

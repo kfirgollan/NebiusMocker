@@ -33,7 +33,6 @@ func registerFilesystems(reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	data := fsstore.New(deps.ObjStore)
 	svc, err := domain.NewFilesystemService(domain.FilesystemDeps{
 		Filesystems: repo, OpIndex: dal.NewFilesystemOpIndex(deps.Store), Data: data,
-		Buckets:  filesystemBucketUsers{peers: deps.Peers},
 		Projects: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 	})
 	if err != nil {
@@ -45,27 +44,19 @@ func registerFilesystems(reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	})
 	api.RegisterFilesystemAuthzRules(deps.Rules)
 	computepb.RegisterFilesystemServiceServer(reg, api.NewFilesystemHandler(svc))
-	if err := peer.Provide[peer.Filesystems](deps.Peers, peer.FilesystemsKey, filesystemPeer{repo: repo, data: data}); err != nil {
+	exposures, err := domain.NewFilesystemAttachments(repo)
+	if err != nil {
+		return fmt.Errorf("compute: %w", err)
+	}
+	if err := peer.Provide[peer.Filesystems](deps.Peers, peer.FilesystemsKey, filesystemPeer{repo: repo, data: data, FilesystemExposures: exposures}); err != nil {
 		return fmt.Errorf("compute: %w", err)
 	}
 	return nil
 }
 
-// filesystemBucketUsers asks the storage module, when enabled, which
-// filesystem buckets expose a filesystem. The lookup happens at call time
-// because module order is not guaranteed.
-type filesystemBucketUsers struct{ peers *peer.Directory }
-
-func (b filesystemBucketUsers) BucketsOf(ctx context.Context, fsID string) ([]string, error) {
-	users, ok := peer.Lookup(b.peers, peer.FilesystemBucketsKey)
-	if !ok {
-		return nil, nil
-	}
-	return users.BucketsOf(ctx, fsID)
-}
-
 // filesystemPeer is the peer.Filesystems capability of this module.
 type filesystemPeer struct {
+	domain.FilesystemExposures
 	repo domain.FilesystemRepository
 	data domain.FilesystemData
 }

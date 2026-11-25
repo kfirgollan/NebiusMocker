@@ -28,8 +28,9 @@ const (
 
 // fakeFilesystems is a map-backed domain.Filesystems.
 type fakeFilesystems struct {
-	mu  sync.Mutex
-	fss map[string]peer.Filesystem
+	mu      sync.Mutex
+	fss     map[string]peer.Filesystem
+	exposed map[string][]string
 }
 
 func (f *fakeFilesystems) Filesystem(_ context.Context, id string) (peer.Filesystem, error) {
@@ -40,6 +41,41 @@ func (f *fakeFilesystems) Filesystem(_ context.Context, id string) (peer.Filesys
 		return peer.Filesystem{}, errs.NotFound(id)
 	}
 	return fs, nil
+}
+
+// Expose records bucketID like compute does: the filesystem must exist, be
+// in projectID and be ready.
+func (f *fakeFilesystems) Expose(_ context.Context, fsID, bucketID, projectID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fs, ok := f.fss[fsID]
+	switch {
+	case !ok:
+		return errs.NotFound(fsID)
+	case fs.ParentID != projectID:
+		return errs.BadRequest(errs.Violation{Field: "spec.filesystem_bucket.filesystem_id", Message: "other project"})
+	case !fs.Ready:
+		return errs.BadState(fsID, "not ready")
+	}
+	if f.exposed == nil {
+		f.exposed = map[string][]string{}
+	}
+	f.exposed[fsID] = append(f.exposed[fsID], bucketID)
+	return nil
+}
+
+func (f *fakeFilesystems) Unexpose(_ context.Context, fsID, bucketID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exposed[fsID] = slices.DeleteFunc(f.exposed[fsID], func(b string) bool { return b == bucketID })
+	return nil
+}
+
+// exposedBy returns the buckets recorded on fsID.
+func (f *fakeFilesystems) exposedBy(fsID string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.exposed[fsID])
 }
 
 func (f *fakeFilesystems) set(fs peer.Filesystem) {
@@ -147,6 +183,23 @@ func TestCreateFilesystemBucket(t *testing.T) {
 	}
 	if len(f.backend.buckets) != 0 {
 		t.Errorf("backend buckets = %v, want none", f.backend.buckets)
+	}
+	if got := f.fss.exposedBy(fsID1); !slices.Equal(got, []string{b.GetMetadata().GetId()}) {
+		t.Errorf("filesystem exposed by %v, want the new bucket", got)
+	}
+}
+
+// TestCreateFilesystemBucketNameTakenUnexposes checks that a bucket whose
+// record cannot be stored leaves no reference on the filesystem.
+func TestCreateFilesystemBucketNameTakenUnexposes(t *testing.T) {
+	t.Parallel()
+	f := newFSFixture(t, fsOptions{})
+	first := f.create(t, "fsbucket", fsSpec())
+	if err := f.createErr(t, fsSpec()); !errs.IsKind(err, errs.KindAlreadyExists) {
+		t.Fatalf("second fsbucket = %v, want AlreadyExists", err)
+	}
+	if got := f.fss.exposedBy(fsID1); !slices.Equal(got, []string{first.GetMetadata().GetId()}) {
+		t.Fatalf("filesystem exposed by %v, want only the first bucket", got)
 	}
 }
 
@@ -360,6 +413,9 @@ func TestDeleteFilesystemBucket(t *testing.T) {
 			if len(f.backend.deleteHits) != 0 {
 				t.Errorf("backend DeleteBucket called for %v; the files belong to the filesystem", f.backend.deleteHits)
 			}
+			if got := f.fss.exposedBy(fsID1); len(got) != 0 {
+				t.Errorf("filesystem still exposed by %v after the bucket was deleted", got)
+			}
 			if len(f.content.calls) != 0 {
 				t.Errorf("content calls = %v, want none", f.content.calls)
 			}
@@ -445,28 +501,6 @@ func TestFilesystemBucketBackend(t *testing.T) {
 	f.fss.set(peer.Filesystem{ID: fsID1, ParentID: projectID, Ready: false, CapacityBytes: fsCapacity, BackendBucket: fsStore1})
 	if _, err := f.svc.Backend(t.Context(), b); !errs.IsKind(err, errs.KindBadState) {
 		t.Errorf("Backend with the filesystem not ready = %v, want BadState", err)
-	}
-}
-
-func TestBucketsOf(t *testing.T) {
-	t.Parallel()
-	f := newFSFixture(t, fsOptions{})
-	const fsID2 = "computefilesystem-e00test2"
-	f.fss.set(peer.Filesystem{ID: fsID2, ParentID: projectID, Ready: true, CapacityBytes: fsCapacity, BackendBucket: "fs-store-2"})
-	f.create(t, "zeta", fsSpec())
-	f.create(t, "alpha", fsSpec())
-	f.create(t, "regular", nil)
-	f.create(t, "other-fs", fsSpec(func(s *storagepb.BucketSpec) { fsOf(s).FilesystemId = fsID2 }))
-
-	got, err := f.svc.BucketsOf(t.Context(), fsID1)
-	if err != nil || !slices.Equal(got, []string{"alpha", "zeta"}) {
-		t.Fatalf("BucketsOf(%s) = %v, %v; want [alpha zeta]", fsID1, got, err)
-	}
-	if got, err := f.svc.BucketsOf(t.Context(), fsID2); err != nil || !slices.Equal(got, []string{"other-fs"}) {
-		t.Fatalf("BucketsOf(%s) = %v, %v; want [other-fs]", fsID2, got, err)
-	}
-	if got, err := f.svc.BucketsOf(t.Context(), "computefilesystem-none"); err != nil || len(got) != 0 {
-		t.Fatalf("BucketsOf(unknown) = %v, %v; want none", got, err)
 	}
 }
 

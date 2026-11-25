@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 
 type fakeFilesystems struct {
 	repo memRepo[*computepb.Filesystem]
+
+	mu      sync.Mutex
+	exposed map[string][]string // filesystem ID -> bucket IDs
 }
 
 func (f *fakeFilesystems) Get(_ context.Context, id string) (*computepb.Filesystem, error) {
@@ -39,6 +43,37 @@ func (f *fakeFilesystems) Mutate(_ context.Context, id string, fn func(*computep
 }
 
 func (f *fakeFilesystems) Delete(_ context.Context, id string) error { return f.repo.remove(id) }
+
+func (f *fakeFilesystems) Expose(_ context.Context, fsID, bucketID string, check func(*computepb.Filesystem) error) error {
+	fs, err := f.repo.get(fsID)
+	if err != nil {
+		return err
+	}
+	if err := check(fs); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.exposed == nil {
+		f.exposed = map[string][]string{}
+	}
+	f.exposed[fsID] = append(f.exposed[fsID], bucketID)
+	return nil
+}
+
+func (f *fakeFilesystems) Unexpose(_ context.Context, fsID, bucketID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exposed[fsID] = slices.DeleteFunc(f.exposed[fsID], func(b string) bool { return b == bucketID })
+	return nil
+}
+
+func (f *fakeFilesystems) MutateExposed(_ context.Context, id string, fn func(*computepb.Filesystem, []string) error) (*computepb.Filesystem, error) {
+	f.mu.Lock()
+	buckets := slices.Clone(f.exposed[id])
+	f.mu.Unlock()
+	return f.repo.mutate(id, func(fs *computepb.Filesystem) error { return fn(fs, buckets) })
+}
 
 // fakeFsData records Provision and Purge calls.
 type fakeFsData struct {
@@ -67,28 +102,22 @@ func (f *fakeFsData) Purge(_ context.Context, id string) error {
 	return nil
 }
 
-// fakeBucketUsers maps a filesystem ID to the buckets exposing it.
-type fakeBucketUsers map[string][]string
-
-func (f fakeBucketUsers) BucketsOf(_ context.Context, id string) ([]string, error) { return f[id], nil }
-
 type fsFixture struct {
-	repo    *fakeFilesystems
-	data    *fakeFsData
-	buckets fakeBucketUsers
-	ops     *deferOps
-	clk     *clock.Manual
-	svc     *FilesystemService
+	repo *fakeFilesystems
+	data *fakeFsData
+	ops  *deferOps
+	clk  *clock.Manual
+	svc  *FilesystemService
 }
 
 func newFsFixture(t *testing.T) *fsFixture {
 	t.Helper()
 	f := &fsFixture{
-		repo: &fakeFilesystems{}, data: &fakeFsData{}, buckets: fakeBucketUsers{}, ops: &deferOps{},
+		repo: &fakeFilesystems{}, data: &fakeFsData{}, ops: &deferOps{},
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	svc, err := NewFilesystemService(FilesystemDeps{
-		Filesystems: f.repo, OpIndex: &fakeOpIndex{}, Data: f.data, Buckets: f.buckets,
+		Filesystems: f.repo, OpIndex: &fakeOpIndex{}, Data: f.data,
 		Projects: fakeProjects{testProject: true}, Ops: f.ops, IDs: &fakeIDs{}, Clock: f.clk,
 	})
 	if err != nil {

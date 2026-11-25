@@ -76,6 +76,11 @@ type Hierarchy interface {
 // errs.NotFound for unknown IDs.
 type Filesystems interface {
 	Filesystem(ctx context.Context, id string) (peer.Filesystem, error)
+	// Expose records the bucket on the filesystem atomically with the
+	// filesystem's checks, so the filesystem cannot be deleted while the
+	// bucket exists; Unexpose removes the record (idempotent).
+	Expose(ctx context.Context, fsID, bucketID, projectID string) error
+	Unexpose(ctx context.Context, fsID, bucketID string) error
 }
 
 // AccessChecker evaluates permissions (satisfied by *authz.Engine).

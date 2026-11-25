@@ -121,6 +121,97 @@ func TestFilesystemAttachments(t *testing.T) {
 	}
 }
 
+func TestFilesystemExposures(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := NewFilesystemRepo(store.NewMemory())
+	busy := filesystem("computefilesystem-busy", "busy")
+	busy.Status.State = computepb.FilesystemStatus_DELETING
+	for _, fs := range []*computepb.Filesystem{filesystem("computefilesystem-ok", "ok"), busy} {
+		if err := r.Create(ctx, fs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exp, err := domain.NewFilesystemAttachments(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, fs, project string
+		want              errs.Kind
+	}{
+		{"missing", "computefilesystem-missing", parent, errs.KindNotFound},
+		{"other project", "computefilesystem-ok", "project-other", errs.KindBadRequest},
+		{"deleting", "computefilesystem-busy", parent, errs.KindBadState},
+	} {
+		if err := exp.Expose(ctx, tc.fs, "storagebucket-a", tc.project); !errs.IsKind(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	for _, b := range []string{"storagebucket-a", "storagebucket-a", "storagebucket-b"} {
+		if err := exp.Expose(ctx, "computefilesystem-ok", b, parent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var seen []string
+	if _, err := r.MutateExposed(ctx, "computefilesystem-ok", func(_ *computepb.Filesystem, b []string) error {
+		seen = b
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(seen, []string{"storagebucket-a", "storagebucket-b"}) {
+		t.Fatalf("exposed by %v", seen)
+	}
+	for _, b := range []string{"storagebucket-a", "storagebucket-b", "storagebucket-b"} {
+		if err := exp.Unexpose(ctx, "computefilesystem-ok", b); err != nil {
+			t.Fatalf("Unexpose(%s): %v", b, err)
+		}
+	}
+	if _, err := r.MutateExposed(ctx, "computefilesystem-ok", func(_ *computepb.Filesystem, b []string) error {
+		seen = b
+		return nil
+	}); err != nil || len(seen) != 0 {
+		t.Fatalf("after unexpose: %v, %v", seen, err)
+	}
+}
+
+// TestFilesystemExposeVersusDelete races a filesystem bucket's Expose against
+// the Delete check (as FilesystemService.Delete runs it): exactly one wins.
+func TestFilesystemExposeVersusDelete(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	for range 50 {
+		r := NewFilesystemRepo(store.NewMemory())
+		if err := r.Create(ctx, filesystem("computefilesystem-x", "x")); err != nil {
+			t.Fatal(err)
+		}
+		exp, err := domain.NewFilesystemAttachments(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var exposeErr, deleteErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { exposeErr = exp.Expose(ctx, "computefilesystem-x", "storagebucket-a", parent) })
+		wg.Go(func() {
+			_, deleteErr = r.MutateExposed(ctx, "computefilesystem-x", func(fs *computepb.Filesystem, buckets []string) error {
+				if len(buckets) > 0 {
+					return errs.BadState("computefilesystem-x", "exposed")
+				}
+				if err := domain.CheckFilesystemDeletable(fs); err != nil {
+					return err
+				}
+				fs.Status.State = computepb.FilesystemStatus_DELETING
+				return nil
+			})
+		})
+		wg.Wait()
+		if (exposeErr == nil) == (deleteErr == nil) {
+			t.Fatalf("expose err %v, delete err %v: want exactly one to succeed", exposeErr, deleteErr)
+		}
+	}
+}
+
 // TestFilesystemAttachVersusDelete races Attach against the Delete check
 // (as FilesystemService.Delete runs it): exactly one of them wins.
 func TestFilesystemAttachVersusDelete(t *testing.T) {

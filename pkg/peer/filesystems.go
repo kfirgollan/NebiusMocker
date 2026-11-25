@@ -8,23 +8,20 @@ import "context"
 // a filesystem through the S3 API.
 var FilesystemsKey = NewKey[Filesystems]("compute.filesystems")
 
-// Filesystems resolves shared filesystems to their stored files.
+// Filesystems resolves shared filesystems to their stored files and records
+// which buckets expose them. All calls are internal: the caller authorizes
+// access itself.
 type Filesystems interface {
-	// Filesystem returns the filesystem with the ID, or an errs.NotFound
-	// error. It is an internal call: the caller authorizes access itself.
+	// Filesystem returns the filesystem with the ID, or an errs.NotFound error.
 	Filesystem(ctx context.Context, id string) (Filesystem, error)
-}
-
-// FilesystemBucketsKey is the capability provided by the storage module: the
-// filesystem buckets that expose a filesystem. Compute refuses to delete a
-// filesystem while one exists.
-var FilesystemBucketsKey = NewKey[FilesystemBuckets]("storage.filesystem-buckets")
-
-// FilesystemBuckets lists the Object Storage buckets that expose a filesystem.
-type FilesystemBuckets interface {
-	// BucketsOf returns the names of the filesystem buckets whose
-	// spec.filesystem_bucket.filesystem_id is filesystemID (none: empty).
-	BucketsOf(ctx context.Context, filesystemID string) ([]string, error)
+	// Expose atomically checks that the filesystem exists (errs.NotFound), is
+	// in projectID (errs.BadRequest) and is READY or UPDATING (errs.BadState),
+	// and records bucketID as exposing it. While any bucket exposes it, the
+	// filesystem cannot be deleted; the check and the deletion are atomic
+	// against Expose. Exposing twice is a no-op.
+	Expose(ctx context.Context, fsID, bucketID, projectID string) error
+	// Unexpose removes the record; a missing filesystem or record is not an error.
+	Unexpose(ctx context.Context, fsID, bucketID string) error
 }
 
 // Filesystem is the data-plane view of a shared filesystem.

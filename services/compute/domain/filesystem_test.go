@@ -340,7 +340,9 @@ func TestFilesystemDelete(t *testing.T) {
 			t.Parallel()
 			f := newFsFixture(t)
 			f.seed(t, "fs-1", tc.seed)
-			f.buckets["fs-1"] = tc.buckets
+			f.repo.mu.Lock()
+			f.repo.exposed = map[string][]string{"fs-1": tc.buckets}
+			f.repo.mu.Unlock()
 			_, err := f.svc.Delete(t.Context(), "fs-1", nil)
 			if !errs.IsKind(err, tc.kind) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %v mentioning %q", err, tc.kind, tc.want)

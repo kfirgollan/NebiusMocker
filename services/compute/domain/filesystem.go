@@ -27,7 +27,6 @@ type FilesystemDeps struct {
 	// OpIndex records filesystem operations per project (ListOperationsByParent).
 	OpIndex  OperationIndex
 	Data     FilesystemData
-	Buckets  FilesystemBucketUsers
 	Projects Projects
 	Ops      Operations
 	IDs      IDGenerator
@@ -35,7 +34,7 @@ type FilesystemDeps struct {
 }
 
 func (d FilesystemDeps) validate() error {
-	if d.Filesystems == nil || d.OpIndex == nil || d.Data == nil || d.Buckets == nil || d.Projects == nil ||
+	if d.Filesystems == nil || d.OpIndex == nil || d.Data == nil || d.Projects == nil ||
 		d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: filesystem service dependencies must not be nil")
 	}
@@ -190,15 +189,13 @@ func (s *FilesystemService) Delete(ctx context.Context, id string, request proto
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     request,
 		Prepare: func(ctx context.Context) error {
-			buckets, err := s.d.Buckets.BucketsOf(ctx, id)
-			if err != nil {
-				return err
-			}
-			if len(buckets) > 0 {
-				return errs.BadState(id, fmt.Sprintf(
-					"filesystem is exposed by Object Storage filesystem buckets [%s]: delete them first", strings.Join(buckets, ", ")))
-			}
-			_, err = s.d.Filesystems.Mutate(ctx, id, func(f *computepb.Filesystem) error {
+			// The bucket check and the state change share one transaction
+			// with Expose's check, so a concurrent bucket create cannot slip in.
+			_, err := s.d.Filesystems.MutateExposed(ctx, id, func(f *computepb.Filesystem, buckets []string) error {
+				if len(buckets) > 0 {
+					return errs.BadState(id, fmt.Sprintf(
+						"filesystem is exposed by Object Storage filesystem buckets [%s]: delete them first", strings.Join(buckets, ", ")))
+				}
 				if err := CheckFilesystemDeletable(f); err != nil {
 					return err
 				}

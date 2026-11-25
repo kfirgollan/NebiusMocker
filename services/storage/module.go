@@ -94,9 +94,6 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := peer.Provide[peer.BucketResolver](deps.Peers, peer.BucketResolverKey, svc); err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
-	if err := peer.Provide[peer.FilesystemBuckets](deps.Peers, peer.FilesystemBucketsKey, svc); err != nil {
-		return fmt.Errorf("storage: %w", err)
-	}
 	storagepb.RegisterBucketServiceServer(reg, api.NewBucketHandler(svc))
 
 	listen := cfg.S3Listen
@@ -150,6 +147,24 @@ func (p peerFilesystems) Filesystem(ctx context.Context, id string) (peer.Filesy
 		})
 	}
 	return fs.Filesystem(ctx, id)
+}
+
+func (p peerFilesystems) Expose(ctx context.Context, fsID, bucketID, projectID string) error {
+	fs, ok := peer.Lookup(p.d, peer.FilesystemsKey)
+	if !ok {
+		return errs.BadRequest(errs.Violation{
+			Field: "spec.filesystem_bucket.filesystem_id", Message: "filesystem buckets need the compute module, which is not enabled",
+		})
+	}
+	return fs.Expose(ctx, fsID, bucketID, projectID)
+}
+
+func (p peerFilesystems) Unexpose(ctx context.Context, fsID, bucketID string) error {
+	fs, ok := peer.Lookup(p.d, peer.FilesystemsKey)
+	if !ok {
+		return nil // nothing was exposed without compute
+	}
+	return fs.Unexpose(ctx, fsID, bucketID)
 }
 
 // upstreamFor picks the S3 relay for the configured object store.

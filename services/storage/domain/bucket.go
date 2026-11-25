@@ -210,9 +210,27 @@ func (s *BucketService) Create(ctx context.Context, cmd CreateBucketCmd) (*opera
 		Description: "Create bucket",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.buckets.Create(ctx, b) },
+		Prepare:     func(ctx context.Context) error { return s.createRecord(ctx, b) },
 		Work:        func(ctx context.Context) error { return s.provision(ctx, id) },
 	})
+}
+
+// createRecord stores a new bucket. A filesystem bucket is first recorded on
+// its filesystem (Expose, atomic with the filesystem's checks and with its
+// deletion); if storing the bucket then fails, the record is removed again.
+func (s *BucketService) createRecord(ctx context.Context, b *storagepb.Bucket) error {
+	fsID := b.GetSpec().GetFilesystemBucket().GetFilesystemId()
+	if fsID == "" {
+		return s.buckets.Create(ctx, b)
+	}
+	id := b.GetMetadata().GetId()
+	if err := s.filesystems.Expose(ctx, fsID, id, b.GetMetadata().GetParentId()); err != nil {
+		return fmt.Errorf("%s: %w", fsField("filesystem_id"), err)
+	}
+	if err := s.buckets.Create(ctx, b); err != nil {
+		return errors.Join(err, s.filesystems.Unexpose(ctx, fsID, id))
+	}
+	return nil
 }
 
 // provision creates the backing bucket and activates the record; on failure
@@ -473,8 +491,13 @@ func (s *BucketService) purge(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if IsFilesystemBucket(b) { // the files belong to the filesystem and stay
-		return s.buckets.Delete(ctx, id)
+	if fsID := b.GetSpec().GetFilesystemBucket().GetFilesystemId(); fsID != "" {
+		// The files belong to the filesystem and stay; it may be deleted
+		// once no bucket exposes it.
+		if err := s.buckets.Delete(ctx, id); err != nil || s.filesystems == nil {
+			return err
+		}
+		return s.filesystems.Unexpose(ctx, fsID, id)
 	}
 	if err := s.backend.DeleteBucket(ctx, b.GetMetadata().GetName()); err != nil {
 		return fmt.Errorf("delete backing bucket %s: %w", b.GetMetadata().GetName(), err)

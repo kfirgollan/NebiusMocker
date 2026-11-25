@@ -3,7 +3,6 @@ package domain
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -187,23 +186,6 @@ func (s *BucketService) checkFilesystemCapacity(ctx context.Context, b *storagep
 			"no space left on filesystem %s: its size is %d bytes; %d bytes are stored and the request adds %d", fs.ID, fs.CapacityBytes, used, incoming)}
 	}
 	return nil
-}
-
-// BucketsOf implements peer.FilesystemBuckets: the names of the buckets that
-// expose filesystemID, in any state.
-func (s *BucketService) BucketsOf(ctx context.Context, filesystemID string) ([]string, error) {
-	all, err := s.buckets.ListAll(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, b := range all {
-		if b.GetSpec().GetFilesystemBucket().GetFilesystemId() == filesystemID {
-			names = append(names, b.GetMetadata().GetName())
-		}
-	}
-	slices.Sort(names)
-	return names, nil
 }
 
 // checkFilesystemBucketDelete refuses a delayed deletion: filesystem buckets

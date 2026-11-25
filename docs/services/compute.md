@@ -339,6 +339,11 @@ Rules from https://docs.nebius.com/compute/storage/types and /compute/storage/ma
 - **Delete** is `FAILED_PRECONDITION` while `forbid_deletion` is set, while instances are attached
   (`status.read_write_attachments`), and while an Object Storage filesystem bucket exposes it (the docs don't say what
   upstream does; refusing keeps the bucket from silently pointing at nothing). The operation then purges every file.
+  Both references are atomic with deletion: bucket Create records itself on the filesystem (`Expose`, store kind
+  `computefilesystem.exposure`) in the same compute store transaction as the filesystem's READY/project checks, and
+  Delete reads those records in the transaction that marks the filesystem `DELETING`, so a racing bucket Create and
+  filesystem Delete never both succeed (DAL race tests, like Attach vs Delete). A bucket whose record cannot be stored
+  is unexposed again; bucket delete unexposes.
 - **Attachments** (docs: compute/storage/use): one filesystem attaches to many VMs of its project, `READ_WRITE` only.
   InstanceService checks that the VM is stopped and that `mount_tag` is unique per VM, then calls
   `FilesystemAttachments.Attach`. Instance delete detaches.
@@ -356,8 +361,8 @@ Rules from https://docs.nebius.com/compute/storage/types and /compute/storage/ma
   bucket with `spec.filesystem_bucket.filesystem_id` is a view of the filesystem's store bucket. The S3 front
   (`:4580`) authenticates and authorizes it like any bucket (SigV4 with an iam.v2 access key, `storage.*` permits), then
   relays to the store bucket; response bodies name the Nebius bucket and report the `FILESYSTEM` storage class.
-  Storage reaches compute only through `peer.FilesystemsKey` and compute reaches storage through
-  `peer.FilesystemBucketsKey` (`pkg/peer/filesystems.go`).
+  Storage reaches compute only through `peer.FilesystemsKey` (`pkg/peer/filesystems.go`: `Filesystem`, `Expose`,
+  `Unexpose`); compute never calls storage.
 - **Capacity**: every write that adds bytes (PutObject, CopyObject, UploadPart, UploadPartCopy) is refused with S3
   `QuotaExceeded` when the stored bytes of the filesystem (all files plus in-flight multipart parts, shared by every
   bucket of the filesystem) plus the request would exceed `status.size_bytes`. An overwrite counts only the size
@@ -392,7 +397,10 @@ bucket. The mocker must run with `NEBIUS_MOCKER_OBJSTORE=rustfs` (the S3 front n
    Only the filesystem root with default ownership can be exposed: `directory` may be empty or `"/"`, `uid` and `gid`
    0, `file_mode` empty or `"644"`, `directory_mode` empty or `"755"` (other values are `INVALID_ARGUMENT`, see Not
    yet). The filesystem must be `READY` and in the bucket's project, and the caller needs
-   `compute.filesystems.useViaObjectStorage` on it (the `editor` role or `compute.use-via-object-storage`).
+   `compute.filesystems.useViaObjectStorage` on it. The roles are Nebius's (IAM roles reference: `editor`, `admin` and
+   `compute.use-via-object-storage`, "access data stored on shared filesystems through filesystem buckets in Object
+   Storage", grant "Use through Object Storage"); the permission identifier is mock-specific, since the docs list
+   only role names and permission labels.
 2. Create a service account in the project's `editors` group and an access key (`nebius iam service-account create`,
    `nebius iam group-membership create --parent-id <editors-group-id> --member-id <sa-id>`, `nebius iam v2 access-key
    create --parent-id <project> --account-service-account-id <sa-id>`), and read the secret with `nebius iam v2
