@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	kmspb "github.com/nebius/gosdk/proto/nebius/kms/v1"
 )
@@ -50,7 +51,12 @@ type symMaterial struct {
 	Versions []symVersion `json:"versions"`
 	Primary  uint32       `json:"primary"`
 	// Rotations counts manual rotations (limited to maxManualRotations).
+	// Automatic rotations are not counted: the limit is on manual ones only.
 	Rotations int `json:"rotations"`
+	// RotatedAt is when the primary version was created by a rotation
+	// (manual or automatic); zero until the first rotation, when the key's
+	// created_at is the start of the rotation schedule.
+	RotatedAt time.Time `json:"rotated_at,omitzero"`
 }
 
 // LogValue keeps key material out of logs even if a value is logged by mistake.
@@ -85,8 +91,9 @@ func newSymMaterial(rnd io.Reader, alg kmspb.SymmetricAlgorithm) (symMaterial, e
 	return symMaterial{Versions: []symVersion{{Version: 1, Key: k}}, Primary: 1}, nil
 }
 
-// rotate adds a new version with fresh material and makes it primary.
-func (m symMaterial) rotate(rnd io.Reader) (symMaterial, error) {
+// rotate adds a new version with fresh material, made at time at, and makes it
+// primary.
+func (m symMaterial) rotate(rnd io.Reader, at time.Time) (symMaterial, error) {
 	size := len(m.Versions[len(m.Versions)-1].Key)
 	k, err := randomBytes(rnd, size)
 	if err != nil {
@@ -97,7 +104,7 @@ func (m symMaterial) rotate(rnd io.Reader) (symMaterial, error) {
 		next = max(next, v.Version)
 	}
 	next++
-	out := symMaterial{Versions: append(append([]symVersion(nil), m.Versions...), symVersion{Version: next, Key: k}), Primary: next, Rotations: m.Rotations}
+	out := symMaterial{Versions: append(append([]symVersion(nil), m.Versions...), symVersion{Version: next, Key: k}), Primary: next, Rotations: m.Rotations, RotatedAt: at}
 	return out, nil
 }
 

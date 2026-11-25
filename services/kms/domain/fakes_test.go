@@ -151,13 +151,18 @@ func (r *fakeRepo[T]) Material(_ context.Context, id string) ([]byte, error) {
 	return slices.Clone(e.material), nil
 }
 
-func (r *fakeRepo[T]) SetMaterial(_ context.Context, id string, material []byte) error {
+func (r *fakeRepo[T]) UpdateWithMaterial(_ context.Context, key T, material []byte, prevVersion int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	id := key.GetMetadata().GetId()
 	e, ok := r.entries[id]
 	if !ok {
 		return errs.NotFound(id)
 	}
+	if v := e.key.GetMetadata().GetResourceVersion(); v != prevVersion {
+		return errs.Conflict(id, fmt.Sprintf("resource_version is %d, not %d", v, prevVersion))
+	}
+	e.key = proto.CloneOf(key)
 	e.material = slices.Clone(material)
 	return nil
 }

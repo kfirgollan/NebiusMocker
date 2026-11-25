@@ -73,6 +73,21 @@ type lifecycle[T keyMsg] struct {
 	clk       clock.Clock
 	status    func(T) keyStatus
 	setStatus func(T, keyStatus)
+	// catchUp applies the time-driven changes due by now to an ACTIVE key
+	// (automatic rotation) and returns the current key. Like purging it runs
+	// lazily on access, which on the injected clock is indistinguishable from
+	// a background job. Nil for kinds without such changes.
+	catchUp func(context.Context, T) (T, error)
+	// restored runs after Undelete made a key ACTIVE again. Nil if unused.
+	restored func(context.Context, T) error
+}
+
+// current returns k after applying the changes due by now (see catchUp).
+func (l *lifecycle[T]) current(ctx context.Context, k T) (T, error) {
+	if l.catchUp == nil || l.status(k).State != kmspb.KeyState_ACTIVE {
+		return k, nil
+	}
+	return l.catchUp(ctx, k)
 }
 
 func (l *lifecycle[T]) validate() error {
@@ -82,7 +97,8 @@ func (l *lifecycle[T]) validate() error {
 	return nil
 }
 
-// load returns the key in any state, purging it first if its delay is over.
+// load returns the key in any state, purging it first if its delay is over and
+// applying the changes due by now to an ACTIVE key.
 func (l *lifecycle[T]) load(ctx context.Context, id string) (T, error) {
 	var zero T
 	k, err := l.repo.Get(ctx, id)
@@ -96,7 +112,7 @@ func (l *lifecycle[T]) load(ctx context.Context, id string) (T, error) {
 	if purged {
 		return zero, errs.NotFound(id)
 	}
-	return k, nil
+	return l.current(ctx, k)
 }
 
 // purgeIfDue permanently deletes a scheduled key whose purge time has come.
@@ -133,7 +149,12 @@ func (l *lifecycle[T]) Get(ctx context.Context, id string, vis Visibility) (T, e
 
 // GetByName returns the ACTIVE key with the name in parentID.
 func (l *lifecycle[T]) GetByName(ctx context.Context, parentID, name string) (T, error) {
-	return l.repo.GetByName(ctx, parentID, name)
+	k, err := l.repo.GetByName(ctx, parentID, name)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return l.current(ctx, k)
 }
 
 // List returns one page of the parent's keys. Keys scheduled for deletion are
@@ -161,6 +182,9 @@ func (l *lifecycle[T]) List(ctx context.Context, parentID string, pageSize int64
 		}
 		if purged || (vis == ActiveOnly && l.status(k).State != kmspb.KeyState_ACTIVE) {
 			continue
+		}
+		if k, err = l.current(ctx, k); err != nil {
+			return Page[T]{}, err
 		}
 		items = append(items, k)
 	}
@@ -289,7 +313,13 @@ func (l *lifecycle[T]) Undelete(ctx context.Context, id, newName string, request
 			upd.GetMetadata().UpdatedAt = timestamppb.New(l.clk.Now())
 		}
 		l.setStatus(upd, keyStatus{State: kmspb.KeyState_ACTIVE})
-		return l.repo.Update(ctx, upd)
+		if err := l.repo.Update(ctx, upd); err != nil {
+			return err
+		}
+		if l.restored == nil {
+			return nil
+		}
+		return l.restored(ctx, upd)
 	})
 }
 

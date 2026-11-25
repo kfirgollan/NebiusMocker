@@ -115,6 +115,34 @@ func TestSymmetricKeyLifecycle(t *testing.T) {
 	}
 	tf.expectNoChanges(t)
 
+	// Changing only rotation_period is an in-place update that reschedules
+	// automatic rotation; the key and its material stay.
+	tf.writeConfig(t, cfg("AES_256", `team = "platform", tier = "1"`, "second", "2592000s"))
+	tf.expectPlan(t, map[string]string{"k": "update"})
+	tf.apply(t)
+	if got := tf.stateIDs(t)["k"]; got != id {
+		t.Fatalf("key recreated on rotation_period update: %s -> %s", id, got)
+	}
+	if got := getSym(t, svc, id, false).GetSpec().GetRotationPeriod().AsDuration(); got != 30*24*time.Hour {
+		t.Fatalf("rotation_period after update = %v, want 720h", got)
+	}
+	tf.expectNoChanges(t)
+
+	// A rotation outside Terraform (automatic or manual: both add a key
+	// version and bump resource_version and updated_at) is not drift.
+	before := getSym(t, svc, id, false).GetMetadata().GetResourceVersion()
+	rot, err := svc.Rotate(t.Context(), &kmspb.RotateSymmetricKeyRequest{Id: id})
+	if err == nil {
+		_, err = rot.Wait(t.Context())
+	}
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if got := getSym(t, svc, id, false).GetMetadata().GetResourceVersion(); got != before+1 {
+		t.Fatalf("resource_version after rotation = %d, want %d", got, before+1)
+	}
+	tf.expectNoChanges(t)
+
 	// Removing a label is applied too (reset mask).
 	tf.writeConfig(t, cfg("AES_256", `tier = "1"`, "second", "172800s"))
 	tf.expectPlan(t, map[string]string{"k": "update"})

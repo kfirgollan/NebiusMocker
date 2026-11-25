@@ -15,7 +15,7 @@
 | Authorization: rules for every RPC; crypto verbs granted to `editor` and `admin`, not `viewer` (see below) | ✅ |
 | `nebius_kms_v1_symmetric_key`, `nebius_kms_v1_asymmetric_key` resources and data sources with the official provider | ✅ e2e: `test/terraform/kms` |
 | `nebius kms` CLI flows from the docs (quickstarts, encrypt/decrypt with AAD, rotate, data keys, delete/undelete, openssl verification) | ✅ e2e: `test/kms` |
-| Automatic rotation on `rotation_period` | Not yet (the period is stored and validated only; rotate manually) |
+| Automatic rotation on `rotation_period` (mock clock; manual Rotate and Update reschedule; see Behavior notes) | ✅ |
 | `PENDING_IMPORT` / key import, quotas (3000 keys per tenant) | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
@@ -30,6 +30,27 @@ suite and the CLI e2e suite (`make e2e`).
   in the proto. ECDSA keys sign, and RSA keys decrypt. Using the wrong one is `INVALID_ARGUMENT`.
 - **Limits.** Plaintext is at most 64 KiB. A key allows at most 100 manual rotations; the 101st is
   `FAILED_PRECONDITION`. `rotation_period` defaults to 90 days and must be 1–3650 days.
+- **Rotation.** Every rotation, manual or automatic, adds a key version, makes it the primary one (new encryptions
+  use it, older versions keep decrypting), increments `resource_version` by one (as the docs state for rotation)
+  and sets `updated_at` to the rotation time. The proto has no last/next rotation status fields, so these are the
+  observable effects.
+- **Automatic rotation.** A symmetric key rotates every `rotation_period`, counted from its last rotation (manual or
+  automatic), or from `created_at` before the first one. The docs call it the "period after which KMS automatically
+  rotates the key material", so the age of the primary material never exceeds the period, and a manual `Rotate`
+  restarts the schedule. The docs don't say whether a manual rotation resets the schedule; this reading is our
+  choice. Other details:
+  - Automatic rotations don't count towards the 100 manual-rotation limit. The quotas page limits manual rotations
+    only.
+  - `Update` with a new `rotation_period` reschedules: the next rotation is due at last rotation + new period. If
+    that time is already past (the period was shortened), the key rotates at the time of the update, not
+    retroactively.
+  - Keys scheduled for deletion don't rotate. When a key is restored with `Undelete` after a rotation came due, it
+    rotates once at that moment, and its schedule restarts from there.
+  - Like purging, rotation is evaluated lazily on access (`Get`, `GetByName`, `List`, `Update`, `Rotate`, `Delete`,
+    and every crypto call) against the mock clock. Every rotation that came due is applied at its own boundary time,
+    so the result is the same as a background rotator. The key and its material are written together,
+    compare-and-swap on `resource_version`, so concurrent requests rotate exactly once. Asymmetric keys have no
+    `rotation_period` and never rotate.
 - **Symmetric ciphertext format** (opaque to clients): `0x01` · key version (uint32 big endian) · 12-byte nonce ·
   AES-GCM ciphertext and tag. The GCM additional data is the 5-byte header, the key ID and the caller's
   `aad_context`, so every byte is authenticated and a ciphertext only decrypts under its own key with its own AAD.
@@ -68,6 +89,7 @@ Symmetric keys (`AES_128`, `AES_256`) with rotation, and asymmetric keys (`ECDSA
 - Key material is generated in-process with Go's `crypto` packages (real crypto is cheap, so even M1 is functional).
   Material is never exposed except as `GetPublicKey` output.
 - `Rotate` creates a new primary key version. Old versions still decrypt. Ciphertexts embed the version.
+  `rotation_period` rotates keys automatically on the mock clock, evaluated lazily on access (see Behavior notes).
 - Deletion is delayed: `UpdateDeletionDelay` and `Undelete`, with the delay counted on the mock clock. Crypto calls on a
   key scheduled for deletion → `FAILED_PRECONDITION`.
 - `GenerateDataKey` returns plaintext and wrapped data keys (envelope encryption). MysteryBox uses the same path internally.

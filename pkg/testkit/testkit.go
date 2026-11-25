@@ -16,6 +16,7 @@ import (
 	"github.com/nebius/gosdk/conn"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
@@ -38,6 +39,14 @@ type settings struct {
 	cfg      config.Config
 	logs     bool
 	objStore objstore.Store
+	clk      clock.Clock
+}
+
+// WithClock makes the instance run on c (e.g. clock.Manual) instead of the
+// real clock, so tests can let time-driven behavior (deletion delays, key
+// rotation) come due. It is a Go test option only, not reachable over the API.
+func WithClock(c clock.Clock) Option {
+	return func(s *settings) { s.clk = c }
 }
 
 // Option adjusts the instance before start.
@@ -103,6 +112,9 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 	var mopts []mocker.Option
 	if s.objStore != nil {
 		mopts = append(mopts, mocker.WithObjStore(s.objStore))
+	}
+	if s.clk != nil {
+		mopts = append(mopts, mocker.WithClock(s.clk))
 	}
 	srv, err := mocker.New(cfg, log, modules, mopts...)
 	if err != nil {

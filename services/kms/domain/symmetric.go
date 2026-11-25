@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/nebius/gosdk/proto/fieldmask/mask"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
@@ -59,7 +60,10 @@ func NewSymmetricKeyService(d KeyDeps[*kmspb.SymmetricKey]) (*SymmetricKeyServic
 	if err := lc.validate(); err != nil {
 		return nil, err
 	}
-	return &SymmetricKeyService{lc: lc}, nil
+	s := &SymmetricKeyService{lc: lc}
+	lc.catchUp = s.rotateDue
+	lc.restored = s.rotateOverdue
+	return s, nil
 }
 
 // CreateSymmetricKeyCmd is the input of Create.
@@ -160,30 +164,151 @@ func (s *SymmetricKeyService) Undelete(ctx context.Context, id, newName string, 
 	return s.lc.Undelete(ctx, id, newName, request)
 }
 
-// Rotate adds a new primary key version. Older versions keep decrypting.
+// Rotate adds a new primary key version. Older versions keep decrypting. Like
+// every rotation it increments resource_version, and it restarts the
+// automatic rotation schedule: the next automatic rotation is due
+// rotation_period after this one.
 func (s *SymmetricKeyService) Rotate(ctx context.Context, id string, request proto.Message) (*operations.Operation, error) {
 	return s.lc.submit(ctx, id, "Rotate symmetric key", request, func(ctx context.Context) error {
-		if _, err := s.lc.Get(ctx, id, ActiveOnly); err != nil {
-			return err
+		for range maxRotateAttempts {
+			k, err := s.lc.Get(ctx, id, ActiveOnly)
+			if err != nil {
+				return err
+			}
+			m, err := s.material(ctx, id)
+			if err != nil {
+				return err
+			}
+			if m.Rotations >= maxManualRotations {
+				return errs.BadState(id, fmt.Sprintf("the number of manual rotations of a key can't exceed %d", maxManualRotations))
+			}
+			upd, next, err := rotateAt(k, m, s.lc.clk.Now())
+			if err != nil {
+				return err
+			}
+			next.Rotations++
+			if err = s.save(ctx, k, upd, next); !errs.IsKind(err, errs.KindConflict) {
+				return err
+			}
+		}
+		return errs.Conflict(id, "the key changed concurrently; retry")
+	})
+}
+
+// maxRotateAttempts bounds the compare-and-swap retries of a rotation that
+// races with another write to the same key.
+const maxRotateAttempts = 8
+
+// rotateDue performs the automatic rotations of an ACTIVE key that are due by
+// now: one at every rotation_period boundary after the last rotation (or
+// after creation, before the first one). Each is a full rotation (new primary
+// version, resource_version + 1, updated_at = its time), exactly as a
+// background rotator running at that boundary would have left the key.
+func (s *SymmetricKeyService) rotateDue(ctx context.Context, k *kmspb.SymmetricKey) (*kmspb.SymmetricKey, error) {
+	return s.autoRotate(ctx, k, dueRotations)
+}
+
+// rotateOverdue runs after Undelete. A key scheduled for deletion is not
+// rotated, so if one or more rotations came due meanwhile the restored key
+// rotates once, now, and its schedule restarts from there.
+func (s *SymmetricKeyService) rotateOverdue(ctx context.Context, k *kmspb.SymmetricKey) error {
+	_, err := s.autoRotate(ctx, k, func(first, now time.Time, _ time.Duration) []time.Time {
+		if now.Before(first) {
+			return nil
+		}
+		return []time.Time{now}
+	})
+	return err
+}
+
+// rotationPlan lists the times of the rotations to perform, given the first
+// due time, now and the rotation period.
+type rotationPlan func(first, now time.Time, period time.Duration) []time.Time
+
+// dueRotations is every period boundary from first up to now.
+func dueRotations(first, now time.Time, period time.Duration) []time.Time {
+	var out []time.Time
+	for at := first; !at.After(now); at = at.Add(period) {
+		out = append(out, at)
+	}
+	return out
+}
+
+// firstDue is when the next automatic rotation of k is due.
+func firstDue(k *kmspb.SymmetricKey, m symMaterial, period time.Duration) time.Time {
+	last := m.RotatedAt
+	if last.IsZero() {
+		last = k.GetMetadata().GetCreatedAt().AsTime()
+	}
+	at := last.Add(period)
+	// Every write catches up first, so a key updated after its due time had
+	// its rotation_period shortened by that update: the new period applies
+	// from then on, not retroactively.
+	if u := k.GetMetadata().GetUpdatedAt().AsTime(); at.Before(u) {
+		at = u
+	}
+	return at
+}
+
+// autoRotate applies the rotations plan selects to an ACTIVE key with a
+// rotation period, retrying when another request changed the key first.
+func (s *SymmetricKeyService) autoRotate(ctx context.Context, k *kmspb.SymmetricKey, plan rotationPlan) (*kmspb.SymmetricKey, error) {
+	id := k.GetMetadata().GetId()
+	for range maxRotateAttempts {
+		period := k.GetSpec().GetRotationPeriod().AsDuration()
+		if period <= 0 || k.GetStatus().GetState() != kmspb.KeyState_ACTIVE {
+			return k, nil
 		}
 		m, err := s.material(ctx, id)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if m.Rotations >= maxManualRotations {
-			return errs.BadState(id, fmt.Sprintf("the number of manual rotations of a key can't exceed %d", maxManualRotations))
+		times := plan(firstDue(k, m, period), s.lc.clk.Now(), period)
+		if len(times) == 0 {
+			return k, nil
 		}
-		next, err := m.rotate(defaultRand)
-		if err != nil {
-			return err
+		upd, next := k, m
+		for _, at := range times {
+			if upd, next, err = rotateAt(upd, next, at); err != nil {
+				return nil, err
+			}
 		}
-		next.Rotations++
-		blob, err := encodeSymMaterial(next)
-		if err != nil {
-			return err
+		err = s.save(ctx, k, upd, next)
+		if !errs.IsKind(err, errs.KindConflict) {
+			if err != nil {
+				return nil, err
+			}
+			return upd, nil
 		}
-		return s.lc.repo.SetMaterial(ctx, id, blob)
-	})
+		// Another request rotated or updated the key first: start over from
+		// what it stored.
+		if k, err = s.lc.repo.Get(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	return nil, errs.Conflict(id, "the key changed concurrently; retry")
+}
+
+// rotateAt returns k and m after one rotation at time at.
+func rotateAt(k *kmspb.SymmetricKey, m symMaterial, at time.Time) (*kmspb.SymmetricKey, symMaterial, error) {
+	next, err := m.rotate(defaultRand, at)
+	if err != nil {
+		return nil, symMaterial{}, err
+	}
+	upd := proto.CloneOf(k)
+	upd.GetMetadata().ResourceVersion++
+	upd.GetMetadata().UpdatedAt = timestamppb.New(at)
+	return upd, next, nil
+}
+
+// save stores the rotated key and material if the key is still at the
+// resource_version it had when read (errs.Conflict otherwise).
+func (s *SymmetricKeyService) save(ctx context.Context, read, upd *kmspb.SymmetricKey, m symMaterial) error {
+	blob, err := encodeSymMaterial(m)
+	if err != nil {
+		return err
+	}
+	return s.lc.repo.UpdateWithMaterial(ctx, upd, blob, read.GetMetadata().GetResourceVersion())
 }
 
 func (s *SymmetricKeyService) material(ctx context.Context, id string) (symMaterial, error) {

@@ -183,11 +183,29 @@ func (r *KeyRepo[T]) Material(ctx context.Context, id string) ([]byte, error) {
 	return rec.Data, nil
 }
 
-// SetMaterial replaces the material of an existing key.
-func (r *KeyRepo[T]) SetMaterial(ctx context.Context, id string, material []byte) error {
-	err := r.st.Update(ctx, func(tx store.Tx) error {
-		if _, gerr := tx.Get(r.kind, id); gerr != nil {
+// UpdateWithMaterial replaces an existing key and its material in one
+// transaction, if the stored key's resource_version is still prevVersion
+// (compare-and-swap). A mismatch is errs.Conflict.
+func (r *KeyRepo[T]) UpdateWithMaterial(ctx context.Context, key T, material []byte, prevVersion int64) error {
+	id := key.GetMetadata().GetId()
+	rec, err := r.record(key)
+	if err != nil {
+		return err
+	}
+	err = r.st.Update(ctx, func(tx store.Tx) error {
+		cur, gerr := tx.Get(r.kind, id)
+		if gerr != nil {
 			return gerr
+		}
+		stored, derr := decode(cur, r.newMsg)
+		if derr != nil {
+			return derr
+		}
+		if v := stored.GetMetadata().GetResourceVersion(); v != prevVersion {
+			return errs.Conflict(id, fmt.Sprintf("resource_version is %d, not %d", v, prevVersion))
+		}
+		if _, perr := tx.Put(rec); perr != nil {
+			return perr
 		}
 		_, perr := tx.Put(r.materialRecord(id, material))
 		return perr

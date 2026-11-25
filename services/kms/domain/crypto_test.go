@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	kmspb "github.com/nebius/gosdk/proto/nebius/kms/v1"
 )
@@ -93,7 +94,7 @@ func TestSymMaterialRotate(t *testing.T) {
 	t.Parallel()
 	m, _ := newSymMaterial(rand.Reader, kmspb.SymmetricAlgorithm_AES_256)
 	old, _ := m.seal(rand.Reader, "k", []byte("old"), nil)
-	m2, err := m.rotate(rand.Reader)
+	m2, err := m.rotate(rand.Reader, time.Time{})
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}

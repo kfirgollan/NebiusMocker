@@ -97,7 +97,9 @@ func TestMissing(t *testing.T) {
 		{"GetByName", func() error { _, err := r.GetByName(ctx, parent, "nope"); return err }},
 		{"Update", func() error { return r.Update(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE)) }},
 		{"Material", func() error { _, err := r.Material(ctx, "nope"); return err }},
-		{"SetMaterial", func() error { return r.SetMaterial(ctx, "nope", []byte("m")) }},
+		{"UpdateWithMaterial", func() error {
+			return r.UpdateWithMaterial(ctx, symKey("nope", "x", kmspb.KeyState_ACTIVE), []byte("m"), 0)
+		}},
 		{"Delete", func() error { return r.Delete(ctx, "nope") }},
 	}
 	for _, tt := range tests {
@@ -178,11 +180,23 @@ func TestMaterialLifecycle(t *testing.T) {
 	if err := r.Create(ctx, symKey("k1", "a", kmspb.KeyState_ACTIVE), []byte("v1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetMaterial(ctx, "k1", []byte("v2")); err != nil {
-		t.Fatalf("SetMaterial: %v", err)
+	rotated := symKey("k1", "a", kmspb.KeyState_ACTIVE)
+	rotated.Metadata.ResourceVersion = 1
+	// A stale resource_version is a conflict and changes nothing.
+	if err := r.UpdateWithMaterial(ctx, rotated, []byte("v2"), 7); !errs.IsKind(err, errs.KindConflict) {
+		t.Fatalf("UpdateWithMaterial with stale version err = %v, want Conflict", err)
+	}
+	if m, err := r.Material(ctx, "k1"); err != nil || string(m) != "v1" {
+		t.Fatalf("Material after conflict = %q, %v, want v1", m, err)
+	}
+	if err := r.UpdateWithMaterial(ctx, rotated, []byte("v2"), 0); err != nil {
+		t.Fatalf("UpdateWithMaterial: %v", err)
 	}
 	if m, err := r.Material(ctx, "k1"); err != nil || string(m) != "v2" {
 		t.Fatalf("Material err = %v", err)
+	}
+	if k, err := r.Get(ctx, "k1"); err != nil || k.GetMetadata().GetResourceVersion() != 1 {
+		t.Fatalf("key after UpdateWithMaterial = %v, %v", k, err)
 	}
 	if err := r.Delete(ctx, "k1"); err != nil {
 		t.Fatalf("Delete: %v", err)

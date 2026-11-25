@@ -50,8 +50,11 @@ type KeyRepository[T any] interface {
 	Update(ctx context.Context, key T) error
 	// Material returns the key's material, or errs.NotFound.
 	Material(ctx context.Context, id string) ([]byte, error)
-	// SetMaterial replaces the key's material (rotation).
-	SetMaterial(ctx context.Context, id string, material []byte) error
+	// UpdateWithMaterial replaces an existing key and its material atomically
+	// (rotation), if the stored key's resource_version is still prevVersion.
+	// It fails with errs.NotFound if the key does not exist and errs.Conflict
+	// if its resource_version changed.
+	UpdateWithMaterial(ctx context.Context, key T, material []byte, prevVersion int64) error
 	// Delete permanently removes the key and its material (purge).
 	Delete(ctx context.Context, id string) error
 }
