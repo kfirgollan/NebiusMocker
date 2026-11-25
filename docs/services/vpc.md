@@ -19,7 +19,8 @@
 | Authorization: `vpc.<resources>.<verb>` for every RPC, ancestry through project / route table / security group | ✅ |
 | All `nebius_vpc_v1_*` resources and data sources (incl. `nebius_vpc_v1_default_network`) with the official Terraform provider | ✅ e2e: `test/terraform/vpc` |
 | `nebius vpc network\|subnet list\|get-by-name` with the official CLI | ✅ e2e: `test/terraform/vpc/cli_test.go` |
-| `TargetGroupService` (needs compute instances), `status.assignment` of allocations (set by compute through a peer call), quotas | Not yet |
+| `status.assignment` of allocations: set by compute for instance network interfaces through `peer.NetworkInterfaces` (dynamic and user allocations, `PRIMARY`/`PUBLIC`/`ALIAS`) | ✅ unit tests (`services/vpc/domain/nic_test.go`), compute contract and Terraform suites |
+| `TargetGroupService` (needs compute instances), load balancer assignments, quotas | Not yet |
 | `vpc.v1alpha1` (scopes, legacy network/subnet/pool shapes, `nebius_vpc_v1alpha1_allocation`) | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
@@ -82,7 +83,17 @@ Outputs must be deterministic and must survive an empty `terraform plan`, so **s
 - **Allocations.** From a subnet (its explicit blocks, or the network's pools for a shared family) or directly from a
   pool. Without `cidr` the lowest free address is used (skipping network, gateway `.1` and broadcast). `cidr` may be
   an address, a CIDR or `/N`. `status.details` records `allocated_cidr`, `pool_id` and `subnet_id`; `static` is
-  `true`. `status.assignment` is reserved for compute (an assigned allocation cannot be deleted).
+  `true`. `status.assignment` is set by compute (see below); an assigned allocation cannot be deleted.
+- **Instance network interfaces** (`peer.NetworkInterfaces`, provided to compute, `services/vpc/domain/nic.go`). Every
+  address of an instance NIC is an allocation with `status.assignment.network_interface{instance_id, name, type}`
+  (`PRIMARY`, `PUBLIC`, `ALIAS`), state `ASSIGNED` and `details.subnet_id` = the NIC's subnet. A NIC without an
+  `allocation_id` gets a dynamic allocation (lowest free address of the subnet; public ones from the subnet's public
+  space, or the project's `default-public-pool`), named `<instance>-<nic>-private|public`, with `static = false`: it is
+  deleted when the NIC releases it. A user allocation must be in the project, have the right visibility, lie in (or be
+  associated with) the subnet and not be assigned elsewhere (`FAILED_PRECONDITION`); on release it is unassigned
+  (`ALLOCATED`) and survives. Binding is idempotent and atomic (under the VPC lock); security groups must belong to the
+  subnet's network, and an empty list resolves to the network's default group. A subnet with assigned allocations
+  cannot be deleted; AllocationService.Update keeps the assignment.
 - **Allocation updates** follow `allocation.proto`. `cidr` is `IMMUTABLE`, and the provider plans a replacement when
   it changes. The `pool` oneof "may be changed only from subnet_id to pool_id, and the new pool_id must be equal to
   status.details.pool_id". The provider plans every `subnet_id`/`pool_id` change and a private↔public switch as an

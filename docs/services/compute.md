@@ -24,7 +24,16 @@
 | GPU cluster authorization: `compute.gpuClusters.*` on the project | ✅ |
 | `nebius_compute_v1_gpu_cluster` resource and data source with the official Terraform provider | ✅ e2e: `test/terraform/compute/gpucluster_test.go` (`make e2e`) |
 | `nebius compute gpu-cluster …` CLI flows | ✅ e2e: `test/computegpucluster` (`make e2e`, no Docker) |
-| Instances, filesystems, NVL groups, platforms, maintenance, nodes | Planned |
+| `nebius.compute.v1.InstanceService`: Get, GetByName, BatchGet (per-ID authorization, error entries), List (paged), ListInstancesByNVLInstanceGroup (`NOT_FOUND`: no NVL groups), Create, Update (reset mask, `resource_version`, immutable fields, stop/start by `spec.stopped`, preset change while stopped), Delete, Start, Stop, ListOperationsByParent | ✅ T2 (management plane only: nothing boots; see [Instances](#instances-implemented)) |
+| Instance disks: managed boot/secondary disks created and deleted with the instance (`status.managed_by`), existing disks attached with `read_write_attachment` / `read_only_attachments` and protected from deletion, existing ↔ managed switches | ✅ |
+| Instance network interfaces: VPC allocations assigned through `peer.NetworkInterfaces` (dynamic or user allocations, public and alias addresses, `status.assignment`, released on delete), default security group, MAC and FQDN in status | ✅ |
+| Instances in GPU clusters (`spec.gpu_cluster`, `allow_gpu_clustering` presets, `status.infiniband_topology_path`; cluster delete refused while it has instances) | ✅ contract (`test/contract/compute_instance_gpucluster_test.go`) and Terraform |
+| Instances with shared filesystems (`spec.filesystems` through `FilesystemAttachments`) | ✅ domain unit tests; contract and Terraform e2e follow once FilesystemService ships (until then no filesystem can exist, so `existing_filesystem.id` is `NOT_FOUND`) |
+| `nebius.compute.v1.PlatformService`: GetByName, List (paged) from a per-region catalog (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) | ✅ T2 |
+| Instance/platform authorization: `compute.instances.{get,list,create,update,delete,start,stop}`, `compute.platforms.{get,list}` on the project | ✅ |
+| `nebius_compute_v1_instance` resource and data source (CPU and GPU platforms, GPU cluster) with the official Terraform provider | ✅ e2e: `test/terraform/compute/instance_test.go` (`make e2e`) |
+| `nebius compute instance …` / `nebius compute platform list` CLI flows | ✅ e2e: `test/computeinstance` (`make e2e`, no Docker) |
+| Filesystems, NVL groups, maintenance, nodes | Planned |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
@@ -88,8 +97,15 @@ object-storage/objects/upload-download); they never write into the object store,
 - The routing codes of regions other than `eu-north1` (`e00`) are placeholders.
 - Payloads are never booted or converted; only their headers are read.
 - No quota accounting for image storage.
-- Disks and snapshots: no quotas (`compute.disk.count`, `compute.disk.size.<type>`), no attachments until instances
-  exist, and no `ERROR`/`BROKEN` states, because nothing can fail without a data plane.
+- Disks and snapshots: no quotas (`compute.disk.count`, `compute.disk.size.<type>`), and no `ERROR`/`BROKEN` states,
+  because nothing can fail without a data plane.
+- Instances: nothing boots or runs (no VM, no container, cloud-init is never executed); no `ERROR` state is ever
+  reached; no quota accounting (`compute.instance.count`, `compute.vcpu`, `compute.memory`, `compute.gpu.*`) and no
+  capacity simulation (`NotEnoughResources`, `RESOURCE_EXHAUSTED`); no preemption, maintenance events
+  (`MaintenanceService`, `status.maintenance_event_id`) or host recovery; `NodeService`, `NVLInstanceGroupService`,
+  capacity reservations, spot pricing policies and local disk passthrough are not implemented (their spec fields are
+  rejected by name, see above).
+- Platform presets, GPU memory, quota type names and region availability are illustrative.
 - GPU clusters: no fabric or topology simulation (`infiniband_topology_path` is synthetic), no capacity modeling, no
   quota (upstream: 5 GPU clusters per region). The exact upstream error for an instance whose platform does not match
   the cluster's fabric is undocumented; the mock answers `INVALID_ARGUMENT` on `spec.gpu_cluster.id`.
@@ -116,16 +132,40 @@ catalog (CPU/GPU types and presets), host **maintenance** events and bare-metal 
 ## Emulation design
 
 ### Catalogs (seed)
-- **Platforms** (`PlatformService.List/Get`): name, presets (`vcpu_count`, `memory_gibibytes`, `gpu_count`), `allow_gpu_clustering`,
-  `allowed_for_preemptibles`, `gpu_count_quota_type`, `allow_preset_change`. Defaults include `cpu-e2`, `cpu-d3`,
-  `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-l40s-a`, `gpu-l40s-d`, with the presets the public docs list. These
-  values are **illustrative**, and parity recording replaces them with live data.
+- **Platforms** (`PlatformService.GetByName/List`, implemented): the catalog of a project's region. The region is the
+  project's `spec.region` (from IAM, `peer.ProjectRegions`); without IAM, the NID routing code. A platform that is not
+  offered in that region is `NOT_FOUND` on `GetByName`, absent from `List`, and `INVALID_ARGUMENT` on
+  `spec.resources.platform` when an instance asks for it. Names and presets follow docs `compute/virtual-machines/types`:
+  `cpu-e2`, `cpu-d3` (160 vCPU and up not in eu-north1), `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`,
+  `gpu-b200-sxm-a`, `gpu-b300-sxm`, `gpu-rtx6000`, `gpu-rtx6000-a`, `gpu-l40s-a`, `gpu-l40s-d`, presets like
+  `2vcpu-8gb` and `8gpu-128vcpu-1600gb`. Only the 8-GPU presets of H100/H200/B200/B300 have `allow_gpu_clustering`;
+  GPU platforms have `status.allowed_for_preemptibles`; every platform has `allow_preset_change`. GPU memory, quota
+  type names and region lists are **illustrative**. Platform IDs are stable per (region, name); `metadata.parent_id`
+  is the requested project. The built-in catalog is `services/compute/domain/platforms.yaml`; format of
+  `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` (YAML or JSON, replaces it):
+
+  ```yaml
+  platforms:
+    - name: gpu-h100-sxm
+      human_readable_name: NVIDIA H100 NVLink with Intel Sapphire Rapids
+      short_human_readable_name: H100
+      gpu_count_quota_type: gpu-h100
+      gpu_memory_gigabytes: 80
+      allow_preset_change: true
+      allowed_for_preemptibles: true
+      regions: [eu-north1]                 # empty: every configured region
+      presets:
+        - { name: 8gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 8, allow_gpu_clustering: true }
+        - { name: 1gpu-16vcpu-200gb, vcpu_count: 16, memory_gibibytes: 200, gpu_count: 1, exclude_regions: [] }
+  ```
 - **Public images**: a catalog under `project-<routing>public-images` with families (`ubuntu22.04-driverless`,
   `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-…`). Every family has at least one version.
   `GetLatestByFamily` returns the newest. `ListPublic` lists the catalog. Each image has a CPU architecture, a minimum disk
   size, and a status of `READY`. Implemented; see [Image storage design](#image-storage-design). The built-in catalog is
-  `services/compute/domain/catalog.yaml`. The upstream Terraform examples use `image_family = "ubuntu22.04"`, which is
-  not a documented family and is not in the catalog yet (it matters once disks exist).
+  `services/compute/domain/catalog.yaml`. The upstream Terraform example uses `image_family = "ubuntu22.04"`, which is
+  not a real Nebius family (docs `compute/storage/boot-disk-images`), so the mock answers `NOT_FOUND` for it, as the
+  cloud would; no alias is seeded. The example works verbatim with real IDs and a real family (e.g.
+  `ubuntu24.04-driverless`), which `test/terraform/compute` proves.
 
   Catalog file format (`NEBIUS_MOCKER_COMPUTE_IMAGES_FILE`, YAML or JSON; it replaces the built-in catalog):
 
@@ -148,30 +188,79 @@ catalog (CPU/GPU types and presets), host **maintenance** events and bare-metal 
           deprecation: { at: 2025-07-01T00:00:00Z, message: "bad build" } # this version only
   ```
 
-### Instances
-- `resources.platform` (immutable) + `resources.preset` must exist in the platform catalog. Changing the preset needs the
-  instance to be `STOPPED` and the platform's `allow_preset_change`.
-- **Boot disk**: exactly one of `existing_disk{id}` or `managed_disk{name, spec}`. A managed disk is created by compute as
-  a real `computedisk` (same project, `status.managed_by = instance id`) and deleted with the instance. An existing disk
-  must be `READY`, must not have a read-write attachment, and must be at least the image's minimum size.
-- **Secondary disks / filesystems**: attachment bookkeeping in `Disk.status.read_write_attachment` / `read_only_attachments`.
-  Attaching a disk that is already attached read-write elsewhere → `FAILED_PRECONDITION`.
-- **Network interfaces**: `subnet_id` is checked via `peer` → vpc. `ip_address.allocation_id` binds an existing
-  allocation, or the module requests an ephemeral one. `public_ip_address` draws from the public pool.
-  `status.network_interfaces[*]` gets the IPs and a deterministic MAC (`02:4e:42:…`).
-- **GPU cluster**: `spec.gpu_cluster.id` requires a GPU platform with `allow_gpu_clustering`. The instance is added to
-  `GpuCluster.status.instances` and gets a synthetic `infiniband_topology_path`.
-- `spec.stopped=true` on Create → final state `STOPPED`. Toggling it on Update triggers the Stop/Start paths.
-  `Start`/`Stop` RPCs have state guards.
-- `preemptible`, `recovery_policy`, `reservation_policy`, spot fields: stored and validated. `NotEnoughResources` can be
-  simulated through the capacity pools ([architecture/09](../architecture/09-quotas-limits-faults.md#capacity-simulation)).
-- `cloud_init_user_data` is stored (sensitive, redacted in logs) and never executed in `mock` mode.
+### Instances (implemented)
+
+Management plane only: an instance is a record with a lifecycle, disk attachments and VPC addresses; nothing boots.
+Rules come from docs `compute/virtual-machines/{lifecycle,update,fqdn,network,preemptible,reservations,delete}` and
+`compute/storage/{use,detach-volume}`, and from the proto comments. The spec is echoed exactly as sent (the provider
+marks no spec attribute computed); everything synthesized lives in `status`.
+
+- **Lifecycle**: Create → `CREATING` → `RUNNING`, or `STOPPED` with `spec.stopped`. `Stop` (`RUNNING` → `STOPPING` →
+  `STOPPED`) and `Start` (`STOPPED` → `STARTING` → `RUNNING`) are refused in other states (`FAILED_PRECONDITION`); they
+  do not change `spec.stopped`. On Update, toggling `spec.stopped` stops or starts the instance; other spec changes run
+  as `UPDATING`; a metadata-only change has no transition. Only `RUNNING`/`STOPPED` instances can be updated, and
+  `RUNNING`/`STOPPED`/`ERROR` ones deleted. `NEBIUS_MOCKER_OP_DELAY` makes the transitional states observable.
+- **Resources**: platform and preset must be offered in the project's region (`INVALID_ARGUMENT` on
+  `spec.resources.platform` / `.preset`). The platform is immutable. The preset can change only while the instance is
+  `STOPPED` (`FAILED_PRECONDITION` otherwise) and the platform has `allow_preset_change`.
+- **Immutable** (`INVALID_ARGUMENT` "field is immutable"): `service_account_id`, `resources.platform`, `gpu_cluster`,
+  `recovery_policy`, `preemptible` (docs: it cannot be added or removed), and per interface (matched by name)
+  `subnet_id` and `ip_address`. `service_account_id` must be an existing service account of the instance's project.
+- **Disks**: the boot disk and `secondary_disks` are `existing_disk{id}` or `managed_disk{name, labels, spec}`.
+  - A managed disk is a real `computedisk` created with the DiskService rules (type, size, source image/family/snapshot),
+    `READY` at once (no data to copy), with `status.managed_by` = the instance. A name already used by a disk in the
+    project fails with `ALREADY_EXISTS`. Managed disks are matched by name on update: a new name creates a disk, a
+    removed or renamed one is deleted (renaming replaces, as the proto says). Size may grow, `forbid_deletion` and labels
+    may change; type, block size, source and encryption are immutable. DiskService.Update of a managed disk is
+    `FAILED_PRECONDITION` ("Updates via DiskService are not allowed").
+  - An existing disk must be in the project and `READY`, and not managed by another instance. `READ_WRITE` needs no
+    other attachment; `READ_ONLY` needs no read-write attachment elsewhere (`FAILED_PRECONDITION`). The disk's
+    `status.read_write_attachment` / `read_only_attachments` record the instance, so it cannot be deleted while attached.
+  - Switching `existing_disk` → `managed_disk` of the same disk needs the disk's name and its spec copied exactly
+    (`INVALID_ARGUMENT` otherwise) and no `forbid_deletion`. Switching back (by the ID in `status.disk_attachments`)
+    clears `managed_by`.
+  - Omitting a secondary disk detaches it (existing) or deletes it (managed), in any state. The boot disk cannot be
+    detached or replaced (`INVALID_ARGUMENT` on `spec.boot_disk`). `device_id` and disk IDs are unique per instance.
+  - `status.disk_attachments` lists `{id, name, is_managed}`, boot disk first.
+- **Network interfaces** (1–8, unique names): addresses are VPC allocations, assigned through `peer.NetworkInterfaces`
+  (provided by vpc) with `status.assignment.network_interface{instance_id, name, type PRIMARY|PUBLIC|ALIAS}`, state
+  `ASSIGNED`. `ip_address = {}` creates a dynamic allocation (lowest free address in the subnet, named
+  `<instance>-<nic>-private`, `status.static=false`); `ip_address.allocation_id` binds a user allocation (same project,
+  in the subnet's space, unassigned). `public_ip_address = {}` is a dynamic public address: released on Stop and
+  reassigned on Start; `static = true` keeps it across stops; an `allocation_id` binds a user allocation. Aliases bind
+  user allocations. Security groups must belong to the subnet's network; an empty list means the network's default
+  group, shown in status only. Delete releases everything: dynamic allocations are deleted, user allocations become
+  `ALLOCATED` again and survive. Interfaces may be added or removed on update.
+- **Status**: per interface `ip_address`, `public_ip_address{address, allocation_id, static}`, `aliases.cidrs`, a stable
+  locally administered MAC `02:4e:42:xx:xx:xx` (from the instance and interface), `fqdn`
+  `<hostname or instance ID>.<network ID>.compute.internal.` (docs `compute/virtual-machines/fqdn`; a hostname change
+  updates it) and the effective `security_groups`.
+- **GPU clusters**: `spec.gpu_cluster.id` needs a preset with `allow_gpu_clustering` (`INVALID_ARGUMENT` on
+  `spec.gpu_cluster.id`); Create joins the cluster (`GpuClusterMembership`: same project, fabric accepts the platform)
+  and records `status.infiniband_topology_path`; Delete leaves it.
+- **Filesystems**: `existing_filesystem.id` with a `mount_tag` unique per instance; attached on Create
+  (`FilesystemAttachments`: same project, `READY`, `READ_WRITE` only). Adding one on Update needs the instance
+  `STOPPED` (docs `compute/storage/use`); removing one, or deleting the instance, detaches it (never deletes it).
+- **Scheduling fields**: `preemptible` needs a platform with `allowed_for_preemptibles` and `recovery_policy = FAIL`
+  (docs); `on_preemption` is `STOP`. Nothing is ever preempted (no capacity simulation). `reservation_policy`: `AUTO`
+  and `FORBID` are accepted and hold trivially (there are no reservations); `STRICT` is `FAILED_PRECONDITION` because
+  no reservation can exist. `on_demand` / `follows_spot_price` are echoed (no billing). `recovery_policy`
+  `RECOVER`/`FAIL` are echoed (hosts never fail).
+- **Rejected by name** (`INVALID_ARGUMENT`, "… is not implemented in NebiusMocker yet"): `nvl_instance_group_id`,
+  `recovery_policy = ALWAYS` (NVL groups only), `reservation_policy.reservation_ids`, `spot_pricing_policy`,
+  `local_disks.passthrough_group.requested = true`.
+- `cloud_init_user_data` (sensitive) is stored and echoed, redacted in audit events, and never executed.
+- `BatchGet` (up to 1000 IDs) authorizes each ID (`compute.instances.get`) and returns a `google.rpc.Status`
+  (`NOT_FOUND`, `PERMISSION_DENIED`) in place of each unreadable instance. `ListInstancesByNVLInstanceGroup` is
+  `NOT_FOUND` for every group, since none can exist. `ListOperationsByParent` lists a project's instance operations,
+  newest first, including deleted instances.
+- Ordering: NIC addresses are bound first (VPC), then the GPU cluster and filesystems, then disks and the instance in
+  one store transaction; a failure undoes the earlier steps. The operations engine serializes per instance.
 
 ### Disks and snapshots (implemented)
 
-Management APIs only: a disk is a record with a lifecycle. No storage is allocated, and there are no instances yet, so
-`status.read_write_attachment` / `read_only_attachments` / `managed_by` stay empty (the delete-while-attached rule
-exists and is unit-tested in the domain). Rules come from docs `compute/storage/types`, `compute/storage/manage` and
+Management APIs only: a disk is a record with a lifecycle. No storage is allocated. Instances set
+`status.read_write_attachment` / `read_only_attachments` / `managed_by` (see [Instances](#instances-implemented)). Rules come from docs `compute/storage/types`, `compute/storage/manage` and
 `compute/storage/disk-snapshots`, and from the proto comments:
 
 - **Types**: `NETWORK_SSD` 1–8192 GiB; `NETWORK_SSD_NON_REPLICATED` and `NETWORK_SSD_IO_M3` 93–262,074 GiB in multiples
@@ -286,12 +375,12 @@ must work verbatim, so the default image catalog has to include whatever familie
 
 | Env | Default | Description |
 |---|---|---|
-| `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in | (later) Platform/preset catalog |
+| `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in (`services/compute/domain/platforms.yaml`) | Platform/preset catalog file (YAML/JSON, format above); replaces the built-in one. **Implemented** |
 | `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in (`services/compute/domain/catalog.yaml`) | Public image catalog file (YAML/JSON, format above); replaces the built-in one. **Implemented** |
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](#gpu-clusters-implemented)); replaces the built-in one. **Implemented** |
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions with a public image catalog (`ListPublic --region`); the first is the `GetLatestByFamily` default. **Implemented** |
 | `NEBIUS_MOCKER_OBJSTORE` (+ `_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION`) | `memory` | Where image payloads live: `memory` or `rustfs` (shared with Object Storage; see [storage.md](storage.md)) |
-| `NEBIUS_MOCKER_COMPUTE_CHARGE_STOPPED` | `0` | Count vCPU/GPU quota for stopped instances |
+| `NEBIUS_MOCKER_COMPUTE_CHARGE_STOPPED` | `0` | (later, with quotas) Count vCPU/GPU quota for stopped instances |
 | `NEBIUS_MOCKER_COMPUTE_BACKEND` | `mock` | (later) `container` to run instances as containers with cloud-init |
 
 ## Open questions

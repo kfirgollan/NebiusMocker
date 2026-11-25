@@ -1,0 +1,150 @@
+# Built-in Compute platform catalog (nebius.compute.v1.PlatformService).
+# Source: https://docs.nebius.com/compute/virtual-machines/types
+# The platform and preset names follow that page; GPU memory, quota types and
+# per-region availability are ILLUSTRATIVE and may differ from the real cloud.
+# Replace this whole file with NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE (YAML or JSON).
+# regions: empty = every configured region; a preset's exclude_regions hides it there.
+# Regions that are not configured in the mocker are never offered.
+platforms:
+  - name: gpu-h100-sxm
+    human_readable_name: "NVIDIA H100 NVLink with Intel Sapphire Rapids"
+    short_human_readable_name: "H100"
+    gpu_count_quota_type: gpu-h100
+    gpu_memory_gigabytes: 80
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [eu-north1]
+    presets:
+      - { name: 1gpu-16vcpu-200gb, vcpu_count: 16, memory_gibibytes: 200, gpu_count: 1 }
+      - { name: 8gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 8, allow_gpu_clustering: true }
+  - name: gpu-h200-sxm
+    human_readable_name: "NVIDIA H200 NVLink with Intel Sapphire Rapids"
+    short_human_readable_name: "H200"
+    gpu_count_quota_type: gpu-h200
+    gpu_memory_gigabytes: 141
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [eu-north1, eu-north2, eu-west1, us-central1]
+    presets:
+      - { name: 1gpu-16vcpu-200gb, vcpu_count: 16, memory_gibibytes: 200, gpu_count: 1 }
+      - { name: 8gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 8, allow_gpu_clustering: true }
+  - name: gpu-b200-sxm
+    human_readable_name: "NVIDIA B200 NVLink with Intel Emerald Rapids"
+    short_human_readable_name: "B200"
+    gpu_count_quota_type: gpu-b200
+    gpu_memory_gigabytes: 180
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [us-central1]
+    presets:
+      - { name: 1gpu-20vcpu-224gb, vcpu_count: 20, memory_gibibytes: 224, gpu_count: 1 }
+      - { name: 8gpu-160vcpu-1792gb, vcpu_count: 160, memory_gibibytes: 1792, gpu_count: 8, allow_gpu_clustering: true }
+  - name: gpu-b200-sxm-a
+    human_readable_name: "NVIDIA B200 NVLink with AMD EPYC"
+    short_human_readable_name: "B200"
+    gpu_count_quota_type: gpu-b200
+    gpu_memory_gigabytes: 180
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [me-west1]
+    presets:
+      - { name: 1gpu-20vcpu-224gb, vcpu_count: 20, memory_gibibytes: 224, gpu_count: 1 }
+      - { name: 8gpu-160vcpu-1792gb, vcpu_count: 160, memory_gibibytes: 1792, gpu_count: 8, allow_gpu_clustering: true }
+  - name: gpu-b300-sxm
+    human_readable_name: "NVIDIA B300 NVLink with Intel Granite Rapids"
+    short_human_readable_name: "B300"
+    gpu_count_quota_type: gpu-b300
+    gpu_memory_gigabytes: 288
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [uk-south1, eu-west2, us-north1]
+    presets:
+      - { name: 1gpu-24vcpu-346gb, vcpu_count: 24, memory_gibibytes: 346, gpu_count: 1 }
+      - { name: 8gpu-192vcpu-2768gb, vcpu_count: 192, memory_gibibytes: 2768, gpu_count: 8, allow_gpu_clustering: true }
+  - name: gpu-rtx6000
+    human_readable_name: "NVIDIA RTX PRO 6000 Blackwell"
+    short_human_readable_name: "RTX PRO 6000"
+    gpu_count_quota_type: gpu-rtx6000
+    gpu_memory_gigabytes: 96
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [us-central1]
+    presets:
+      - { name: 1gpu-24vcpu-218gb, vcpu_count: 24, memory_gibibytes: 218, gpu_count: 1 }
+      - { name: 8gpu-192vcpu-1744gb, vcpu_count: 192, memory_gibibytes: 1744, gpu_count: 8 }
+  - name: gpu-rtx6000-a
+    human_readable_name: "NVIDIA RTX PRO 6000 Blackwell with AMD EPYC"
+    short_human_readable_name: "RTX PRO 6000"
+    gpu_count_quota_type: gpu-rtx6000
+    gpu_memory_gigabytes: 96
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [uk-south2, eu-south1]
+    presets:
+      - { name: 1gpu-24vcpu-218gb, vcpu_count: 24, memory_gibibytes: 218, gpu_count: 1 }
+      - { name: 8gpu-192vcpu-1744gb, vcpu_count: 192, memory_gibibytes: 1744, gpu_count: 8 }
+  - name: gpu-l40s-a
+    human_readable_name: "NVIDIA L40S PCIe with Intel Ice Lake"
+    short_human_readable_name: "L40S"
+    gpu_count_quota_type: gpu-l40s
+    gpu_memory_gigabytes: 48
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [eu-north1]
+    presets:
+      - { name: 1gpu-8vcpu-32gb, vcpu_count: 8, memory_gibibytes: 32, gpu_count: 1 }
+      - { name: 1gpu-16vcpu-64gb, vcpu_count: 16, memory_gibibytes: 64, gpu_count: 1 }
+      - { name: 1gpu-24vcpu-96gb, vcpu_count: 24, memory_gibibytes: 96, gpu_count: 1 }
+      - { name: 1gpu-32vcpu-128gb, vcpu_count: 32, memory_gibibytes: 128, gpu_count: 1 }
+      - { name: 1gpu-40vcpu-160gb, vcpu_count: 40, memory_gibibytes: 160, gpu_count: 1 }
+  - name: gpu-l40s-d
+    human_readable_name: "NVIDIA L40S PCIe with AMD Genoa"
+    short_human_readable_name: "L40S"
+    gpu_count_quota_type: gpu-l40s
+    gpu_memory_gigabytes: 48
+    allow_preset_change: true
+    allowed_for_preemptibles: true
+    regions: [eu-north1]
+    presets:
+      - { name: 1gpu-16vcpu-96gb, vcpu_count: 16, memory_gibibytes: 96, gpu_count: 1 }
+      - { name: 1gpu-32vcpu-192gb, vcpu_count: 32, memory_gibibytes: 192, gpu_count: 1 }
+      - { name: 1gpu-48vcpu-288gb, vcpu_count: 48, memory_gibibytes: 288, gpu_count: 1 }
+      - { name: 2gpu-64vcpu-384gb, vcpu_count: 64, memory_gibibytes: 384, gpu_count: 2 }
+      - { name: 2gpu-96vcpu-576gb, vcpu_count: 96, memory_gibibytes: 576, gpu_count: 2 }
+      - { name: 4gpu-128vcpu-768gb, vcpu_count: 128, memory_gibibytes: 768, gpu_count: 4 }
+      - { name: 4gpu-192vcpu-1152gb, vcpu_count: 192, memory_gibibytes: 1152, gpu_count: 4 }
+  - name: cpu-d3
+    human_readable_name: "Non-GPU AMD EPYC Genoa"
+    short_human_readable_name: "CPU AMD"
+    allow_preset_change: true
+    allowed_for_preemptibles: false
+    regions: []
+    presets:
+      - { name: 2vcpu-8gb, vcpu_count: 2, memory_gibibytes: 8, gpu_count: 0 }
+      - { name: 4vcpu-16gb, vcpu_count: 4, memory_gibibytes: 16, gpu_count: 0 }
+      - { name: 8vcpu-32gb, vcpu_count: 8, memory_gibibytes: 32, gpu_count: 0 }
+      - { name: 16vcpu-64gb, vcpu_count: 16, memory_gibibytes: 64, gpu_count: 0 }
+      - { name: 32vcpu-128gb, vcpu_count: 32, memory_gibibytes: 128, gpu_count: 0 }
+      - { name: 48vcpu-192gb, vcpu_count: 48, memory_gibibytes: 192, gpu_count: 0 }
+      - { name: 64vcpu-256gb, vcpu_count: 64, memory_gibibytes: 256, gpu_count: 0 }
+      - { name: 96vcpu-384gb, vcpu_count: 96, memory_gibibytes: 384, gpu_count: 0 }
+      - { name: 128vcpu-512gb, vcpu_count: 128, memory_gibibytes: 512, gpu_count: 0 }
+      - { name: 160vcpu-640gb, vcpu_count: 160, memory_gibibytes: 640, gpu_count: 0, exclude_regions: [eu-north1, eu-south1] }
+      - { name: 192vcpu-768gb, vcpu_count: 192, memory_gibibytes: 768, gpu_count: 0, exclude_regions: [eu-north1, eu-south1] }
+      - { name: 224vcpu-896gb, vcpu_count: 224, memory_gibibytes: 896, gpu_count: 0, exclude_regions: [eu-north1, eu-south1] }
+      - { name: 256vcpu-1024gb, vcpu_count: 256, memory_gibibytes: 1024, gpu_count: 0, exclude_regions: [eu-north1, eu-south1] }
+  - name: cpu-e2
+    human_readable_name: "Non-GPU Intel Ice Lake"
+    short_human_readable_name: "CPU Intel"
+    allow_preset_change: true
+    allowed_for_preemptibles: false
+    regions: [eu-north1]
+    presets:
+      - { name: 2vcpu-8gb, vcpu_count: 2, memory_gibibytes: 8, gpu_count: 0 }
+      - { name: 4vcpu-16gb, vcpu_count: 4, memory_gibibytes: 16, gpu_count: 0 }
+      - { name: 8vcpu-32gb, vcpu_count: 8, memory_gibibytes: 32, gpu_count: 0 }
+      - { name: 16vcpu-64gb, vcpu_count: 16, memory_gibibytes: 64, gpu_count: 0 }
+      - { name: 32vcpu-128gb, vcpu_count: 32, memory_gibibytes: 128, gpu_count: 0 }
+      - { name: 48vcpu-192gb, vcpu_count: 48, memory_gibibytes: 192, gpu_count: 0 }
+      - { name: 64vcpu-256gb, vcpu_count: 64, memory_gibibytes: 256, gpu_count: 0 }
+      - { name: 80vcpu-320gb, vcpu_count: 80, memory_gibibytes: 320, gpu_count: 0 }

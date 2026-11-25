@@ -25,6 +25,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Region → NID routing code (configurable; the defaults are placeholders). **Implemented**: the first region is the default; Compute seeds a public image catalog per region |
 | `NEBIUS_MOCKER_IAM_PROJECTS` | — | **Implemented**: `name[:region],…` projects seeded in the default tenant after `default` (`NEBIUS_MOCKER_PROJECT_ID`). IDs are derived from tenant + name (stable across restarts); regions must be in `NEBIUS_MOCKER_REGIONS` |
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | **Implemented**: InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](../services/compute.md#gpu-clusters-implemented)); replaces the built-in one |
+| `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in (`services/compute/domain/platforms.yaml`) | **Implemented**: platform/preset catalog per region (YAML/JSON, [format](../services/compute.md#catalogs-seed)); replaces the built-in one |
 | `NEBIUS_MOCKER_PERSISTENCE` | `0` | Persist state across restarts |
 | `NEBIUS_MOCKER_DATA_DIR` | `/var/lib/nebius-mocker` | State and snapshot location |
 | `NEBIUS_MOCKER_OP_CONFLICT` | `reject` | `reject` \| `abort-previous` |
@@ -83,7 +84,7 @@ Default catalogs that each module ships (all overridable):
 
 | Catalog | Module | Examples |
 |---|---|---|
-| Platforms and presets | compute | `cpu-e2`, `cpu-d3`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-l40s-a`, … with presets such as `2vcpu-8gb`, `8gpu-128vcpu-1600gb` |
+| Platforms and presets | compute | `cpu-e2`, `cpu-d3`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-b300-sxm`, `gpu-rtx6000`, `gpu-l40s-a`, `gpu-l40s-d`, … with presets such as `2vcpu-8gb`, `8gpu-128vcpu-1600gb`, per region (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) |
 | Public images and families | compute | `ubuntu22.04-driverless`, `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-v-1-31-ubuntu22.04`, … |
 | InfiniBand fabrics of GPU clusters | compute | `fabric-3` (eu-north1, `gpu-h100-sxm`), `fabric-5` (eu-west1, `gpu-h200-sxm`), `us-central1-b` (us-central1, `gpu-b200-sxm`), … from the public docs; **implemented**, replaced with `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` ([format](../services/compute.md#gpu-clusters-implemented)) |
 | Kubernetes versions | mk8s | `1.30`, `1.31`, `1.32` |

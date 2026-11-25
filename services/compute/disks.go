@@ -16,7 +16,7 @@ import (
 
 // registerDisks wires DiskService and DiskSnapshotService. Disk sources are
 // resolved through the image service of the same module.
-func registerDisks(reg grpc.ServiceRegistrar, deps mocker.Deps, images domain.ImageLookup) error {
+func registerDisks(reg grpc.ServiceRegistrar, deps mocker.Deps, images domain.ImageLookup) (*domain.DiskService, error) {
 	disks, snapshots := dal.NewDiskRepo(deps.Store), dal.NewSnapshotRepo(deps.Store)
 	dd := domain.DiskDeps{
 		Disks: disks, Snapshots: snapshots, Images: images, OpIndex: dal.NewDiskOpIndex(deps.Store),
@@ -24,11 +24,11 @@ func registerDisks(reg grpc.ServiceRegistrar, deps mocker.Deps, images domain.Im
 	}
 	diskSvc, err := domain.NewDiskService(dd)
 	if err != nil {
-		return fmt.Errorf("compute: %w", err)
+		return nil, fmt.Errorf("compute: %w", err)
 	}
 	snapSvc, err := domain.NewSnapshotService(dd)
 	if err != nil {
-		return fmt.Errorf("compute: %w", err)
+		return nil, fmt.Errorf("compute: %w", err)
 	}
 	deps.Authz.RegisterKind(domain.KindDisk, func(ctx context.Context, id string) (string, error) {
 		d, err := disks.Get(ctx, id)
@@ -41,5 +41,5 @@ func registerDisks(reg grpc.ServiceRegistrar, deps mocker.Deps, images domain.Im
 	api.RegisterDiskAuthzRules(deps.Rules)
 	computepb.RegisterDiskServiceServer(reg, api.NewDiskHandler(diskSvc))
 	computepb.RegisterDiskSnapshotServiceServer(reg, api.NewSnapshotHandler(snapSvc))
-	return nil
+	return diskSvc, nil
 }

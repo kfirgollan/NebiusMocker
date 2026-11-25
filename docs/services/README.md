@@ -11,7 +11,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 |---|---|---|---|---|---|---|
 | IAM | [iam.md](iam.md) | 21 | 115 | 15 / 28 | **T2** | — |
 | VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** | — |
-| Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService implemented, control plane only) | container-backed VMs (T3, optional) |
+| Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
 | Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** | k3s backend (T3, M3) |
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, T1 rest | S3 data plane via RustFS (✅ buckets + objects, see storage.md) |
 | Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |

@@ -472,6 +472,11 @@ func (s *DiskService) patchDisk(stored *computepb.Disk, cmd UpdateDiskCmd) (*com
 	if st := stored.GetStatus().GetState(); st != computepb.DiskStatus_READY {
 		return nil, errs.BadState(id, fmt.Sprintf("disk is %s: only READY disks can be updated", st))
 	}
+	if by := stored.GetStatus().GetManagedBy(); by != "" {
+		// instance.proto, ManagedDisk: "Managed disks can be updated only via
+		// instance spec updates. Updates via DiskService are not allowed."
+		return nil, errs.BadState(id, fmt.Sprintf("disk is managed by instance %s: update it through the instance spec", by))
+	}
 	updated, err := patchResource(stored, &computepb.Disk{
 		Metadata: &commonpb.ResourceMetadata{Name: cmd.Metadata.GetName(), Labels: cmd.Metadata.GetLabels()},
 		Spec:     cmd.Spec,

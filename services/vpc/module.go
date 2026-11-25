@@ -15,6 +15,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/vpc/api"
 	"github.com/kfirgollan/NebiusMocker/services/vpc/dal"
 	"github.com/kfirgollan/NebiusMocker/services/vpc/domain"
@@ -51,6 +52,9 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	}
 	registerKinds(deps, repos)
 	api.RegisterAuthzRules(deps.Rules)
+	if err := peer.Provide[peer.NetworkInterfaces](deps.Peers, peer.NetworkInterfacesKey, nicPeer{svc: svc.NICs()}); err != nil {
+		return fmt.Errorf("vpc: %w", err)
+	}
 
 	vpcpb.RegisterPoolServiceServer(reg, api.NewPoolHandler(svc.Pools()))
 	vpcpb.RegisterNetworkServiceServer(reg, api.NewNetworkHandler(svc.Networks()))

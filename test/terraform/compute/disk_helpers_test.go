@@ -89,13 +89,17 @@ func (r *tfRun) planIs(t *testing.T, want map[string]string) {
 		t.Fatalf("terraform show plan: %v", err)
 	}
 	got := map[string]string{}
+	replacePaths := map[string]any{}
 	for _, rc := range plan.ResourceChanges {
 		if rc.Mode == tfjson.ManagedResourceMode {
 			got[rc.Name] = diskActionName(rc.Change.Actions)
+			if len(rc.Change.ReplacePaths) > 0 {
+				replacePaths[rc.Name] = rc.Change.ReplacePaths
+			}
 		}
 	}
 	if !maps.Equal(got, want) {
-		t.Fatalf("plan actions = %v, want %v", got, want)
+		t.Fatalf("plan actions = %v, want %v (replace paths: %v)", got, want, replacePaths)
 	}
 }
 

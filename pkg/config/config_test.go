@@ -40,14 +40,15 @@ func TestRegions(t *testing.T) {
 		t.Fatalf("default regions = %v, want eu-north1=e00 first", d)
 	}
 	c, err := FromLookup(lookup(map[string]string{
-		"NEBIUS_MOCKER_REGIONS":             "eu-north1=e00, us-central1=u00",
-		"NEBIUS_MOCKER_COMPUTE_IMAGES_FILE": "/tmp/images.yaml",
+		"NEBIUS_MOCKER_REGIONS":                "eu-north1=e00, us-central1=u00",
+		"NEBIUS_MOCKER_COMPUTE_IMAGES_FILE":    "/tmp/images.yaml",
+		"NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE": "/tmp/platforms.yaml",
 	}))
 	if err != nil {
 		t.Fatalf("FromLookup: %v", err)
 	}
 	want := []Region{{"eu-north1", "e00"}, {"us-central1", "u00"}}
-	if len(c.Regions) != 2 || c.Regions[0] != want[0] || c.Regions[1] != want[1] || c.ComputeImagesFile != "/tmp/images.yaml" {
+	if len(c.Regions) != 2 || c.Regions[0] != want[0] || c.Regions[1] != want[1] || c.ComputeImagesFile != "/tmp/images.yaml" || c.ComputePlatformsFile != "/tmp/platforms.yaml" {
 		t.Fatalf("regions = %v, images file = %q", c.Regions, c.ComputeImagesFile)
 	}
 }

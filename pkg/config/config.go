@@ -72,6 +72,9 @@ type Config struct {
 	// ComputeFabricsFile, when set, replaces the built-in InfiniBand fabric
 	// catalog of GPU clusters (YAML or JSON; see docs/services/compute.md).
 	ComputeFabricsFile string
+	// ComputePlatformsFile, when set, replaces the built-in platform catalog
+	// (YAML or JSON; see docs/services/compute.md).
+	ComputePlatformsFile string
 	// Registry configures the Container Registry module.
 	Registry RegistryConfig
 	// TLS enables TLS on the mocker's listeners; empty means plaintext.
@@ -250,6 +253,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			return err
 		}},
 		{"COMPUTE_IMAGES_FILE", func(v string) error { c.ComputeImagesFile = v; return nil }},
+		{"COMPUTE_PLATFORMS_FILE", func(v string) error { c.ComputePlatformsFile = v; return nil }},
 		{"STORAGE_S3_LISTEN", func(v string) error { c.Storage.S3Listen = v; return nil }},
 		{"STORAGE_S3_DOMAIN", func(v string) error { c.Storage.S3Domain = v; return nil }},
 		{"STORAGE_REGION", func(v string) error { c.Storage.Region = v; return nil }},

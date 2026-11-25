@@ -70,17 +70,27 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	})
 	api.RegisterAuthzRules(deps.Rules, svc)
 	computepb.RegisterImageServiceServer(reg, api.NewImageHandler(svc))
-	// The membership port is what InstanceService joins GPU clusters through
-	// (spec.gpu_cluster).
-	if _, err := registerGpuClusters(reg, deps); err != nil {
+	// InstanceService joins GPU clusters (spec.gpu_cluster) and attaches
+	// shared filesystems (spec.filesystems) through these ports.
+	gpuClusters, err := registerGpuClusters(reg, deps)
+	if err != nil {
 		return err
 	}
-	// The attachment port is what InstanceService attaches shared
-	// filesystems through (spec.filesystems).
-	if _, err := newFilesystemAttachments(deps); err != nil {
+	filesystems, err := newFilesystemAttachments(deps)
+	if err != nil {
 		return err
 	}
-	return registerDisks(reg, deps, svc)
+	platforms, err := registerPlatforms(reg, deps, regions)
+	if err != nil {
+		return err
+	}
+	disks, err := registerDisks(reg, deps, svc)
+	if err != nil {
+		return err
+	}
+	return registerInstances(reg, deps, instanceWiring{
+		disks: disks, platforms: platforms, gpuClusters: gpuClusters, filesystems: filesystems,
+	})
 }
 
 // loadCatalog returns the built-in catalog, or the one in path when set.

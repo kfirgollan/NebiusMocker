@@ -79,6 +79,39 @@ nebius compute image create --parent-id project-e00mock000000000default --name m
   --source-storage-bucket-name my-bucket --source-storage-object-name disk.qcow2
 ```
 
+VMs, including GPU VMs, are inventory only: instances go through their lifecycle, get VPC addresses and attach
+managed or existing disks, but nothing boots ([details](docs/services/compute.md#instances-implemented)):
+
+```hcl
+data "nebius_vpc_v1_subnet" "default" {
+  parent_id = "project-e00mock000000000default"
+  name      = "default-subnet"
+}
+
+resource "nebius_compute_v1_instance" "gpu" {
+  parent_id = "project-e00mock000000000default"
+  name      = "trainer"
+  resources = { platform = "gpu-h100-sxm", preset = "8gpu-128vcpu-1600gb" }
+  boot_disk = {
+    attach_mode = "READ_WRITE"
+    managed_disk = {
+      name = "trainer-boot"
+      spec = {
+        type                = "NETWORK_SSD"
+        size_gibibytes      = 200
+        source_image_family = { image_family = "ubuntu24.04-cuda12" }
+      }
+    }
+  }
+  network_interfaces = [{
+    name              = "eth0"
+    subnet_id         = data.nebius_vpc_v1_subnet.default.id
+    ip_address        = {}
+    public_ip_address = {}
+  }]
+}
+```
+
 ### Object Storage (S3)
 
 Buckets work out of the box. For object reads and writes, run [RustFS](https://github.com/rustfs/rustfs) and point the
