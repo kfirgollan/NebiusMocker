@@ -110,6 +110,42 @@ func (g *S3Gate) Authorize(ctx context.Context, req S3Request) (Access, error) {
 	return Access{Bucket: b, Decision: d}, nil
 }
 
+// AuthorizeObjects authorizes an object action on each of keys (bulk
+// DeleteObjects, whose keys are in the request body): an IAM permit on the
+// bucket allows every key; otherwise each key is allowed only by a bucket
+// policy rule whose path matches it. Under audit/off a signed principal's
+// denials are reported in the decision but allowed, as in Authorize; anonymous
+// requests get only policy grants. A missing bucket is errs.NotFound.
+func (g *S3Gate) AuthorizeObjects(ctx context.Context, principalID, bucketName string, act S3Action, keys []string) (Access, []bool, error) {
+	b, err := g.Bucket(ctx, bucketName)
+	if err != nil {
+		return Access{}, nil, err
+	}
+	perm, id := act.Permission(), b.GetMetadata().GetId()
+	allowed := make([]bool, len(keys))
+	d := authz.Decision{Permission: perm, Target: id, Reason: "anonymous request"}
+	if principalID != "" {
+		if d, err = g.check(ctx, principalID, perm, id); err != nil {
+			return Access{}, nil, err
+		}
+		if d.Allowed {
+			for i := range allowed {
+				allowed[i] = true
+			}
+			return Access{Bucket: b, Decision: d}, allowed, nil
+		}
+	}
+	lenient := principalID != "" && g.mode != authz.ModeEnforce
+	for i, key := range keys {
+		ok, _, err := policyGrant(ctx, b.GetSpec().GetBucketPolicy(), g.members(), principalID, act, key)
+		if err != nil {
+			return Access{}, nil, err
+		}
+		allowed[i] = ok || lenient
+	}
+	return Access{Bucket: b, Decision: d}, allowed, nil
+}
+
 // Bucket returns a bucket S3 serves (ACTIVE or UPDATING) by name, without an
 // access check (CORS preflight requests are unauthenticated).
 func (g *S3Gate) Bucket(ctx context.Context, name string) (*storagepb.Bucket, error) {

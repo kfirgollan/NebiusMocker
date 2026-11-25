@@ -23,6 +23,8 @@ type responseWriter struct {
 	cors        *domain.CORSMatch
 	vary        bool
 	rewriteBody bool
+	// bulkDelete is the per-key outcome of a DeleteObjects request (nil otherwise).
+	bulkDelete *bulkDeleteOutcome
 
 	wroteHeader bool
 	status      int

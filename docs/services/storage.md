@@ -151,7 +151,11 @@ stored without effect.
   incl. deletes), `storage.editor` (all of the above plus Put bucket versioning/lifecycle/CORS). Validation: known
   roles only, a subject per rule, valid paths, and anonymous rules may only grant `storage.viewer`,
   `storage.object-viewer` or `storage.object-lister`. `status.anonymous_access_enabled` is true when any rule is
-  anonymous. `DeleteObjects` is matched as a bucket action (paths `*` only), since its keys are in the body.
+  anonymous. Bulk `DeleteObjects` is authorized **per key**: an IAM permit
+  on the bucket allows every key; otherwise each key needs a policy rule whose path matches it. Only allowed keys are
+  relayed to RustFS (with a recomputed `Content-MD5`); denied keys come back as `<Error><Code>AccessDenied</Code>`
+  entries in the `DeleteResult`, as S3 reports per-object failures (`aws s3 rm --recursive`,
+  `s3api delete-objects`).
 - **`lifecycle_configuration`** is applied by the mocker, not RustFS (whose lifecycle runs on wall time): the storage
   module's minute sweeper (mock clock) evaluates every `ENABLED` rule of every active bucket against a snapshot of its
   versions and uploads. Days count from the object's `LastModified` (noncurrent days from when the next version

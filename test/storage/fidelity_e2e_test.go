@@ -577,6 +577,41 @@ func TestBucketPolicy(t *testing.T) {
 		t.Errorf("policy-only DeleteObject shared/x: %v", err)
 	}
 
+	// Bulk DeleteObjects is authorized per key: shared/ keys go, the private key stays.
+	putObj(t, pc, name, "shared/1", []byte("1"))
+	putObj(t, pc, name, "shared/2", []byte("2"))
+	out, err := pc.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(name), Delete: &types.Delete{Objects: []types.ObjectIdentifier{
+		{Key: aws.String("shared/1")}, {Key: aws.String("private/b.txt")}, {Key: aws.String("shared/2")},
+	}}})
+	if err != nil {
+		t.Fatalf("policy-only DeleteObjects: %v", err)
+	}
+	var deleted []string
+	for _, d := range out.Deleted {
+		deleted = append(deleted, aws.ToString(d.Key))
+	}
+	slices.Sort(deleted)
+	if !slices.Equal(deleted, []string{"shared/1", "shared/2"}) || len(out.Errors) != 1 ||
+		aws.ToString(out.Errors[0].Key) != "private/b.txt" || aws.ToString(out.Errors[0].Code) != "AccessDenied" {
+		t.Errorf("DeleteObjects = deleted %v, errors %+v; want shared/1, shared/2 deleted and AccessDenied for private/b.txt", deleted, out.Errors)
+	}
+	if got := getObject(t, ed, name, "private/b.txt"); string(got) != "private data" {
+		t.Errorf("private/b.txt after a denied bulk delete = %q, want it kept", got)
+	}
+	if keys := listKeys(t, ed, name); slices.Contains(keys, "shared/1") || slices.Contains(keys, "shared/2") {
+		t.Errorf("keys after bulk delete = %v, want shared/1 and shared/2 gone", keys)
+	}
+	// Anonymous bulk deletes get nothing (anonymous rules are read-only).
+	anon := s3.New(s3.Options{Region: "eu-north1", BaseEndpoint: aws.String("http://" + e.s3Addr), UsePathStyle: true, Credentials: aws.AnonymousCredentials{}})
+	if out, err := anon.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(name), Delete: &types.Delete{Objects: []types.ObjectIdentifier{
+		{Key: aws.String("public/a.txt")},
+	}}}); err != nil || len(out.Errors) != 1 || aws.ToString(out.Errors[0].Code) != "AccessDenied" {
+		t.Errorf("anonymous DeleteObjects = %+v, %v; want an AccessDenied entry", out, err)
+	}
+	if got := getObject(t, ed, name, "public/a.txt"); string(got) != "public data" {
+		t.Errorf("public/a.txt after an anonymous bulk delete = %q, want it kept", got)
+	}
+
 	url := func(key string) string { return "http://" + e.s3Addr + "/" + name + "/" + key }
 	if r := doHTTP(t, http.MethodGet, url("public/a.txt"), nil, nil); r.status != http.StatusOK || r.body != "public data" {
 		t.Errorf("anonymous GET public/a.txt = %d %q, want 200 \"public data\"", r.status, r.body)
@@ -601,7 +636,7 @@ func TestBucketPolicy(t *testing.T) {
 		t.Errorf("anonymous GET after removing the rule = %d, want 403", r.status)
 	}
 
-	err := e.createBucketErr(t, unique("badpol"), &storagepb.BucketSpec{BucketPolicy: &storagepb.BucketPolicy{Rules: []*storagepb.BucketPolicy_Rule{{
+	err = e.createBucketErr(t, unique("badpol"), &storagepb.BucketSpec{BucketPolicy: &storagepb.BucketPolicy{Rules: []*storagepb.BucketPolicy_Rule{{
 		Paths: []string{"*"}, Roles: []string{"storage.editor"},
 		Subject: &storagepb.BucketPolicy_Rule_Anonymous{Anonymous: &storagepb.BucketPolicy_Rule_AnonymousAccess{}},
 	}}}})

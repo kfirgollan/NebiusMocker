@@ -380,6 +380,29 @@ func TestCLIBucketPolicyAndCORS(t *testing.T) {
 	mustContain(t, "anonymous private", awFails(t, aws, "s3", "cp", "s3://"+b+"/private/x", "-", "--no-sign-request"), "403")
 	mustContain(t, "anonymous write", awFails(t, aws, "s3", "cp", file, "s3://"+b+"/public/y", "--no-sign-request"), "AccessDenied")
 
+	// Bulk deletes are authorized per key. s3api delete-objects with mixed
+	// keys deletes the allowed ones and reports AccessDenied for the rest.
+	aw(t, aws, "s3", "cp", file, "s3://"+b+"/allowed/y.txt")
+	out := aw(t, aws, "s3api", "delete-objects", "--bucket", b, "--delete",
+		`{"Objects":[{"Key":"allowed/y.txt"},{"Key":"private/x"},{"Key":"public/x"}]}`)
+	var res struct {
+		Deleted []struct{ Key string }
+		Errors  []struct{ Key, Code string }
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil || len(res.Deleted) != 1 || res.Deleted[0].Key != "allowed/y.txt" ||
+		len(res.Errors) != 2 || res.Errors[0].Code != "AccessDenied" || res.Errors[1].Code != "AccessDenied" {
+		t.Errorf("s3api delete-objects = %s (%v); want allowed/y.txt deleted, private/x and public/x AccessDenied", out, err)
+	}
+	mustContain(t, "kept after denied bulk delete", aw(t, editor, "s3", "ls", "s3://"+b, "--recursive"), "private/x", "public/x")
+	// aws s3 rm --recursive (ListObjects + DeleteObjects) on the allowed prefix.
+	aw(t, aws, "s3", "cp", file, "s3://"+b+"/allowed/z1")
+	aw(t, aws, "s3", "cp", file, "s3://"+b+"/allowed/z2")
+	aw(t, aws, "s3", "rm", "s3://"+b+"/allowed/", "--recursive")
+	if out := aw(t, editor, "s3", "ls", "s3://"+b, "--recursive"); strings.Contains(out, "allowed/") || !strings.Contains(out, "private/x") {
+		t.Errorf("after rm --recursive allowed/: %s; want allowed/ empty and private/x kept", out)
+	}
+	mustContain(t, "rm --recursive outside the policy", awFails(t, aws, "s3", "rm", "s3://"+b+"/", "--recursive"), "AccessDenied")
+
 	// The update kept the policy and added CORS.
 	raw, _ := json.Marshal(nbJSON(t, cli, "storage", "bucket", "get", "--id", bucketID))
 	mustContain(t, "bucket get", string(raw), groupID, "public/*", "allowed_origins")

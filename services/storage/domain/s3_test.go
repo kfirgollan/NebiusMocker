@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	storagepb "github.com/nebius/gosdk/proto/nebius/storage/v1"
@@ -132,6 +133,41 @@ func TestS3GateBucketPolicy(t *testing.T) {
 	off := newGate(t, f, fakeChecker{}, authz.ModeOff)
 	if _, err := off.Authorize(t.Context(), domain.S3Request{Bucket: "policy-bucket", Action: domain.ActGetObject, Target: "private/x"}); !errs.IsKind(err, errs.KindPermissionDenied) {
 		t.Fatalf("anonymous under authz off: %v, want PermissionDenied", err)
+	}
+}
+
+func TestS3GateAuthorizeObjects(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.create(t, "bulk-bucket", &storagepb.BucketSpec{BucketPolicy: &storagepb.BucketPolicy{Rules: []*storagepb.BucketPolicy_Rule{
+		{Paths: []string{"shared/*"}, Roles: []string{"storage.object-editor"}, Subject: &storagepb.BucketPolicy_Rule_GroupId{GroupId: groupID}},
+	}}})
+	keys := []string{"shared/a", "private/b", "shared/c/d", "sharedx"}
+	tests := []struct {
+		name      string
+		checker   fakeChecker
+		mode      authz.Mode
+		principal string
+		want      []bool
+	}{
+		{"policy grants per key", fakeChecker{}, authz.ModeEnforce, saID, []bool{true, false, true, false}},
+		{"IAM permit allows every key", fakeChecker{allowed: map[authz.Permission]bool{domain.PermObjectDelete: true}}, authz.ModeEnforce, saID, []bool{true, true, true, true}},
+		{"non-member gets nothing", fakeChecker{}, authz.ModeEnforce, "serviceaccount-2", []bool{false, false, false, false}},
+		{"anonymous gets nothing from a group rule", fakeChecker{}, authz.ModeOff, "", []bool{false, false, false, false}},
+		{"audit reports but allows signed requests", fakeChecker{}, authz.ModeAudit, "serviceaccount-2", []bool{true, true, true, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			g := newGate(t, f, tt.checker, tt.mode)
+			_, got, err := g.AuthorizeObjects(t.Context(), tt.principal, "bulk-bucket", domain.ActDeleteObject, keys)
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Fatalf("AuthorizeObjects = %v, %v; want %v", got, err, tt.want)
+			}
+		})
+	}
+	if _, _, err := newGate(t, f, fakeChecker{}, authz.ModeEnforce).AuthorizeObjects(t.Context(), saID, "no-such", domain.ActDeleteObject, keys); !errs.IsKind(err, errs.KindNotFound) {
+		t.Fatalf("unknown bucket: %v, want NotFound", err)
 	}
 }
 

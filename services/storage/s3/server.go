@@ -228,6 +228,9 @@ func (s *Server) handle(w *responseWriter, r *http.Request, t target) error {
 	if op.action == domain.ActCreateBucket {
 		return s.createBucket(w, r, t.Bucket, principal, b)
 	}
+	if op.action == domain.ActDeleteObjects {
+		return s.deleteObjects(ctx, w, r, t, principal, b)
+	}
 	acc, err := s.authorize(ctx, principal, t.Bucket, op)
 	if err != nil {
 		return err

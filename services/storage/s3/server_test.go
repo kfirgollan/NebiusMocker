@@ -17,6 +17,7 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -112,8 +113,22 @@ func (u *upstreamFake) Forward(w http.ResponseWriter, fr rustfs.ForwardRequest) 
 	u.mu.Lock()
 	u.reqs = append(u.reqs, forwarded{fr.In.Method, fr.Bucket, fr.Key, fr.PayloadHash, body, fr.ContentLength})
 	u.mu.Unlock()
+	if fr.In.URL.Query().Has("delete") {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></DeleteResult>`)
+		return
+	}
 	w.Header().Set("ETag", `"etag"`)
 	w.WriteHeader(http.StatusOK)
+}
+
+// membersFake puts the test key's account in policyGroup.
+type membersFake struct{}
+
+const policyGroup = "group-e00policy00000000001"
+
+func (membersFake) IsMember(_ context.Context, principal, group string) (bool, error) {
+	return principal == "serviceaccount-e00test" && group == policyGroup, nil
 }
 
 func (u *upstreamFake) last(t *testing.T) forwarded {
@@ -209,6 +224,7 @@ func startFrontWith(t *testing.T, up Upstream, ops BucketOps, buckets ...*storag
 	t.Helper()
 	gate, err := domain.NewS3Gate(domain.GateDeps{
 		Buckets: bucketsFake{items: buckets}, Keys: keysFake{}, Checker: checkerFake{}, Hierarchy: hierarchyFake{}, Mode: authz.ModeEnforce,
+		Members: func() domain.GroupMembers { return membersFake{} },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -442,3 +458,51 @@ func TestClassify(t *testing.T) {
 }
 
 func errOf[T any](_ T, err error) error { return err }
+
+// TestDeleteObjectsPerKeyPolicy checks that bulk deletes are authorized per
+// key: the test key has no IAM delete permission (checkerFake), only a
+// bucket policy rule on shared/*.
+func TestDeleteObjectsPerKeyPolicy(t *testing.T) {
+	t.Parallel()
+	up := &upstreamFake{}
+	b := bucket("storagebucket-p", "policed", storagepb.BucketStatus_ACTIVE)
+	b.Spec = &storagepb.BucketSpec{BucketPolicy: &storagepb.BucketPolicy{Rules: []*storagepb.BucketPolicy_Rule{
+		{Paths: []string{"shared/*"}, Roles: []string{"storage.object-editor"}, Subject: &storagepb.BucketPolicy_Rule_GroupId{GroupId: policyGroup}},
+	}}}
+	srv := startFrontWith(t, up, &opsFake{}, b)
+	c := client(srv.URL, testKeyID, testSecret)
+	del := func(keys ...string) (*awss3.DeleteObjectsOutput, error) {
+		var ids []types.ObjectIdentifier
+		for _, k := range keys {
+			ids = append(ids, types.ObjectIdentifier{Key: aws.String(k)})
+		}
+		return c.DeleteObjects(t.Context(), &awss3.DeleteObjectsInput{Bucket: aws.String("policed"), Delete: &types.Delete{Objects: ids}})
+	}
+
+	out, err := del("shared/a", "private/b", "shared/c")
+	if err != nil {
+		t.Fatalf("DeleteObjects: %v", err)
+	}
+	if len(out.Errors) != 1 || aws.ToString(out.Errors[0].Key) != "private/b" || aws.ToString(out.Errors[0].Code) != "AccessDenied" {
+		t.Fatalf("DeleteObjects errors = %+v, want AccessDenied for private/b only", out.Errors)
+	}
+	got := up.last(t)
+	if !strings.Contains(string(got.body), "<Key>shared/a</Key>") || !strings.Contains(string(got.body), "<Key>shared/c</Key>") ||
+		strings.Contains(string(got.body), "private/b") {
+		t.Fatalf("forwarded delete body = %s, want only the shared/ keys", got.body)
+	}
+
+	// Nothing is forwarded when every key is denied.
+	up.mu.Lock()
+	n := len(up.reqs)
+	up.mu.Unlock()
+	out, err = del("private/x", "other")
+	if err != nil || len(out.Errors) != 2 {
+		t.Fatalf("all-denied DeleteObjects = %+v, %v; want 2 AccessDenied errors", out, err)
+	}
+	up.mu.Lock()
+	defer up.mu.Unlock()
+	if len(up.reqs) != n {
+		t.Fatalf("an all-denied bulk delete reached the store")
+	}
+}
