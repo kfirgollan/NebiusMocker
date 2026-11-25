@@ -118,6 +118,20 @@ type fakeInstanceRepo struct {
 	txn       sync.Mutex
 	instances memRepo[*computepb.Instance]
 	disks     *memRepo[*computepb.Disk]
+	stopped   map[string]time.Time // guarded by txn
+}
+
+func (f *fakeInstanceRepo) StoppedBefore(_ context.Context, t time.Time) ([]string, error) {
+	f.txn.Lock()
+	defer f.txn.Unlock()
+	var ids []string
+	for id, at := range f.stopped {
+		if at.Before(t) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 func (f *fakeInstanceRepo) Get(_ context.Context, id string) (*computepb.Instance, error) {
@@ -136,12 +150,13 @@ func (f *fakeInstanceRepo) List(_ context.Context, parentID string, size int, to
 func (f *fakeInstanceRepo) Txn(_ context.Context, fn func(tx InstanceTx) error) error {
 	f.txn.Lock()
 	defer f.txn.Unlock()
-	tx := &fakeInstanceTx{inst: newOverlay(&f.instances), disks: newOverlay(f.disks)}
+	tx := &fakeInstanceTx{inst: newOverlay(&f.instances), disks: newOverlay(f.disks), stopped: maps.Clone(f.stopped)}
 	if err := fn(tx); err != nil {
 		return err
 	}
 	tx.inst.commit()
 	tx.disks.commit()
+	f.stopped = tx.stopped
 	return nil
 }
 
@@ -152,8 +167,27 @@ func (f *fakeInstanceRepo) count() int {
 }
 
 type fakeInstanceTx struct {
-	inst  *txOverlay[*computepb.Instance]
-	disks *txOverlay[*computepb.Disk]
+	inst    *txOverlay[*computepb.Instance]
+	disks   *txOverlay[*computepb.Disk]
+	stopped map[string]time.Time
+}
+
+func (t *fakeInstanceTx) StoppedAt(id string) (time.Time, bool, error) {
+	at, ok := t.stopped[id]
+	return at, ok, nil
+}
+
+func (t *fakeInstanceTx) SetStoppedAt(id string, at time.Time) error {
+	if t.stopped == nil {
+		t.stopped = map[string]time.Time{}
+	}
+	t.stopped[id] = at
+	return nil
+}
+
+func (t *fakeInstanceTx) ClearStoppedAt(id string) error {
+	delete(t.stopped, id)
+	return nil
 }
 
 func (t *fakeInstanceTx) Instance(id string) (*computepb.Instance, error) { return t.inst.get(id) }
@@ -442,6 +476,7 @@ func newInstFixture(t *testing.T) *instFixture {
 	f.svc, err = NewInstanceService(InstanceDeps{
 		Instances: f.repo, OpIndex: f.idx, Projects: projects, Platforms: platforms, Network: f.net, Disks: f.ds,
 		GpuClusters: f.gpu, Filesystems: f.fs, Perms: f.perms, Ops: f.ops, IDs: ids, Clock: f.clk,
+		PublicIPReleaseAfter: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)

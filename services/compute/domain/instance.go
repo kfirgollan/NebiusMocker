@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,12 +43,18 @@ type InstanceDeps struct {
 	Ops         Operations
 	IDs         IDGenerator
 	Clock       clock.Clock
+	// PublicIPReleaseAfter is how long a STOPPED instance keeps a dynamic
+	// public address (docs: one hour); must be positive.
+	PublicIPReleaseAfter time.Duration
 }
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
 		d.Disks == nil || d.GpuClusters == nil || d.Filesystems == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
+	}
+	if d.PublicIPReleaseAfter <= 0 {
+		return errors.New("compute: the public IP release period must be positive")
 	}
 	return nil
 }
@@ -55,7 +63,11 @@ func (d InstanceDeps) validate() error {
 // management plane only: nothing boots. Instances move through their
 // lifecycle states, attach disks (managed disks are created and deleted with
 // the instance) and get VPC addresses for their network interfaces.
-type InstanceService struct{ d InstanceDeps }
+type InstanceService struct {
+	d InstanceDeps
+	// nics serializes NIC changes of operations with SweepPublicIPs (see withNICs).
+	nics sync.Mutex
+}
 
 // NewInstanceService wires an InstanceService.
 func NewInstanceService(d InstanceDeps) (*InstanceService, error) {
@@ -221,12 +233,14 @@ func (s *InstanceService) Delete(ctx context.Context, id string, request proto.M
 	return s.submit(ctx, stored.GetMetadata().GetParentId(), operations.Spec{
 		ResourceID: id, Description: "Delete instance", CreatedBy: reqctx.PrincipalFrom(ctx).ID, Request: request,
 		Prepare: func(ctx context.Context) error {
-			return s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
-				if err := checkDeletable(tx, cur); err != nil {
-					return err
-				}
-				setInstanceState(cur, computepb.InstanceStatus_DELETING)
-				return nil
+			return s.withNICs(func() error {
+				return s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
+					if err := checkDeletable(tx, cur); err != nil {
+						return err
+					}
+					setInstanceState(cur, computepb.InstanceStatus_DELETING)
+					return nil
+				})
 			})
 		},
 		Work: func(ctx context.Context) error { return s.remove(ctx, id) },
@@ -287,8 +301,9 @@ func (s *InstanceService) Start(ctx context.Context, id string, request proto.Me
 }
 
 // Stop stops a RUNNING instance: STOPPING, then STOPPED. A dynamic public
-// address (public_ip_address without allocation_id and static=false) is
-// released, and a new one is assigned on Start.
+// address (public_ip_address without allocation_id and static=false) is kept
+// for PublicIPReleaseAfter and released after that (see SweepPublicIPs); a
+// Start within that period keeps it, a later one assigns a new one.
 func (s *InstanceService) Stop(ctx context.Context, id string, request proto.Message) (*operations.Operation, error) {
 	return s.power(ctx, id, request, stopMove)
 }
@@ -303,39 +318,48 @@ func (s *InstanceService) power(ctx context.Context, id string, request proto.Me
 	}
 	return s.submit(ctx, stored.GetMetadata().GetParentId(), operations.Spec{
 		ResourceID: id, Description: m.what, CreatedBy: reqctx.PrincipalFrom(ctx).ID, Request: request,
-		Prepare: func(ctx context.Context) error {
-			cur, err := s.d.Instances.Get(ctx, id)
-			if err != nil {
-				return err
-			}
-			if st := cur.GetStatus().GetState(); st != m.from {
-				return errs.BadState(id, fmt.Sprintf("instance is %s: only a %s instance can be %s", st, m.from, m.verb))
-			}
-			nics, err := s.bindAll(ctx, cur, cur.GetSpec(), m.to, nil)
-			if err != nil {
-				return err
-			}
-			err = s.mutate(ctx, id, func(_ InstanceTx, cur *computepb.Instance) error {
-				cur.Status.NetworkInterfaces = nics
-				setInstanceState(cur, m.via)
-				return nil
-			})
-			if err != nil {
-				_, restoreErr := s.bindAll(ctx, cur, cur.GetSpec(), m.from, nil)
-				return errors.Join(err, restoreErr)
-			}
-			return nil
-		},
-		Work: func(ctx context.Context) error { return s.settle(ctx, id, m.to) },
+		Prepare: func(ctx context.Context) error { return s.withNICs(func() error { return s.preparePower(ctx, id, m) }) },
+		Work:    func(ctx context.Context) error { return s.settle(ctx, id, m.to) },
 	})
+}
+
+// preparePower checks and binds the NICs of a Start or Stop. It releases
+// dynamic public addresses that are due first, so a Start after the grace
+// period never reuses them. The caller holds the NIC lock.
+func (s *InstanceService) preparePower(ctx context.Context, id string, m powerMove) error {
+	if _, err := s.releaseExpiredPublic(ctx, id); err != nil {
+		return err
+	}
+	cur, err := s.d.Instances.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if st := cur.GetStatus().GetState(); st != m.from {
+		return errs.BadState(id, fmt.Sprintf("instance is %s: only a %s instance can be %s", st, m.from, m.verb))
+	}
+	nics, err := s.bindAll(ctx, cur, cur.GetSpec(), m.to, nil)
+	if err != nil {
+		return err
+	}
+	err = s.mutate(ctx, id, func(_ InstanceTx, cur *computepb.Instance) error {
+		cur.Status.NetworkInterfaces = nics
+		setInstanceState(cur, m.via)
+		return nil
+	})
+	if err != nil {
+		_, restoreErr := s.bindAll(ctx, cur, cur.GetSpec(), m.from, nil)
+		return errors.Join(err, restoreErr)
+	}
+	return nil
 }
 
 // settle moves a transitional instance to its resting state.
 func (s *InstanceService) settle(ctx context.Context, id string, to computepb.InstanceStatus_InstanceState) error {
-	return s.mutate(ctx, id, func(_ InstanceTx, cur *computepb.Instance) error {
+	return s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
 		if st := cur.GetStatus().GetState(); to != computepb.InstanceStatus_UNSPECIFIED &&
 			(st == computepb.InstanceStatus_UPDATING || st == computepb.InstanceStatus_STARTING || st == computepb.InstanceStatus_STOPPING) {
 			setInstanceState(cur, to)
+			return s.recordStop(tx, cur, to)
 		}
 		return nil
 	})
@@ -499,6 +523,9 @@ func (s *InstanceService) remove(ctx context.Context, id string) error {
 		}
 		plan := diskPlan{current: cur.GetStatus().GetDiskAttachments()}
 		if _, err := s.applyDisks(tx, cur, plan); err != nil {
+			return err
+		}
+		if err := tx.ClearStoppedAt(id); err != nil {
 			return err
 		}
 		return tx.DeleteInstance(id)

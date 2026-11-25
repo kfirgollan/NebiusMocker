@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
@@ -22,7 +25,7 @@ import (
 // registerInstances wires InstanceService. Managed disks follow the
 // DiskService rules; NIC addresses come from the vpc module through
 // peer.NetworkInterfaces, looked up at call time.
-func registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, w instanceWiring) error {
+func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, w instanceWiring) error {
 	instances := dal.NewInstanceRepo(deps.Store)
 	svc, err := domain.NewInstanceService(domain.InstanceDeps{
 		Instances: instances, OpIndex: dal.NewInstanceOpIndex(deps.Store), Projects: deps.Authz,
@@ -30,10 +33,12 @@ func registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, w instanceWi
 		GpuClusters: w.gpuClusters, Filesystems: w.filesystems,
 		Perms: callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
 		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		PublicIPReleaseAfter: deps.Config.ComputePublicIPReleaseAfter,
 	})
 	if err != nil {
 		return fmt.Errorf("compute: %w", err)
 	}
+	m.publicIPs = publicIPSweeper{svc: svc, clk: deps.Clock, log: deps.Log}
 	deps.Authz.RegisterKind(domain.KindInstance, func(ctx context.Context, id string) (string, error) {
 		inst, err := instances.Get(ctx, id)
 		return inst.GetMetadata().GetParentId(), err
@@ -41,6 +46,57 @@ func registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, w instanceWi
 	api.RegisterInstanceAuthzRules(deps.Rules)
 	computepb.RegisterInstanceServiceServer(reg, api.NewInstanceHandler(svc))
 	return nil
+}
+
+// publicIPSweepInterval is how often (on the injected clock) the dynamic
+// public addresses of instances stopped for longer than
+// NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER are released.
+const publicIPSweepInterval = time.Minute
+
+// publicIPSweeper runs InstanceService.SweepPublicIPs in one background
+// goroutine between Module.Start and Module.Stop.
+type publicIPSweeper struct {
+	svc  *domain.InstanceService
+	clk  clock.Clock
+	log  *slog.Logger
+	stop context.CancelFunc
+	wg   sync.WaitGroup
+}
+
+// Start implements mocker.Lifecycle: it starts the public IP sweeper.
+func (m *Module) Start(ctx context.Context) error {
+	p := &m.publicIPs
+	if p.svc == nil {
+		return nil // not registered
+	}
+	ctx, p.stop = context.WithCancel(ctx)
+	p.wg.Go(func() { p.run(ctx) })
+	return nil
+}
+
+// Stop implements mocker.Lifecycle: it stops the public IP sweeper.
+func (m *Module) Stop(context.Context) error {
+	p := &m.publicIPs
+	if p.stop != nil {
+		p.stop()
+	}
+	p.wg.Wait()
+	return nil
+}
+
+func (p *publicIPSweeper) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.clk.After(publicIPSweepInterval):
+		}
+		if n, err := p.svc.SweepPublicIPs(ctx); err != nil {
+			p.log.WarnContext(ctx, "release public IPs of stopped instances", "released", n, "error", err)
+		} else if n > 0 {
+			p.log.InfoContext(ctx, "released public IPs of stopped instances", "instances", n)
+		}
+	}
 }
 
 // instanceWiring are the compute services InstanceService builds on.

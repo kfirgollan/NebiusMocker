@@ -26,14 +26,16 @@ func (s *InstanceService) networkInterfaces() (peer.NetworkInterfaces, error) {
 
 // binding is the desired VPC state of one NIC for an instance that is (going
 // to be) in state: a dynamic public address (no allocation_id,
-// static=false) exists only while it runs.
+// static=false) is assigned when it runs, and a stopped instance keeps the
+// one its status shows until it is released (see SweepPublicIPs).
 func binding(inst *computepb.Instance, nic *computepb.NetworkInterfaceSpec, state computepb.InstanceStatus_InstanceState) peer.InterfaceBinding {
 	b := peer.InterfaceBinding{
 		InstanceID: inst.GetMetadata().GetId(), ProjectID: inst.GetMetadata().GetParentId(),
 		Name: nic.GetName(), SubnetID: nic.GetSubnetId(),
 		PrivateAllocationID: nic.GetIpAddress().GetAllocationId(),
 	}
-	if pub := nic.GetPublicIpAddress(); pub != nil && (pub.GetAllocationId() != "" || pub.GetStatic() || state == computepb.InstanceStatus_RUNNING) {
+	if pub := nic.GetPublicIpAddress(); pub != nil && (pub.GetAllocationId() != "" || pub.GetStatic() ||
+		state == computepb.InstanceStatus_RUNNING || hasPublicAddress(inst, nic.GetName())) {
 		b.Public = &peer.PublicBinding{AllocationID: pub.GetAllocationId()}
 	}
 	for _, a := range nic.GetAliases() {

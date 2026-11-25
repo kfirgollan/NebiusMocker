@@ -29,8 +29,22 @@ import (
 //     (STARTING → RUNNING) the instance; other spec changes run as
 //     UPDATING; a metadata-only change has no transition;
 //   - disks and interfaces are reconciled (see reconcileDisks, bindAll).
-func (s *InstanceService) applyUpdate(ctx context.Context, cmd UpdateInstanceCmd) (computepb.InstanceStatus_InstanceState, error) {
+func (s *InstanceService) applyUpdate(ctx context.Context, cmd UpdateInstanceCmd) (state computepb.InstanceStatus_InstanceState, err error) {
+	err = s.withNICs(func() error {
+		var err error
+		state, err = s.applyUpdateLocked(ctx, cmd)
+		return err
+	})
+	return state, err
+}
+
+// applyUpdateLocked is applyUpdate with the NIC lock held. Dynamic public
+// addresses that are due are released first (see SweepPublicIPs).
+func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInstanceCmd) (computepb.InstanceStatus_InstanceState, error) {
 	none := computepb.InstanceStatus_UNSPECIFIED
+	if _, err := s.releaseExpiredPublic(ctx, cmd.Metadata.GetId()); err != nil {
+		return none, err
+	}
 	stored, updated, err := s.patchInstance(ctx, cmd)
 	if err != nil || updated == nil {
 		return none, err

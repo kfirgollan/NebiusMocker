@@ -75,6 +75,10 @@ type Config struct {
 	// ComputePlatformsFile, when set, replaces the built-in platform catalog
 	// (YAML or JSON; see docs/services/compute.md).
 	ComputePlatformsFile string
+	// ComputePublicIPReleaseAfter is how long a stopped instance keeps a
+	// dynamic public IP address (public_ip_address without allocation_id,
+	// static=false) before it is released (docs: more than one hour).
+	ComputePublicIPReleaseAfter time.Duration
 	// Registry configures the Container Registry module.
 	Registry RegistryConfig
 	// TLS enables TLS on the mocker's listeners; empty means plaintext.
@@ -193,8 +197,11 @@ func Default() Config {
 		TenantID:       DefaultTenantID,
 		ProjectID:      DefaultProjectID,
 		Regions:        DefaultRegions(),
-		LogLevel:       slog.LevelInfo,
-		VPC:            defaultVPC(),
+		// docs.nebius.com/compute/virtual-machines/network: a dynamic address
+		// returns to the range once the VM is STOPPED for more than one hour.
+		ComputePublicIPReleaseAfter: time.Hour,
+		LogLevel:                    slog.LevelInfo,
+		VPC:                         defaultVPC(),
 		ObjStore: ObjStoreConfig{
 			Backend:   ObjStoreMemory,
 			Endpoint:  "http://127.0.0.1:9000",
@@ -254,6 +261,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		}},
 		{"COMPUTE_IMAGES_FILE", func(v string) error { c.ComputeImagesFile = v; return nil }},
 		{"COMPUTE_PLATFORMS_FILE", func(v string) error { c.ComputePlatformsFile = v; return nil }},
+		{"COMPUTE_PUBLIC_IP_RELEASE_AFTER", func(v string) error { return parsePositive(v, &c.ComputePublicIPReleaseAfter) }},
 		{"STORAGE_S3_LISTEN", func(v string) error { c.Storage.S3Listen = v; return nil }},
 		{"STORAGE_S3_DOMAIN", func(v string) error { c.Storage.S3Domain = v; return nil }},
 		{"STORAGE_REGION", func(v string) error { c.Storage.Region = v; return nil }},

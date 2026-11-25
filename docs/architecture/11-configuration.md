@@ -26,6 +26,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_IAM_PROJECTS` | — | **Implemented**: `name[:region],…` projects seeded in the default tenant after `default` (`NEBIUS_MOCKER_PROJECT_ID`). IDs are derived from tenant + name (stable across restarts); regions must be in `NEBIUS_MOCKER_REGIONS` |
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | **Implemented**: InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](../services/compute.md#gpu-clusters-implemented)); replaces the built-in one |
 | `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in (`services/compute/domain/platforms.yaml`) | **Implemented**: platform/preset catalog per region (YAML/JSON, [format](../services/compute.md#catalogs-seed)); replaces the built-in one |
+| `NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER` | `1h` | **Implemented**: how long a `STOPPED` instance keeps a dynamic public IP (`public_ip_address = {}`) before it is released (docs: more than one hour); a positive duration, on the mock clock ([compute](../services/compute.md)) |
 | `NEBIUS_MOCKER_PERSISTENCE` | `0` | Persist state across restarts |
 | `NEBIUS_MOCKER_DATA_DIR` | `/var/lib/nebius-mocker` | State and snapshot location |
 | `NEBIUS_MOCKER_OP_CONFLICT` | `reject` | `reject` \| `abort-previous` |

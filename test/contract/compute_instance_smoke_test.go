@@ -92,7 +92,9 @@ func TestInstanceSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	inst, _ = instances.Get(ctx, &computepb.GetInstanceRequest{Id: op.ResourceID()})
-	if inst.GetStatus().GetState() != computepb.InstanceStatus_STOPPED || inst.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress() != nil {
+	// A dynamic public address is kept for an hour after the stop (docs).
+	if inst.GetStatus().GetState() != computepb.InstanceStatus_STOPPED ||
+		inst.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress().GetAddress() != nic.GetPublicIpAddress().GetAddress() {
 		t.Fatalf("after stop: %v", inst.GetStatus())
 	}
 	start, err := instances.Start(ctx, &computepb.StartInstanceRequest{Id: inst.GetMetadata().GetId()})

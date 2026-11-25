@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
@@ -30,6 +31,9 @@ type InstanceRepository interface {
 	// Txn runs fn in one serializable transaction. An error from fn
 	// discards every write made through tx.
 	Txn(ctx context.Context, fn func(tx InstanceTx) error) error
+	// StoppedBefore returns the IDs of the instances with a stop time (see
+	// InstanceTx.SetStoppedAt) before t.
+	StoppedBefore(ctx context.Context, t time.Time) ([]string, error)
 }
 
 // InstanceTx reads and writes instances and disks inside one transaction.
@@ -41,6 +45,14 @@ type InstanceTx interface {
 	// PutInstance replaces an existing instance.
 	PutInstance(inst *computepb.Instance) error
 	DeleteInstance(id string) error
+
+	// StoppedAt returns when a STOPPED instance that still holds a dynamic
+	// public address stopped (ok = false when no stop time is recorded).
+	StoppedAt(id string) (at time.Time, ok bool, err error)
+	// SetStoppedAt records the stop time of an instance.
+	SetStoppedAt(id string, at time.Time) error
+	// ClearStoppedAt removes the stop time of an instance, if any.
+	ClearStoppedAt(id string) error
 
 	Disk(id string) (*computepb.Disk, error)
 	// CreateDisk fails with errs.AlreadyExists if the ID or the name in the parent is taken.

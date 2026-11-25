@@ -53,6 +53,22 @@ func TestRegions(t *testing.T) {
 	}
 }
 
+func TestComputePublicIPReleaseAfter(t *testing.T) {
+	t.Parallel()
+	if got := Default().ComputePublicIPReleaseAfter; got != time.Hour {
+		t.Fatalf("default release-after = %s, want 1h (docs)", got)
+	}
+	c, err := FromLookup(lookup(map[string]string{"NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER": "90s"}))
+	if err != nil || c.ComputePublicIPReleaseAfter != 90*time.Second {
+		t.Fatalf("FromLookup = %s, %v; want 90s", c.ComputePublicIPReleaseAfter, err)
+	}
+	for _, v := range []string{"0s", "-1m", "soon"} {
+		if _, err := FromLookup(lookup(map[string]string{"NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER": v})); err == nil {
+			t.Errorf("release-after %q accepted, want error", v)
+		}
+	}
+}
+
 func TestFromLookupErrors(t *testing.T) {
 	t.Parallel()
 	for _, env := range []map[string]string{

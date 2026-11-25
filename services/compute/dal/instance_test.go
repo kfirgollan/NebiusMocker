@@ -3,7 +3,9 @@ package dal
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -271,5 +273,43 @@ func TestInstanceOpIndex(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"operation-e00a", "operation-e00b", "operation-e00c"}, ids); diff != "" {
 		t.Fatalf("IDs = %v, want the project's operations in submission order (-want +got):\n%s", ids, diff)
+	}
+}
+
+func TestInstanceRepoStopTimes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := NewInstanceRepo(store.NewMemory())
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 123, time.UTC)
+	err := r.Txn(ctx, func(tx domain.InstanceTx) error {
+		return errors.Join(tx.SetStoppedAt("computeinstance-e00a", t0), tx.SetStoppedAt("computeinstance-e00b", t0.Add(time.Hour)))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Txn(ctx, func(tx domain.InstanceTx) error {
+		at, ok, err := tx.StoppedAt("computeinstance-e00a")
+		if err != nil || !ok || !at.Equal(t0) {
+			return fmt.Errorf("StoppedAt = %v, %v; want %v: %w", at, ok, t0, err)
+		}
+		if _, ok, err := tx.StoppedAt("computeinstance-e00none"); err != nil || ok {
+			return fmt.Errorf("StoppedAt(missing) = %v: %w", ok, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := r.StoppedBefore(ctx, t0.Add(time.Minute)); err != nil || !slices.Equal(ids, []string{"computeinstance-e00a"}) {
+		t.Fatalf("StoppedBefore = %v, %v; want only a", ids, err)
+	}
+	err = r.Txn(ctx, func(tx domain.InstanceTx) error {
+		return errors.Join(tx.ClearStoppedAt("computeinstance-e00a"), tx.ClearStoppedAt("computeinstance-e00none"))
+	})
+	if err != nil {
+		t.Fatalf("ClearStoppedAt (idempotent): %v", err)
+	}
+	if ids, err := r.StoppedBefore(ctx, t0.Add(2*time.Hour)); err != nil || !slices.Equal(ids, []string{"computeinstance-e00b"}) {
+		t.Fatalf("StoppedBefore after clear = %v, %v; want only b", ids, err)
 	}
 }

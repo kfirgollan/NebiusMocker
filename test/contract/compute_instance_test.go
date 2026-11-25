@@ -218,28 +218,33 @@ func TestInstanceStartStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped := c.get(t, id)
-	if stopped.GetStatus().GetState() != computepb.InstanceStatus_STOPPED || stopped.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress() != nil {
+	// The dynamic public address is kept for an hour after the stop (see
+	// compute_instance_publicip_test.go for the release).
+	if stopped.GetStatus().GetState() != computepb.InstanceStatus_STOPPED ||
+		stopped.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress().GetAddress() != oldPublic.GetAddress() {
 		t.Errorf("after stop: %v", stopped.GetStatus())
 	}
 	if stopped.GetSpec().GetStopped() {
 		t.Errorf("the Stop RPC changed spec.stopped")
 	}
-	_, err := c.allocs.Get(t.Context(), &vpcpb.GetAllocationRequest{Id: oldPublic.GetAllocationId()})
-	wantCode(t, "dynamic public allocation after stop", err, codes.NotFound, "")
+	if a := c.alloc(t, oldPublic.GetAllocationId()); a.GetStatus().GetState() != vpcpb.AllocationStatus_ASSIGNED {
+		t.Errorf("dynamic public allocation after stop = %v, want ASSIGNED", a.GetStatus())
+	}
 	wantCode(t, "Stop stopped", c.stop(t.Context(), id), codes.FailedPrecondition, "")
 
 	if err := c.start(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
 	started := c.get(t, id)
-	if started.GetStatus().GetState() != computepb.InstanceStatus_RUNNING || started.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress().GetAddress() == "" {
+	if started.GetStatus().GetState() != computepb.InstanceStatus_RUNNING ||
+		started.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress().GetAddress() != oldPublic.GetAddress() {
 		t.Errorf("after start: %v", started.GetStatus())
 	}
 	if started.GetStatus().GetNetworkInterfaces()[0].GetMacAddress() != inst.GetStatus().GetNetworkInterfaces()[0].GetMacAddress() {
 		t.Errorf("mac address changed across stop/start")
 	}
 
-	_, err = c.instances.Start(t.Context(), &computepb.StartInstanceRequest{Id: "computeinstance-e00doesnotexist"})
+	_, err := c.instances.Start(t.Context(), &computepb.StartInstanceRequest{Id: "computeinstance-e00doesnotexist"})
 	wantCode(t, "Start missing", err, codes.NotFound, "")
 	_, err = c.instances.Stop(t.Context(), &computepb.StopInstanceRequest{Id: "computeinstance-e00doesnotexist"})
 	wantCode(t, "Stop missing", err, codes.NotFound, "")

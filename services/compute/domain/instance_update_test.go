@@ -429,39 +429,6 @@ func TestInstanceStartStopWrongState(t *testing.T) {
 	wantKind(t, f.start(id), errs.KindBadState, "")
 }
 
-func TestInstanceStopReleasesDynamicPublicIPAndStartRebinds(t *testing.T) {
-	t.Parallel()
-	f := newInstFixture(t)
-	spec := baseSpec()
-	spec.NetworkInterfaces[0].PublicIpAddress = &computepb.PublicIPAddress{}
-	inst := f.mustCreate(t, "vm", spec)
-	id := inst.GetMetadata().GetId()
-	first := inst.GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress()
-	if first.GetAddress() == "" || first.GetStatic() {
-		t.Fatalf("public ip = %v", first)
-	}
-	if err := f.stop(id); err != nil {
-		t.Fatal(err)
-	}
-	stopped := f.get(t, id).GetStatus().GetNetworkInterfaces()[0]
-	if stopped.GetPublicIpAddress() != nil {
-		t.Fatalf("a stopped instance still has public address %v", stopped.GetPublicIpAddress())
-	}
-	if b, ok := f.net.binding(id, "eth0"); !ok || b.Public != nil {
-		t.Fatalf("binding while stopped = %+v (bound %v), want no public binding", b, ok)
-	}
-	if stopped.GetIpAddress().GetAddress() != "10.0.0.1" {
-		t.Fatalf("private address = %s, want it kept", stopped.GetIpAddress().GetAddress())
-	}
-	if err := f.start(id); err != nil {
-		t.Fatal(err)
-	}
-	again := f.get(t, id).GetStatus().GetNetworkInterfaces()[0].GetPublicIpAddress()
-	if again.GetAddress() == "" || again.GetStatic() {
-		t.Fatalf("public ip after start = %v, want a new dynamic address", again)
-	}
-}
-
 func TestInstanceStopKeepsStaticAndExplicitPublicIP(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

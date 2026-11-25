@@ -2,7 +2,9 @@ package dal
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
@@ -13,6 +15,10 @@ import (
 
 // kindInstanceOp is the store kind of instance operation-index entries (not a NID type).
 const kindInstanceOp = "computeinstance.op"
+
+// kindInstanceStopped is the store kind of instance stop times (record ID =
+// instance ID, Data = RFC 3339 time); not a NID type.
+const kindInstanceStopped = "computeinstance.stopped"
 
 // InstanceRepo stores compute instances. Its transactions also reach the
 // disks the instances attach (same store kinds as DiskRepo).
@@ -56,6 +62,39 @@ func (r *InstanceRepo) Txn(ctx context.Context, fn func(tx domain.InstanceTx) er
 	})
 }
 
+// StoppedBefore implements domain.InstanceRepository.
+func (r *InstanceRepo) StoppedBefore(ctx context.Context, t time.Time) ([]string, error) {
+	var ids []string
+	err := r.r.st.View(ctx, func(tx store.Tx) error {
+		recs, err := tx.List(store.ListQuery{Kind: kindInstanceStopped, AnyParent: true})
+		if err != nil {
+			return err
+		}
+		for _, rec := range recs {
+			at, err := decodeStoppedAt(rec)
+			if err != nil {
+				return err
+			}
+			if at.Before(t) {
+				ids = append(ids, rec.ID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list instance stop times: %w", err)
+	}
+	return ids, nil
+}
+
+func decodeStoppedAt(rec store.Record) (time.Time, error) {
+	at, err := time.Parse(time.RFC3339Nano, string(rec.Data))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("decode stop time of instance %s: %w", rec.ID, err)
+	}
+	return at, nil
+}
+
 // instanceTx adapts a store transaction to domain.InstanceTx.
 type instanceTx struct {
 	tx    store.Tx
@@ -73,6 +112,33 @@ func (t instanceTx) PutInstance(inst *computepb.Instance) error { return txPut(t
 
 func (t instanceTx) DeleteInstance(id string) error {
 	return t.inst.toDomain(t.tx.Delete(t.inst.kind, id), id)
+}
+
+func (t instanceTx) StoppedAt(id string) (time.Time, bool, error) {
+	rec, err := t.tx.Get(kindInstanceStopped, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read stop time of instance %s: %w", id, err)
+	}
+	at, err := decodeStoppedAt(rec)
+	return at, err == nil, err
+}
+
+func (t instanceTx) SetStoppedAt(id string, at time.Time) error {
+	_, err := t.tx.Put(store.Record{Kind: kindInstanceStopped, ID: id, Data: []byte(at.UTC().Format(time.RFC3339Nano))})
+	if err != nil {
+		return fmt.Errorf("record stop time of instance %s: %w", id, err)
+	}
+	return nil
+}
+
+func (t instanceTx) ClearStoppedAt(id string) error {
+	if err := t.tx.Delete(kindInstanceStopped, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("clear stop time of instance %s: %w", id, err)
+	}
+	return nil
 }
 
 func (t instanceTx) Disk(id string) (*computepb.Disk, error) { return txGet(t.tx, t.disks, id) }

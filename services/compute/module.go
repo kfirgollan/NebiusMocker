@@ -24,9 +24,16 @@ import (
 )
 
 // Module is the Compute service module.
-type Module struct{}
+type Module struct {
+	// publicIPs releases the dynamic public addresses of long-stopped
+	// instances (see instances.go).
+	publicIPs publicIPSweeper
+}
 
-var _ mocker.Module = (*Module)(nil)
+var (
+	_ mocker.Module    = (*Module)(nil)
+	_ mocker.Lifecycle = (*Module)(nil)
+)
 
 // New returns the Compute module.
 func New() *Module { return &Module{} }
@@ -35,7 +42,7 @@ func New() *Module { return &Module{} }
 func (*Module) Name() string { return "compute" }
 
 // Register seeds the public image catalog and registers the Compute gRPC services.
-func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
+func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	regions := make([]domain.Region, 0, len(deps.Config.Regions))
 	for _, r := range deps.Config.Regions {
 		regions = append(regions, domain.Region{Name: r.Name, RoutingCode: r.RoutingCode})
@@ -91,7 +98,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err != nil {
 		return err
 	}
-	return registerInstances(reg, deps, instanceWiring{
+	return m.registerInstances(reg, deps, instanceWiring{
 		disks: disks, platforms: platforms, gpuClusters: gpuClusters, filesystems: filesystems,
 	})
 }

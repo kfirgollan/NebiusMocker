@@ -241,8 +241,14 @@ marks no spec attribute computed); everything synthesized lives in `status`.
   (provided by vpc) with `status.assignment.network_interface{instance_id, name, type PRIMARY|PUBLIC|ALIAS}`, state
   `ASSIGNED`. `ip_address = {}` creates a dynamic allocation (lowest free address in the subnet, named
   `<instance>-<nic>-private`, `status.static=false`); `ip_address.allocation_id` binds a user allocation (same project,
-  in the subnet's space, unassigned). `public_ip_address = {}` is a dynamic public address: released on Stop and
-  reassigned on Start; `static = true` keeps it across stops; an `allocation_id` binds a user allocation. Aliases bind
+  in the subnet's space, unassigned). `public_ip_address = {}` is a dynamic public address. Per docs
+  `compute/virtual-machines/network` it is returned to the range once the instance has been `STOPPED` for more than
+  one hour: until then the stopped instance keeps it (status shows it, the allocation stays `ASSIGNED`) and a Start
+  reuses it; after that it is released (the allocation is deleted, status has no public address) and the next Start
+  assigns a new one. The period is `NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER` (default `1h`), counted on the mock
+  clock from when the instance settles in `STOPPED` (updates while stopped do not restart it); a sweep releases due
+  addresses every minute of that clock, and a Start or Update after the period releases them first. `static = true`
+  keeps it across stops; an `allocation_id` binds a user allocation. Aliases bind
   user allocations. Security groups must belong to the subnet's network; an empty list means the network's default
   group, shown in status only. Delete releases everything: dynamic allocations are deleted, user allocations become
   `ALLOCATED` again and survive. Interfaces may be added or removed on update.

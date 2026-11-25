@@ -45,10 +45,10 @@ type instanceEnv struct {
 	NetworkID   string
 }
 
-func startInstanceEnv(t *testing.T) *instanceEnv {
+func startInstanceEnv(t *testing.T, opts ...testkit.Option) *instanceEnv {
 	t.Helper()
-	env := imagescenario.Start(t, memory.New(clock.Real{}), []mocker.Module{vpc.New()},
-		testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce))
+	opts = append([]testkit.Option{testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce)}, opts...)
+	env := imagescenario.Start(t, memory.New(clock.Real{}), []mocker.Module{vpc.New()}, opts...)
 	sdk := env.Inst.SDK(t)
 	subnet, err := vpcsvc.NewSubnetService(sdk).GetByName(t.Context(),
 		&vpcpb.GetSubnetByNameRequest{ParentId: env.Inst.ProjectID, Name: "default-subnet"})
