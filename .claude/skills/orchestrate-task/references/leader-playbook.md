@@ -55,6 +55,14 @@ Spawn workers with the Agent tool (`subagent_type: general-purpose`, `model: hai
 - Run the gates yourself and read the output: the repo's full check (`make check`), every e2e suite the change could
   affect, and the inner skill's done criteria. Paste the summary lines into your report.
 - A worker saying "tests pass" is not evidence. Your own run is.
+- **No-shortcuts audit** (see CLAUDE.md "No shortcuts"). Before shipping, check every test path against what a real user
+  does:
+  - no direct writes to backends in e2e tests;
+  - no request field accepted and silently ignored;
+  - no test-only proxies or forwarders standing in for the user's setup;
+  - no documented workflow skipped.
+
+  Fix every hit. In your report, list what you checked. Only *scope* may be deferred; a shortcut may not.
 - On a failure: fix it, or brief a worker with the exact failure output. Escalate the model (haiku → sonnet → opus)
   after one failed attempt at the same tier. Never weaken a test, lint rule or criterion to get green.
 

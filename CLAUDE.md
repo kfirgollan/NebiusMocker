@@ -25,6 +25,29 @@ Start with `README.md`, `docs/architecture/` and `docs/services/`. Binding rules
 - **The protos are the spec.** Types and server stubs come from gosdk. Validation comes from `buf.validate`. Upstream
   sources are cached in `~/.cache/nebius-mocker/upstream`.
 
+## No shortcuts
+
+A test proves a feature only if it takes the path a real user takes. These are **gaps to fix, not deferrals**:
+
+- Tests that bypass the user path, e.g. writing straight into a backend (RustFS, Harbor, the store) where a user would
+  upload through the S3 front, the CLI or the documented client.
+- Accepting a request field or option and silently ignoring it: filters, `rotation_period`, settings that have no
+  effect. Either implement it, or reject it with a clear `InvalidArgument`/`Unimplemented` that names it.
+- Environment workarounds that make a test pass in a way a user's machine wouldn't, e.g. proxies or forwarders that only
+  exist in the test. Make the documented user setup work, and test exactly that.
+- Skipping a documented workflow (for example a CLI credential helper) while claiming its criterion is met.
+
+**What isn't a gap:** deferring *scope* is fine, as long as it is explicit and listed under "Not yet" in the service doc.
+Examples: quotas, an RPC nobody calls, features the public API can't reach.
+
+**Enforcement:**
+- Leaders audit their own suites against this list before shipping, and say in their report what they checked.
+- When the dispatcher finds a shortcut in a report:
+  - if the leader is still live, it instructs the leader to fix it;
+  - otherwise it starts a follow-up task for it.
+
+  A shortcut is never accepted as "deferred".
+
 ## Code rules (enforced, do not weaken)
 
 - Every service area is `services/<area>/{module.go, api/, domain/, dal/}`:

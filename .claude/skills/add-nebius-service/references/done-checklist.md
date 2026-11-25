@@ -37,6 +37,17 @@ Copy this checklist into your plan. In refresh mode, only the delta rows apply, 
 - Pin image tags. Check that they run on arm64.
 - Install tools like the `nebius` CLI into a sandbox (`test/internal/nebiuscli`), never system-wide.
 
+## No shortcuts
+
+Every test must take the user's path (see CLAUDE.md "No shortcuts"):
+- E2E tests never write directly into a backend. Data goes in the way users put it in: through the S3 front, the CLI, or
+  the documented SDK.
+- Every accepted field has an effect. If one doesn't, reject it explicitly by name.
+- No test-only proxies or forwarders. The documented user setup must work as is.
+- Every documented workflow for a criterion is exercised, e.g. a CLI credential helper as well as token login.
+
+Scope may be deferred, but only when it is listed in the service doc's "Not yet". Shortcuts may not.
+
 ## Ship gate
 
 ```bash

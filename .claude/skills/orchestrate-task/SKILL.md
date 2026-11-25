@@ -80,7 +80,17 @@ A leader's report is a claim. Verify it:
 1. `git fetch origin` and confirm the reported commit is on `origin/main` (`git branch -r --contains <sha>`).
 2. In the main checkout: `git pull --ff-only`, then run `make check`. Run the task's e2e targets if they are cheap or the
    leader reports anything flaky.
-3. If both pass, remove the worktree and branch, and mark the task done:
+3. **Audit the report and the tests for shortcuts** (CLAUDE.md "No shortcuts"): bypassed user paths, silently ignored
+   fields, test-only workarounds, skipped documented workflows. Read the "deferred" list especially closely; a shortcut
+   is often filed there.
+   - If the leader is still live, send it the exact gaps to fix and reopen the task in the ledger.
+   - If it isn't, register and spawn a follow-up task for them.
+   - Only scope deferrals may stay deferred.
+
+   If both checks pass and there are no shortcuts, remove the worktree and branch, and mark the task done.
+
+   A finished agent's worktree may still be locked by the harness. Unlock it only after confirming it is clean and fully
+   pushed (`git -C <wt> status --porcelain` is empty and `git -C <wt> log origin/main..HEAD` shows nothing):
 
    ```bash
    git worktree remove <path> && git branch -D <branch>
