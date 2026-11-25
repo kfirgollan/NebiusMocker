@@ -24,6 +24,7 @@
 | `nebius.iam.v1.ServiceAccountService`: Create, Get, GetByName, List, Update (reset mask), Delete (cascades to the account's access keys). Parent must be a project | ✅ T1 |
 | `nebius.iam.v2.AccessKeyService`: Create, Get, GetByName, GetSecret, List, ListByAccount, GetByAwsId, Update, Delete, Activate, Deactivate (`*ByAwsId` mutations not yet) | ✅ T1 |
 | Access keys as S3 credentials: Object Storage's S3 front verifies SigV4 with them (`peer.AccessKeys` capability in `pkg/peer`, provided by IAM) | ✅ |
+| Project regions for other areas (`peer.ProjectRegions`: a project's `spec.region`; Compute checks GPU cluster fabrics with it) | ✅ |
 | `nebius_iam_v1_service_account`, `nebius_iam_v2_access_key` (+ data sources) and the `nebius_iam_v2_access_key_secret` ephemeral resource | ✅ e2e: `test/terraform/storage` |
 | `secret_delivery_mode = MYSTERY_BOX`: the secret is delivered to a MysteryBox secret (`status.secret_reference_id`), read with `nebius_mysterybox_v1_secret_payload_entry` / `nebius mysterybox payload get` and used against the S3 front | ✅ e2e: `test/terraform/iam` (lifecycle in `make e2e`; the S3 use with RustFS in `make e2e-storage`), `test/cli/iam` (`make e2e-storage`) |
 | `nebius.iam.v1.AuthPublicKeyService`: Create, Get, GetByName, List, ListByAccount, Update (reset mask), Activate, Deactivate, Delete. Status `state`/`fingerprint`/`algorithm`/`key_size` computed from `spec.data` | ✅ T1 (see [Service-account keys and token exchange](#service-account-keys-and-token-exchange)) |

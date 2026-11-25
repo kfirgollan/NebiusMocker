@@ -110,6 +110,7 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions (and NID routing codes) with a public image catalog |
 | `NEBIUS_MOCKER_IAM_PROJECTS` | — (only `default`) | `name[:region],…` extra projects seeded in the default tenant, with stable IDs ([details](docs/services/iam.md#configuration)) |
 | `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in | Replace the public image catalog ([format](docs/services/compute.md#catalogs-seed)) |
+| `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in | Replace the InfiniBand fabric catalog of GPU clusters ([format](docs/services/compute.md#gpu-clusters-implemented)) |
 | `NEBIUS_MOCKER_REGISTRY_BACKEND` | `memory` | `harbor` stores images in Harbor and serves docker on `NEBIUS_MOCKER_REGISTRY_LISTEN` (`:4590`) |
 
 ### Container Registry with docker

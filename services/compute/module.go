@@ -3,8 +3,8 @@
 //
 // Implemented: ImageService (public catalog per region and custom images
 // imported from Object Storage), with image payloads in the shared object
-// store (pkg/objstore). Instances, disks and the other compute services come
-// later. See docs/services/compute.md.
+// store (pkg/objstore); DiskService and DiskSnapshotService; GpuClusterService
+// (inventory only). See docs/services/compute.md.
 package compute
 
 import (
@@ -71,8 +71,8 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	api.RegisterAuthzRules(deps.Rules, svc)
 	computepb.RegisterImageServiceServer(reg, api.NewImageHandler(svc))
 	// The membership port is what InstanceService joins GPU clusters through
-	// (spec.gpu_cluster); building it here validates the fabric catalog.
-	if _, err := newGpuClusterMembership(deps); err != nil {
+	// (spec.gpu_cluster).
+	if _, err := registerGpuClusters(reg, deps); err != nil {
 		return err
 	}
 	// The attachment port is what InstanceService attaches shared

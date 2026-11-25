@@ -19,7 +19,12 @@
 | Authorization: public images readable by any authenticated principal; custom images by project roles (`compute.images.*`) | ✅ |
 | `nebius_compute_v1_image` data source (the provider has no image resource) with the official Terraform provider | ✅ e2e: public images in `test/terraform/compute` (`make e2e`); custom images in the same package under `make e2e-images` |
 | `nebius compute image …` CLI flows (list-public, get, get-by-name, get-latest-by-family, create from a bucket, list, update, list-operations-by-parent, delete) on RustFS | ✅ e2e: `test/compute` (`make e2e-images`) |
-| Instances, filesystems, GPU clusters, NVL groups, platforms, maintenance, nodes | Planned |
+| `nebius.compute.v1.GpuClusterService`: Get, GetByName, List (paged; deprecated `filter` rejected), Create (fabric checked against the catalog and the project's region), Update (reset mask, `resource_version`; name and labels mutable, `infiniband_fabric` immutable), Delete (`FAILED_PRECONDITION` while `status.instances` is non-empty), ListOperationsByParent | ✅ T2 (inventory only: no GPUs, fabric or topology are simulated) |
+| GPU cluster membership port (`domain.GpuClusterMembership`: Join/Leave) for InstanceService `spec.gpu_cluster`: same project, fabric accepts the instance's platform, synthetic deterministic `infiniband_topology_path`; Join and cluster Delete are atomic against each other | ✅ (domain + DAL tests; reachable over the API once InstanceService serves `gpu_cluster`) |
+| GPU cluster authorization: `compute.gpuClusters.*` on the project | ✅ |
+| `nebius_compute_v1_gpu_cluster` resource and data source with the official Terraform provider | ✅ e2e: `test/terraform/compute/gpucluster_test.go` (`make e2e`) |
+| `nebius compute gpu-cluster …` CLI flows | ✅ e2e: `test/computegpucluster` (`make e2e`, no Docker) |
+| Instances, filesystems, NVL groups, platforms, maintenance, nodes | Planned |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
@@ -85,6 +90,9 @@ object-storage/objects/upload-download); they never write into the object store,
 - No quota accounting for image storage.
 - Disks and snapshots: no quotas (`compute.disk.count`, `compute.disk.size.<type>`), no attachments until instances
   exist, and no `ERROR`/`BROKEN` states, because nothing can fail without a data plane.
+- GPU clusters: no fabric or topology simulation (`infiniband_topology_path` is synthetic), no capacity modeling, no
+  quota (upstream: 5 GPU clusters per region). The exact upstream error for an instance whose platform does not match
+  the cluster's fabric is undocumented; the mock answers `INVALID_ARGUMENT` on `spec.gpu_cluster.id`.
 
 ## Overview
 
@@ -207,6 +215,38 @@ exists and is unit-tested in the domain). Rules come from docs `compute/storage/
 
 Filesystems (planned) will follow the same size rules.
 
+### GPU clusters (implemented)
+
+Management plane only (docs: compute/clusters/gpu). A cluster holds `spec.infiniband_fabric` and the IDs of its member
+instances; nothing is allocated.
+- **Create**: `spec.infiniband_fabric` is required and must be a catalog fabric in the region of the parent project
+  (`peer.ProjectRegions`, provided by IAM). Unknown or other-region fabrics → `INVALID_ARGUMENT` on
+  `spec.infiniband_fabric`, listing the fabrics of the project's region. The spec is echoed exactly as sent;
+  `status.reconciling` is true until the operation completes.
+- **Update**: name and labels change in place (reset-mask semantics, `resource_version` checked and bumped). A different
+  `infiniband_fabric` → `INVALID_ARGUMENT` ("field is immutable"); an unset one keeps the stored fabric. Terraform
+  replaces the cluster on a fabric change (`RequiresReplace`). Status is server-owned and kept.
+- **Membership**: instances join only at creation through `GpuClusterMembership.Join` (InstanceService). The cluster
+  must exist (`NOT_FOUND`), be in the instance's project, and its fabric must accept the instance's platform (one fabric
+  = one platform) — otherwise `INVALID_ARGUMENT` on `spec.gpu_cluster.id`. Join appends to `status.instances` and
+  records a deterministic path `[<fabric>, <fabric>-spine-NN, <fabric>-leaf-NNN]` (derived from the instance ID) in
+  `status.infiniband_topology_path`. Leave (instance delete) is idempotent; the topology is cleared with the last member.
+  The "8-GPU presets only" rule is checked by InstanceService against the platform catalog.
+- **Delete**: `FAILED_PRECONDITION` while `status.instances` is non-empty ("deleted or moved to another cluster"). The
+  check and the removal run in one store transaction, so a Join racing a Delete either blocks it or fails with
+  `NOT_FOUND`.
+
+Fabric catalog file (`NEBIUS_MOCKER_COMPUTE_FABRICS_FILE`, YAML or JSON; it replaces the built-in
+`services/compute/domain/fabrics.yaml`, taken from the public docs' fabric table on 2026-11-25). Unknown keys are
+rejected. Fabrics of regions the mocker does not emulate are kept but unusable:
+
+```yaml
+fabrics:
+  - name: fabric-3          # spec.infiniband_fabric
+    region: eu-north1       # only projects of this region can use it
+    platforms: [gpu-h100-sxm]  # platforms whose instances may join
+```
+
 ### Integrity
 - An attached disk cannot be deleted. An instance in a GPU cluster blocks deletion of the cluster.
 - `ListInstancesByNVLInstanceGroup` and `BatchGet` (up to the documented max IDs; missing IDs are omitted) are index queries.
@@ -248,6 +288,7 @@ must work verbatim, so the default image catalog has to include whatever familie
 |---|---|---|
 | `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in | (later) Platform/preset catalog |
 | `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in (`services/compute/domain/catalog.yaml`) | Public image catalog file (YAML/JSON, format above); replaces the built-in one. **Implemented** |
+| `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](#gpu-clusters-implemented)); replaces the built-in one. **Implemented** |
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions with a public image catalog (`ListPublic --region`); the first is the `GetLatestByFamily` default. **Implemented** |
 | `NEBIUS_MOCKER_OBJSTORE` (+ `_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION`) | `memory` | Where image payloads live: `memory` or `rustfs` (shared with Object Storage; see [storage.md](storage.md)) |
 | `NEBIUS_MOCKER_COMPUTE_CHARGE_STOPPED` | `0` | Count vCPU/GPU quota for stopped instances |
