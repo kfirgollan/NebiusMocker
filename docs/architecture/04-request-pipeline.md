@@ -108,5 +108,5 @@ return errs.BadState(id, "instance is STOPPED")   // → FAILED_PRECONDITION + B
 return errs.OperationConflict(runningOpID, id)    // → FAILED_PRECONDITION + OperationConflict
 
 // api: the single mapping point
-return nil, serviceerror.FromDomain(err)          // code + ServiceError detail + retry_type + request/trace IDs
+return nil, serviceerror.FromDomain(ctx, err)          // code + ServiceError detail + retry_type + request/trace IDs
 ```

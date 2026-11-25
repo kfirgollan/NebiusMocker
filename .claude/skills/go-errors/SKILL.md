@@ -18,7 +18,7 @@ dal ──errs.NotFound(id)──▶ domain ──fmt.Errorf("…: %w")──▶
   `OutOfRange`, `Internal`. Constructors: `errs.NotFound(id)`, `errs.BadRequest(errs.Violation{Field, Msg})`, …
 - **`domain` and `dal` return `pkg/errs` values (wrapped as needed). They never import `grpc/status` or
   `grpc/codes`.** depguard enforces this.
-- **Only the `api` layer** (and interceptors) converts, using `serviceerror.FromDomain(err)`, which picks the
+- **Only the `api` layer** (and interceptors) converts, using `serviceerror.FromDomain(ctx, err)`, which picks the
   gRPC code, attaches the `ServiceError` detail, sets `retry_type`, and adds request/trace IDs. Unknown errors become
   `INTERNAL` with `InternalError{request_id}` — and the original is logged, never sent to the client.
 - Operations that fail asynchronously store the same mapping in `Operation.status`.

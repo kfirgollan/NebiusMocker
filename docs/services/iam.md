@@ -3,6 +3,19 @@
 > Module: `services/iam` · Image: `nebius-mocker-iam` · `NEBIUS_MOCKER_SERVICES=iam`
 > M1 tier: **T2** · Endpoints: `cpl.iam`, `tokens.iam`, plus HTTP `/oauth2/token/exchange`
 
+## Implementation status
+
+| Piece | Status |
+|---|---|
+| Seeded default tenant (`tenant-e00mock0000000000default`) | ✅ |
+| `nebius.iam.v1.GroupService`: Create, Get, GetByName, List (paged), Update (reset mask, `resource_version`), Delete | ✅ T1 |
+| `nebius_iam_v1_group` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
+| Static dev-token authentication | ✅ |
+| Everything else in this document | Planned |
+
+Covered by unit tests (`services/iam/domain`, `services/iam/dal`), gosdk contract tests (`test/contract`) and the
+Terraform e2e suite (`make e2e`). The suite runs create → add → remove → destroy, plus in-place label and name updates.
+
 ## Overview
 
 IAM owns the resource hierarchy (tenants → projects), the principals (user accounts, service accounts), credentials

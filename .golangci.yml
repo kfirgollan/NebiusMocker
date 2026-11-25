@@ -7,6 +7,7 @@ run:
   timeout: 5m
   relative-path-mode: gomod
   tests: true
+  build-tags: [e2e] # lint the Terraform end-to-end tests too
 
 issues:
   # Report everything: one finding must never hide another on the same line.
@@ -260,10 +261,6 @@ linters:
       - path: (cmd/|pkg/mocker/)
         linters: [forbidigo]
         text: "context\\.(Background|TODO)"
-      # CLIs print to stdout.
-      - path: cmd/
-        linters: [forbidigo]
-        text: "fmt\\.Print"
       # Tests: allow longer functions and type assertions in helpers.
       - path: _test\.go
         linters: [funlen, gocognit, forcetypeassert, gosec]
@@ -275,7 +272,9 @@ formatters:
   settings:
     gofumpt:
       module-path: github.com/kfirgollan/NebiusMocker
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
     gci:
       sections:
         - standard

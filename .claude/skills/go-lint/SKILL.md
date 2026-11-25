@@ -50,7 +50,7 @@ if not, add it to the `store-only-in-dal` exceptions with a comment, in the same
 | `time.Now/Sleep/After/NewTimer/…` | injected `clock.Clock` | `pkg/clock` |
 | `os.Getenv/LookupEnv/Environ` | `pkg/config` | `pkg/config`, `cmd/` |
 | `context.Background/TODO` | caller's ctx; `t.Context()` in tests | `cmd/`, `pkg/mocker` |
-| `fmt.Print*`, `print`, `println` | injected `*slog.Logger` | `cmd/` |
+| `fmt.Print*`, `print`, `println` | injected `*slog.Logger`; CLIs write with `fmt.Fprint*(os.Stdout, …)` | — |
 | `errors.As` | `errors.AsType[E]` | — |
 | `panic` | return an error | anywhere, with `//nolint:forbidigo // <invariant>` |
 
@@ -89,8 +89,11 @@ make check   # all of the above; what the pre-commit hook runs
 make hooks   # install .githooks/pre-commit via git config core.hooksPath .githooks
 ```
 
-Pin `golangci-lint` as a Go tool dependency (`go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@<version>`,
-run as `go tool golangci-lint`) so every contributor runs the same version with no separate install.
+`golangci-lint` is pinned as a Go tool in a **separate module**, `tools/go.mod`, so its large dependency tree stays
+out of the main `go.mod`. `make lint` runs it as `go tool -modfile=tools/go.mod golangci-lint`, so every
+contributor gets the same version with no separate install. Upgrade with
+`cd tools && go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@<version>`.
+The lint run includes the `e2e` build tag, so the Terraform tests are linted too.
 
 When a lint fails: read the `desc`/`msg` — each rule states the alternative. If the alternative doesn't fit your
 case, that is a design conversation (see `go-architecture`), not a `nolint`.

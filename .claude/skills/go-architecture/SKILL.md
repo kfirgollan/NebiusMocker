@@ -45,11 +45,11 @@ An api handler does exactly four things, in order:
 func (h *InstanceHandler) Create(ctx context.Context, req *computepb.CreateInstanceRequest) (*commonpb.Operation, error) {
     cmd, err := toCreateInstanceCmd(req)          // 1. convert proto → domain input (pure mapping)
     if err != nil {
-        return nil, serviceerror.FromDomain(err)  //    conversion errors are BadRequest
+        return nil, serviceerror.FromDomain(ctx, err)  //    conversion errors are BadRequest
     }
     op, err := h.svc.CreateInstance(ctx, cmd)     // 2. call exactly one domain method
     if err != nil {
-        return nil, serviceerror.FromDomain(err)  // 3. map domain error → gRPC status + ServiceError
+        return nil, serviceerror.FromDomain(ctx, err)  // 3. map domain error → gRPC status + ServiceError
     }
     return toOperationProto(op), nil              // 4. convert domain → proto
 }

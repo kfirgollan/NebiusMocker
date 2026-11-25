@@ -1,0 +1,5 @@
+/bin/
+*.test
+.terraform/
+*.tfstate*
+tfplan

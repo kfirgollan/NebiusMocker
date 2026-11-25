@@ -5,17 +5,17 @@
 These are the framework pieces every service needs. No service is "done" in M0, but `iam` and `vpc.Network` run end to
 end as the pilot.
 
-- [ ] Go module, CI (lint, `go test`, race), Dockerfile, release workflow (goreleaser + ghcr)
-- [ ] `pkg/edge`: h2c listener, reflection, health, the "service not enabled" stub
-- [ ] Interceptors: request-id, authn (dev tokens), authz (`off`/`audit`), protovalidate, idempotency, reset-mask
+- [x] Go module, local gate (`make check`: lint + `go test -race`) — CI, Dockerfile and release workflow still to do
+- [x] `pkg/edge`: h2c listener, reflection, health (the "service not enabled" stub is still to do)
+- [x] Interceptors: request-id, recovery, logging, authn (dev tokens), protovalidate (authz and idempotency still to do; reset mask is read in the api layer)
 - [ ] `pkg/resource`: generic CRUD, NIDs, metadata rules, field behaviors from annotations, paging
-- [ ] `pkg/operations`: engine, scheduler, manual clock, `OperationService` v1 and v1alpha1
-- [ ] `pkg/store`: memory backend, indexes, references
-- [ ] `pkg/serviceerror`
+- [x] `pkg/operations`: engine, single-goroutine scheduler, per-resource locks, `OperationService` v1 (v1alpha1 still to do)
+- [x] `pkg/store`: memory backend with name/parent indexes (references still to do)
+- [x] `pkg/serviceerror`
 - [ ] `tools/apigen`: handler stubs (all 91 services registered, T0 by default) + doc tables
 - [ ] `tools/tfcoverage`
 - [ ] `pkg/testkit` + conformance kit (C1–C15) running on the pilot kinds
-- [ ] Terraform runner + `00-provider-config` + `20-vpc-network` (network only)
+- [x] Terraform runner (`test/terraform`), with IAM groups as the pilot instead of a VPC network
 
 **Exit criteria:** `terraform apply && terraform plan` (empty) `&& terraform destroy` passes for a `nebius_vpc_v1_network`,
 using the unmodified registry provider against the all-in-one binary.

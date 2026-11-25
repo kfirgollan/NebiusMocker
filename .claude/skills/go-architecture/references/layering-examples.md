@@ -23,7 +23,7 @@
 func (h *DiskHandler) Delete(ctx context.Context, req *computepb.DeleteDiskRequest) (*commonpb.Operation, error) {
     op, err := h.svc.DeleteDisk(ctx, req.GetId())
     if err != nil {
-        return nil, serviceerror.FromDomain(err)
+        return nil, serviceerror.FromDomain(ctx, err)
     }
     return toOperationProto(op), nil
 }

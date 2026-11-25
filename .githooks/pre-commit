@@ -1,0 +1,7 @@
+#!/bin/sh
+# NebiusMocker pre-commit gate (no CI budget). Runs only when Go code changes.
+set -e
+if git diff --cached --name-only | grep -Eq '(\.go|go\.mod|go\.sum|\.golangci\.yml)$'; then
+  echo "pre-commit: make check"
+  make check
+fi
