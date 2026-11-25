@@ -78,8 +78,12 @@ You are re-invoked when a leader messages "main" or finishes. Don't poll.
 A leader's report is a claim. Verify it:
 
 1. `git fetch origin` and confirm the reported commit is on `origin/main` (`git branch -r --contains <sha>`).
-2. In the main checkout: `git pull --ff-only`, then run `make check`. Run the task's e2e targets if they are cheap or the
-   leader reports anything flaky.
+2. Verify in a **temporary detached worktree** at `origin/main`
+   (`git worktree add --detach <tmp> origin/main`, then remove it with `--force`). Never `git stash` or reset the main
+   checkout to make room, because it may hold the dispatcher's own uncommitted or queued work. There, run `make check`. Run the task's e2e targets if they are cheap or the
+   leader reports anything flaky. Always save gate output to a log file (`make check > <id>-check.log 2>&1`). An
+   intermittent failure without its output can't be diagnosed. A gate that fails once and then passes is a flake:
+   record it, with the log, as a follow-up, and never treat it as green.
 3. **Audit the report and the tests for shortcuts** (CLAUDE.md "No shortcuts"): bypassed user paths, silently ignored
    fields, test-only workarounds, skipped documented workflows. Read the "deferred" list especially closely; a shortcut
    is often filed there.

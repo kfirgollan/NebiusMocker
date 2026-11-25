@@ -55,6 +55,9 @@ Spawn workers with the Agent tool (`subagent_type: general-purpose`, `model: hai
 - Run the gates yourself and read the output: the repo's full check (`make check`), every e2e suite the change could
   affect, and the inner skill's done criteria. Paste the summary lines into your report.
 - A worker saying "tests pass" is not evidence. Your own run is.
+- Save gate output to task-unique log files (`<task-id>-check.log`, `<task-id>-e2e.log`). Leaders share one scratchpad,
+  and generic names like `e2e.log` get overwritten by other leaders' runs.
+- Never commit editor or `sed -i` backups (`*-E`, `*.orig`, `*.bak`). Check `git status` before committing.
 - **No-shortcuts audit** (see CLAUDE.md "No shortcuts"). Before shipping, check every test path against what a real user
   does:
   - no direct writes to backends in e2e tests;
