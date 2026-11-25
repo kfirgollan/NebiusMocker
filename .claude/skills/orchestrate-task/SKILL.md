@@ -89,13 +89,17 @@ A leader's report is a claim. Verify it:
 
    If both checks pass and there are no shortcuts, remove the worktree and branch, and mark the task done.
 
-   A finished agent's worktree may still be locked by the harness. Unlock it only after confirming it is clean and fully
-   pushed (`git -C <wt> status --porcelain` is empty and `git -C <wt> log origin/main..HEAD` shows nothing):
+   **Remove worktrees only through the guard script.** It refuses (exit 2) and lists the work if the worktree has
+   uncommitted changes or commits that are not on `origin/main`. It also unlocks harness-locked worktrees. Never call
+   `git worktree remove` or `git branch -D` directly on a leader's worktree.
 
    ```bash
-   git worktree remove <path> && git branch -D <branch>
-   python3 -I $L update <id> --status done --note "shipped <sha>"
+   sh .claude/skills/orchestrate-task/scripts/close-worktree.sh <path> \
+     && python3 -I $L update <id> --status done --note "shipped <sha>"
    ```
+
+   On a refusal, find out what the extra work is. Typically it's an artifact the leader built but didn't push. Route
+   it to its owner, who ships it through the gates. Until then, protect it with `git branch recover/<name> <sha>`.
 
 4. Tell dependent leaders to rebase onto the new `main`.
 5. Report to the user: what shipped, the evidence (commit, test lines), and anything deferred.
