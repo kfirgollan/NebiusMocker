@@ -21,8 +21,8 @@ lint: ## Lint, including depguard/forbidigo layering rules
 test: ## Unit, contract and architecture tests with the race detector
 	$(GO) test -race -shuffle=on -count=1 ./...
 
-e2e: ## Terraform end-to-end tests: real terraform + official nebius provider
-	$(GO) test -tags e2e -count=1 -v ./test/terraform/...
+e2e: ## End-to-end tests: real terraform + official nebius provider, official nebius CLI
+	$(GO) test -tags e2e -count=1 -v ./test/terraform/... ./test/internal/nebiuscli/...
 
 check: lint test ## Everything the pre-commit hook runs
 
