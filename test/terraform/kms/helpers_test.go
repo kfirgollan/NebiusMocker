@@ -18,6 +18,7 @@ import (
 	tfjson "github.com/hashicorp/terraform-json"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
+	"github.com/kfirgollan/NebiusMocker/test/internal/tfcache"
 )
 
 // providerVersion pins the official provider release under test.
@@ -62,13 +63,16 @@ func newTerraformAs(t *testing.T, inst *testkit.Instance, token string) *tfRun {
 		t.Fatalf("tfexec: %v", err)
 	}
 	r := &tfRun{tf: tf, dir: dir, addr: inst.Addr, token: token, tenantID: inst.TenantID}
-	if err := tf.SetEnv(childEnv(map[string]string{
+	env := map[string]string{
 		"CHECKPOINT_DISABLE":         "1",
-		"TF_PLUGIN_CACHE_DIR":        pluginCacheDir(t),
 		"TF_CLI_CONFIG_FILE":         writeCLIConfig(t, dir),
 		"TF_REGISTRY_CLIENT_TIMEOUT": "60",
 		"NEBIUS_IAM_TOKEN":           "", // credentials come from the provider block only
-	})); err != nil {
+	}
+	// The plugin cache is private to this test binary (see tfcache), so
+	// concurrent runs never exec each other's half-written provider.
+	maps.Copy(env, tfcache.Env(t))
+	if err := tf.SetEnv(childEnv(env)); err != nil {
 		t.Fatalf("tfexec env: %v", err)
 	}
 	tf.SetStdout(&r.out)
@@ -198,23 +202,8 @@ func childEnv(overrides map[string]string) map[string]string {
 	return env
 }
 
-// pluginCacheDir keeps downloaded providers between runs. Terraform's plugin
-// cache is not safe for concurrent use: an init without a lock file reinstalls
-// the provider into the cache, and a concurrent run (e.g. the IAM suite, which
-// go test runs in parallel with this package) can then exec a half-written
-// binary or see a checksum mismatch. This package therefore has its own cache.
-func pluginCacheDir(t *testing.T) string {
-	t.Helper()
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = t.TempDir()
-	}
-	dir := filepath.Join(base, "nebius-mocker", "terraform-plugins-kms")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("plugin cache dir: %v", err)
-	}
-	return dir
-}
+// TestMain removes this binary's private plugin cache (tfcache) afterwards.
+func TestMain(m *testing.M) { os.Exit(tfcache.Main(m)) }
 
 // writeCLIConfig isolates the run from the developer's ~/.terraformrc, so a
 // local dev_overrides or mirror config cannot swap in a non-official provider.
