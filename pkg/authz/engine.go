@@ -71,6 +71,15 @@ func (e *Engine) RegisterKind(kind string, parent ParentFunc) {
 	e.parents[kind] = parent
 }
 
+// HasKind reports whether a module registered the NID type prefix kind, i.e.
+// whether the service owning that kind is enabled in this process.
+func (e *Engine) HasKind(kind string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.parents[kind]
+	return ok
+}
+
 // SetBindings installs the bindings source (the IAM module).
 func (e *Engine) SetBindings(b Bindings) {
 	e.mu.Lock()

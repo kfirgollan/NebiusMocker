@@ -25,6 +25,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 	opsapi "github.com/kfirgollan/NebiusMocker/pkg/operations/api"
 	opsdal "github.com/kfirgollan/NebiusMocker/pkg/operations/dal"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/store"
 )
 
@@ -60,6 +61,10 @@ type Deps struct {
 	// ObjStore is the object-storage backend shared by modules that keep
 	// blobs (memory or RustFS, from Config.ObjStore).
 	ObjStore objstore.Store
+	// Peers is the in-process capability registry: modules Provide
+	// capabilities other areas consume (e.g. MysteryBox secret payloads)
+	// and Lookup the ones they need at call time.
+	Peers *peer.Directory
 }
 
 // Option customizes a Server.
@@ -130,7 +135,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
 		deps: Deps{
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
-			Authz: engine, Rules: rules, ObjStore: objs,
+			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(),
 		},
 	}, nil
 }
