@@ -16,15 +16,15 @@ import (
 // Tests share one RustFS server, so they run sequentially.
 
 func TestSDKPublicCatalogOnRustFS(t *testing.T) {
-	imagescenario.PublicCatalog(t, startOnRustFS(t))
+	imagescenario.PublicCatalog(t, startOnRustFS(t).Env)
 }
 
 func TestSDKCustomImagesOnRustFS(t *testing.T) {
-	imagescenario.CustomLifecycle(t, startOnRustFS(t))
+	imagescenario.CustomLifecycle(t, startOnRustFS(t).Env)
 }
 
 func TestSDKErrorsOnRustFS(t *testing.T) {
-	imagescenario.Errors(t, startOnRustFS(t))
+	imagescenario.Errors(t, startOnRustFS(t).Env)
 }
 
 // TestCatalogSurvivesRestart: a second mocker on the same RustFS finds the

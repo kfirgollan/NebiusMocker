@@ -37,7 +37,7 @@ e2e-storage: ## RustFS-backed tests (needs Docker); RustFS is started and remove
 
 e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (needs Docker)
 	@$(RUSTFS_CLEANUP)
-	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... || status=$$?; \
+	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... ./test/terraform/compute/... || status=$$?; \
 	$(RUSTFS_CLEANUP); exit $$status
 
 # e2e-registry starts a throwaway Harbor (test/registry/harbor/harbor.sh), runs

@@ -55,7 +55,9 @@ func (h *ImageHandler) GetLatestByFamily(ctx context.Context, req *computepb.Get
 
 // List returns one page of a project's images.
 func (h *ImageHandler) List(ctx context.Context, req *computepb.ListImagesRequest) (*computepb.ListImagesResponse, error) {
-	page, err := h.svc.List(ctx, req.GetParentId(), req.GetPageSize(), req.GetPageToken())
+	page, err := h.svc.List(ctx, domain.ListImagesQuery{
+		ParentID: req.GetParentId(), PageSize: req.GetPageSize(), PageToken: req.GetPageToken(), Filter: req.GetFilter(), //nolint:staticcheck // deprecated upstream field, rejected when set
+	})
 	if err != nil {
 		return nil, serviceerror.FromDomain(ctx, err)
 	}

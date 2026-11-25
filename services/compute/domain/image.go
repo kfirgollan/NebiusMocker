@@ -124,7 +124,27 @@ func (s *ImageService) GetByName(ctx context.Context, parentID, name string) (*c
 
 // List returns one page of a project's images in creation order. The upstream
 // filter field is deprecated and "not implemented", so it is ignored.
-func (s *ImageService) List(ctx context.Context, parentID string, size int64, token string) (ImagePage, error) {
+func (s *ImageService) List(ctx context.Context, q ListImagesQuery) (ImagePage, error) {
+	if q.Filter != "" {
+		// Upstream: "it is not implemented, filtering could be done on client side".
+		// Rejected by name rather than silently ignored.
+		return ImagePage{}, errs.BadRequest(errs.Violation{
+			Field: "filter", Message: "filter is not supported (deprecated upstream); filter on the client side",
+		})
+	}
+	return s.list(ctx, q.ParentID, q.PageSize, q.PageToken)
+}
+
+// ListImagesQuery is the input of List.
+type ListImagesQuery struct {
+	ParentID  string
+	PageSize  int64
+	PageToken string
+	// Filter is the deprecated ListImagesRequest.filter; it must be empty.
+	Filter string
+}
+
+func (s *ImageService) list(ctx context.Context, parentID string, size int64, token string) (ImagePage, error) {
 	if parentID == "" {
 		return ImagePage{}, errs.BadRequest(errs.Violation{Field: "parent_id", Message: "required"})
 	}
@@ -141,7 +161,7 @@ func (s *ImageService) ListPublic(ctx context.Context, region string, size int64
 	if i < 0 {
 		return ImagePage{}, errs.BadRequest(errs.Violation{Field: "region", Message: fmt.Sprintf("unknown region %q", region)})
 	}
-	return s.List(ctx, PublicProjectID(s.regions[i].RoutingCode), size, token)
+	return s.list(ctx, PublicProjectID(s.regions[i].RoutingCode), size, token)
 }
 
 // GetLatestByFamily returns the newest READY image of a family that is not

@@ -22,7 +22,7 @@ import (
 
 func startImages(t *testing.T, opts ...testkit.Option) *imagescenario.Env {
 	t.Helper()
-	return imagescenario.Start(t, memory.New(clock.Real{}), opts...)
+	return imagescenario.Start(t, memory.New(clock.Real{}), nil, opts...)
 }
 
 func TestImagePublicCatalog(t *testing.T) {
@@ -102,7 +102,7 @@ func TestImageAuthz(t *testing.T) {
 		testkit.WithTokens(map[string]string{outsiderToken: outsiderID}),
 	)
 	ctx := t.Context()
-	imagescenario.PutSource(t, env.Store, "authz", "a.raw", []byte("payload"))
+	env.Upload(t, "authz", "a.raw", []byte("payload"))
 	custom := imagescenario.CreateFromStorage(t, env, "private", "", "", "authz", "a.raw")
 	customID := custom.GetMetadata().GetId()
 	as := func(token string) computesvc.ImageService {

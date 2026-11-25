@@ -3,6 +3,8 @@
 package compute
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,11 +14,15 @@ import (
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
+	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
+	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/services/compute/domain"
+	"github.com/kfirgollan/NebiusMocker/test/internal/awscli"
 	"github.com/kfirgollan/NebiusMocker/test/internal/imagescenario"
 	"github.com/kfirgollan/NebiusMocker/test/internal/nebiuscli"
+	"github.com/kfirgollan/NebiusMocker/test/internal/s3upload"
 )
 
 var unmarshal = protojson.UnmarshalOptions{DiscardUnknown: true}
@@ -50,7 +56,7 @@ func TestCLIPublicImages(t *testing.T) {
 	for _, region := range config.DefaultRegions() {
 		var resp computepb.ListImagesResponse
 		cliJSON(t, cli, &resp, "compute", "image", "list-public", "--region", region.Name, "--page-size", "1000")
-		want := names(imagescenario.ListAll(t, env, "", region.Name, 0))
+		want := names(imagescenario.ListAll(t, env.Env, "", region.Name, 0))
 		if got := names(resp.GetItems()); !slices.Equal(got, want) || len(got) == 0 {
 			t.Fatalf("list-public --region %s = %v, want %v", region.Name, got, want)
 		}
@@ -93,19 +99,63 @@ func TestCLIPublicImages(t *testing.T) {
 	}
 }
 
-// TestCLICustomImage follows the docs' import flow: upload an image file to a
-// bucket, `nebius compute image create --source-storage-*`, then list, get,
-// update, list operations and delete through the CLI.
+// accessKeyForAWSCLI follows the Object Storage quick start
+// (docs.nebius.com/object-storage/quickstart) with the nebius CLI: create a
+// service account, add it to the editors group, create an access key and read
+// its secret. It returns the AWS-style key ID and secret.
+func accessKeyForAWSCLI(t *testing.T, cli *nebiuscli.CLI, tenantID string) (keyID, secret string) {
+	t.Helper()
+	var sa iampb.ServiceAccount
+	cliJSON(t, cli, &sa, "iam", "service-account", "create", "--name", s3upload.Unique("object-storage-sa-"))
+	var editors iampb.Group
+	cliJSON(t, cli, &editors, "iam", "group", "get-by-name", "--name", "editors", "--parent-id", tenantID)
+	if _, err := cli.Run(t.Context(), "iam", "group-membership", "create",
+		"--parent-id", editors.GetMetadata().GetId(), "--member-id", sa.GetMetadata().GetId()); err != nil {
+		t.Fatalf("group-membership create: %v", err)
+	}
+	var key iamv2pb.AccessKey
+	cliJSON(t, cli, &key, "iam", "v2", "access-key", "create",
+		"--account-service-account-id", sa.GetMetadata().GetId(), "--description", "AWS CLI")
+	var got iamv2pb.AccessKey
+	cliJSON(t, cli, &got, "iam", "v2", "access-key", "get", "--id", key.GetMetadata().GetId())
+	if got.GetStatus().GetSecret() == "" || got.GetStatus().GetAwsAccessKeyId() == "" {
+		t.Fatalf("access-key get returned no secret: %v", &got)
+	}
+	return got.GetStatus().GetAwsAccessKeyId(), got.GetStatus().GetSecret()
+}
+
+// TestCLICustomImage follows the docs' import flow end to end
+// (docs.nebius.com/compute/storage/import-image):
+//  1. create an Object Storage bucket: `nebius storage bucket create --name`;
+//  2. upload the image file with the AWS CLI configured with a Nebius access
+//     key: `aws s3 cp <file> s3://<bucket>/<object>`;
+//  3. `nebius compute image create --source-storage-bucket-name … --source-storage-object-name …`;
+//
+// then list, get, update, list operations and delete through the CLI.
 func TestCLICustomImage(t *testing.T) {
 	env := startOnRustFS(t)
 	cli := nebiuscli.New(t, nebiuscli.Profile{Addr: env.Inst.Addr, Token: env.Inst.Token, ParentID: env.Inst.ProjectID, TenantID: env.Inst.TenantID})
 	payload := domain.SyntheticQCOW2(30<<30, 256<<10, "cli-upload")
-	imagescenario.PutSource(t, env.Store, "cli-bucket", "images/ubuntu-custom.qcow2", payload)
+	file := filepath.Join(t.TempDir(), "ubuntu-custom.qcow2")
+	if err := os.WriteFile(file, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bucket := env.Bucket("cli-bucket")
+
+	if _, err := cli.Run(t.Context(), "storage", "bucket", "create", "--name", bucket); err != nil {
+		t.Fatalf("storage bucket create: %v", err)
+	}
+	keyID, secret := accessKeyForAWSCLI(t, cli, env.Inst.TenantID)
+	aws := awscli.New(t)
+	aws.Configure(t, keyID, secret, s3upload.Region, "http://"+env.s3Addr)
+	if _, err := aws.Run(t.Context(), "s3", "cp", file, "s3://"+bucket+"/images/ubuntu-custom.qcow2"); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
 
 	var created computepb.Image
 	cliJSON(t, cli, &created, "compute", "image", "create",
 		"--name", "cli-image",
-		"--source-storage-bucket-name", "cli-bucket",
+		"--source-storage-bucket-name", bucket,
 		"--source-storage-object-name", "images/ubuntu-custom.qcow2",
 		"--image-family", "my-ubuntu", "--version", "1",
 		"--cpu-architecture", "arm64",

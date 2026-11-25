@@ -12,7 +12,7 @@
 | Custom images imported from Object Storage (`spec.source_storage`), payload copied into the object store; size, checksum, format and minimum disk size derived from the bytes | ✅ |
 | `spec.source_disk_id` / `spec.source_disk_snapshot_id` | Deferred: disks and snapshots are not implemented, so every disk/snapshot ID is `NOT_FOUND` |
 | Authorization: public images readable by any authenticated principal; custom images by project roles (`compute.images.*`) | ✅ |
-| `nebius_compute_v1_image` data source (the provider has no image resource) with the official Terraform provider | ✅ e2e: `test/terraform/compute` (`make e2e`) |
+| `nebius_compute_v1_image` data source (the provider has no image resource) with the official Terraform provider | ✅ e2e: public images in `test/terraform/compute` (`make e2e`); custom images in the same package under `make e2e-images` |
 | `nebius compute image …` CLI flows (list-public, get, get-by-name, get-latest-by-family, create from a bucket, list, update, list-operations-by-parent, delete) on RustFS | ✅ e2e: `test/compute` (`make e2e-images`) |
 | Instances, disks, snapshots, filesystems, GPU clusters, NVL groups, platforms, maintenance, nodes | Planned |
 
@@ -20,8 +20,18 @@ Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v
 
 Tests: domain unit tests with fakes (`services/compute/domain`, incl. a fuzzed payload inspector), DAL tests on the
 memory store, the blob adapter on the memory object store, gosdk contract tests (`test/contract/compute_image_test.go`,
-memory object store, in `make check`), the Terraform data-source suite (`make e2e`), and the same gosdk scenarios plus
-the nebius CLI against RustFS (`make e2e-images`, Docker).
+memory object store, in `make check`), the Terraform data-source suites, and the same gosdk scenarios plus the nebius
+CLI against RustFS (`make e2e-images`, Docker).
+
+The e2e suites put image files in the way users do (docs: compute/storage/import-image, object-storage/quickstart,
+object-storage/objects/upload-download); they never write into the object store, only read it to verify payloads:
+- CLI (`TestCLICustomImage`): `nebius storage bucket create --name`, then `nebius iam service-account create`, `nebius
+  iam group get-by-name --name editors`, `nebius iam group-membership create`, `nebius iam v2 access-key create
+  --account-service-account-id`, `nebius iam v2 access-key get` (secret), then the AWS CLI configured with `aws
+  configure set aws_access_key_id/aws_secret_access_key/region/endpoint_url` and `aws s3 cp`, then `nebius compute image
+  create --source-storage-bucket-name … --source-storage-object-name …` (`test/internal/awscli` sandboxes `~/.aws`).
+- Go SDK and Terraform: the bucket via `BucketService.Create`, an access key via `iam.v2 AccessKeyService`, the upload via
+  the AWS SDK for Go v2 against the S3 front (`test/internal/s3upload`), then `ImageService.Create`.
 
 ### Image storage design
 
@@ -56,7 +66,7 @@ the nebius CLI against RustFS (`make e2e-images`, Docker).
   defaults to `AMD64` on Create.
 - **Partial updates**: the official CLI's `update` sends only the changed fields with an empty reset mask, so the shared
   validation interceptor skips presence rules (`required`, required oneofs) on `…/Update` RPCs; value rules still apply.
-- `List.filter` is deprecated upstream ("not implemented") and ignored. `ListOperationsByParent` lists operations of a
+- `List.filter` is deprecated upstream ("not implemented") and rejected with `INVALID_ARGUMENT` naming `filter` when set (never silently ignored). `ListOperationsByParent` lists operations of a
   project's images, newest first, including images deleted since (an index kept by the DAL).
 - Operations with `NEBIUS_MOCKER_OP_DELAY` run their `Work` on the engine's single scheduler goroutine, so a large
   import delays other operations. Payloads in tests are small.

@@ -306,7 +306,10 @@ func TestListPublicUnknownRegion(t *testing.T) {
 	if _, err := f.svc.ListPublic(t.Context(), "eu-west9", 0, ""); !errs.IsKind(err, errs.KindBadRequest) {
 		t.Fatalf("ListPublic(unknown) = %v", err)
 	}
-	if _, err := f.svc.List(t.Context(), testProject, -1, ""); !errs.IsKind(err, errs.KindBadRequest) {
+	if _, err := f.svc.List(t.Context(), ListImagesQuery{ParentID: testProject, PageSize: -1}); !errs.IsKind(err, errs.KindBadRequest) {
 		t.Fatalf("List(page_size -1) = %v", err)
+	}
+	if _, err := f.svc.List(t.Context(), ListImagesQuery{ParentID: testProject, Filter: "name=x"}); !errs.IsKind(err, errs.KindBadRequest) {
+		t.Fatalf("List(filter) = %v, want BadRequest naming the unsupported field", err)
 	}
 }

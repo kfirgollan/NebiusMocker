@@ -50,8 +50,14 @@ func Env(tb testing.TB) map[string]string {
 // Main runs the tests and removes the cache afterwards.
 func Main(m *testing.M) int {
 	code := m.Run()
+	Cleanup()
+	return code
+}
+
+// Cleanup removes the cache; for a TestMain that already runs m.Run through
+// another wrapper (e.g. rustfsfixture.Main).
+func Cleanup() {
 	if dir != "" {
 		_ = os.RemoveAll(dir) // best-effort: a temp dir
 	}
-	return code
 }

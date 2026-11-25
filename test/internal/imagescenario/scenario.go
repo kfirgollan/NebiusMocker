@@ -32,20 +32,41 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/iam"
 )
 
-// Env is a running mocker with IAM and Compute plus direct access to its object store.
+// Uploader puts an image file into an Object Storage bucket, creating the
+// bucket on first use. End-to-end suites upload the way users do (S3 front,
+// access key, AWS SDK); contract tests write to the in-memory store.
+type Uploader func(t *testing.T, bucket, object string, data []byte)
+
+// Env is a running mocker with IAM and Compute. Store is read (never
+// written) to verify image payloads.
 type Env struct {
 	Inst   *testkit.Instance
 	Images computesvc.ImageService
 	Store  objstore.Store
+	// Upload places source files; see Uploader.
+	Upload Uploader
+	// BucketPrefix is prepended to every scenario bucket name, so suites that
+	// share one object store never reuse a bucket.
+	BucketPrefix string
 }
 
-// Start runs IAM + Compute over store. Operations are delayed so the SDK's
-// operation polling is exercised.
-func Start(t *testing.T, store objstore.Store, opts ...testkit.Option) *Env {
+// Bucket is the bucket name the scenarios use for name.
+func (e *Env) Bucket(name string) string { return e.BucketPrefix + name }
+
+// Start runs IAM + Compute (plus extra modules) over store. Operations are
+// delayed so the SDK's operation polling is exercised. Upload defaults to
+// writing into store directly, which only Docker-free contract tests use.
+func Start(t *testing.T, store objstore.Store, extra []mocker.Module, opts ...testkit.Option) *Env {
 	t.Helper()
 	opts = append([]testkit.Option{testkit.WithObjStore(store), testkit.WithOperationDelay(30 * time.Millisecond)}, opts...)
-	inst := testkit.StartT(t, []mocker.Module{iam.New(), compute.New()}, opts...)
-	return &Env{Inst: inst, Images: computesvc.NewImageService(inst.SDK(t)), Store: store}
+	inst := testkit.StartT(t, append([]mocker.Module{iam.New(), compute.New()}, extra...), opts...)
+	return &Env{
+		Inst: inst, Images: computesvc.NewImageService(inst.SDK(t)), Store: store,
+		Upload: func(t *testing.T, bucket, object string, data []byte) {
+			t.Helper()
+			PutSource(t, store, bucket, object, data)
+		},
+	}
 }
 
 // AssertCode fails unless err has the gRPC code want.
@@ -186,8 +207,9 @@ func latestByFamily(t *testing.T, env *Env) {
 	AssertCode(t, err, codes.NotFound)
 }
 
-// PutSource uploads a source file into a user bucket, the way a user uploads
-// an image file to Object Storage before importing it.
+// PutSource writes a source file straight into the in-memory object store.
+// It is a shortcut for Docker-free contract tests only; end-to-end suites
+// must upload through the S3 front (see test/internal/s3upload).
 func PutSource(t *testing.T, st objstore.Store, bucket, object string, data []byte) {
 	t.Helper()
 	if err := st.EnsureBucket(t.Context(), bucket); err != nil {
@@ -227,11 +249,11 @@ func CreateFromStorage(t *testing.T, env *Env, name, family, version, bucket, ob
 func CustomLifecycle(t *testing.T, env *Env) {
 	t.Helper()
 	ctx := t.Context()
-	const bucket = "my-images"
+	bucket := env.Bucket("my-images")
 	virtual := int64(10<<30 + 1) // rounds up to an 11 GiB minimum disk
 	src := domain.SyntheticQCOW2(virtual, 70<<10, "custom-v1")
-	PutSource(t, env.Store, bucket, "build/v1.qcow2", src)
-	PutSource(t, env.Store, bucket, "build/v2.raw", bytes.Repeat([]byte{7}, 3<<20))
+	env.Upload(t, bucket, "build/v1.qcow2", src)
+	env.Upload(t, bucket, "build/v2.raw", bytes.Repeat([]byte{7}, 3<<20))
 
 	v1 := CreateFromStorage(t, env, "app-v1", "app", "1", bucket, "build/v1.qcow2")
 	if v1.GetStatus().GetState() != computepb.ImageStatus_READY || v1.GetStatus().GetMinDiskSizeBytes() != 11<<30 ||
@@ -314,7 +336,7 @@ func update(t *testing.T, env *Env, img *computepb.Image) *computepb.Image {
 	_, err = env.Images.Update(ctx, &computepb.UpdateImageRequest{
 		Metadata: &commonpb.ResourceMetadata{Id: id, ParentId: env.Inst.ProjectID},
 		Spec: &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceStorage_{
-			SourceStorage: &computepb.ImageSpec_SourceStorage{BucketName: "my-images", ObjectName: "build/v2.raw"},
+			SourceStorage: &computepb.ImageSpec_SourceStorage{BucketName: env.Bucket("my-images"), ObjectName: "build/v2.raw"},
 		}},
 	})
 	AssertCode(t, err, codes.InvalidArgument)
@@ -381,7 +403,8 @@ func operationsByParent(t *testing.T, env *Env, created []string, updated *compu
 func Errors(t *testing.T, env *Env) {
 	t.Helper()
 	ctx := t.Context()
-	PutSource(t, env.Store, "err-bucket", "img.raw", []byte("0123456789"))
+	errBucket := env.Bucket("err-bucket")
+	env.Upload(t, errBucket, "img.raw", []byte("0123456789"))
 	create := func(md *commonpb.ResourceMetadata, spec *computepb.ImageSpec) error {
 		op, err := env.Images.Create(ctx, &computepb.CreateImageRequest{Metadata: md, Spec: spec})
 		if err == nil {
@@ -393,19 +416,19 @@ func Errors(t *testing.T, env *Env) {
 		return &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceStorage_{SourceStorage: &computepb.ImageSpec_SourceStorage{BucketName: bucket, ObjectName: object}}}
 	}
 	project := env.Inst.ProjectID
-	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "a"}, storage("err-bucket", "missing.raw")), codes.InvalidArgument)
-	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "a"}, storage("no-such-bucket", "img.raw")), codes.InvalidArgument)
+	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "a"}, storage(errBucket, "missing.raw")), codes.InvalidArgument)
+	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "a"}, storage(env.Bucket("no-such-bucket"), "img.raw")), codes.InvalidArgument)
 	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "a"},
 		&computepb.ImageSpec{Source: &computepb.ImageSpec_SourceDiskId{SourceDiskId: "computedisk-e00mock0000000000001"}}), codes.NotFound)
-	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: "project-e00mock00000000nothere", Name: "a"}, storage("err-bucket", "img.raw")), codes.NotFound)
-	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: domain.PublicProjectID("e00"), Name: "a"}, storage("err-bucket", "img.raw")), codes.PermissionDenied)
+	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: "project-e00mock00000000nothere", Name: "a"}, storage(errBucket, "img.raw")), codes.NotFound)
+	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: domain.PublicProjectID("e00"), Name: "a"}, storage(errBucket, "img.raw")), codes.PermissionDenied)
 
-	spec := storage("err-bucket", "img.raw")
+	spec := storage(errBucket, "img.raw")
 	spec.ImageFamily, spec.Version = "fam", "1"
 	if err := create(&commonpb.ResourceMetadata{ParentId: project, Name: "dup"}, spec); err != nil {
 		t.Fatalf("create dup: %v", err)
 	}
-	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "dup"}, storage("err-bucket", "img.raw")), codes.AlreadyExists)
+	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "dup"}, storage(errBucket, "img.raw")), codes.AlreadyExists)
 	AssertCode(t, create(&commonpb.ResourceMetadata{ParentId: project, Name: "dup2"}, spec), codes.AlreadyExists)
 
 	public, err := env.Images.GetLatestByFamily(ctx, &computepb.GetImageLatestByFamilyRequest{ImageFamily: "ubuntu24.04-driverless"})
