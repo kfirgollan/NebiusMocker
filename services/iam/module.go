@@ -1,8 +1,9 @@
 // Package iam is the NebiusMocker module for Nebius IAM (cpl.iam).
 //
-// Implemented: seeded tenant and default groups, GroupService,
-// GroupMembershipService, AccessPermitService, and the authorization bindings
-// they define. See docs/services/iam.md.
+// Implemented: seeded tenant/project and default groups, GroupService,
+// GroupMembershipService, AccessPermitService (and the authorization bindings
+// they define), ServiceAccountService and v2 AccessKeyService (the S3
+// credentials Object Storage authenticates with). See docs/services/iam.md.
 package iam
 
 import (
@@ -12,9 +13,11 @@ import (
 	"google.golang.org/grpc"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
+	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/iam/api"
 	"github.com/kfirgollan/NebiusMocker/services/iam/dal"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
@@ -37,6 +40,8 @@ type repos struct {
 	groups      *dal.GroupRepo
 	memberships *dal.MembershipRepo
 	permits     *dal.PermitRepo
+	sas         *dal.ServiceAccountRepo
+	keys        *dal.AccessKeyRepo
 }
 
 // Register seeds IAM data, installs authorization bindings and registers the
@@ -48,6 +53,8 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		groups:      dal.NewGroupRepo(deps.Store),
 		memberships: dal.NewMembershipRepo(deps.Store),
 		permits:     dal.NewPermitRepo(deps.Store),
+		sas:         dal.NewServiceAccountRepo(deps.Store),
+		keys:        dal.NewAccessKeyRepo(deps.Store),
 	}
 	if err := seed(ctx, r, deps); err != nil {
 		return err
@@ -72,11 +79,41 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
+	if err := registerCredentials(reg, r, deps); err != nil {
+		return err
+	}
 	iampb.RegisterGroupServiceServer(reg, api.NewGroupHandler(groups))
 	iampb.RegisterGroupMembershipServiceServer(reg, api.NewMembershipHandler(memberships))
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))
 	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID))
 	api.RegisterProfileAuthzRule(deps.Rules, deps.Config.TenantID)
+	return nil
+}
+
+// registerCredentials serves service accounts and access keys, and installs
+// the access-key resolver S3 data planes authenticate with.
+func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) error {
+	sas, err := domain.NewServiceAccountService(domain.ServiceAccountDeps{
+		ServiceAccounts: r.sas, Projects: r.projects, AccessKeys: r.keys, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+	})
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	keys, err := domain.NewAccessKeyService(domain.AccessKeyDeps{
+		AccessKeys: r.keys, ServiceAccounts: r.sas, Projects: r.projects, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+	})
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	if err := peer.Provide[peer.AccessKeys](deps.Peers, peer.AccessKeysKey, keys); err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	api.RegisterCredentialRules(deps.Rules, func(ctx context.Context, awsID string) (string, error) {
+		k, err := r.keys.GetByAwsID(ctx, awsID)
+		return k.GetMetadata().GetId(), err
+	})
+	iampb.RegisterServiceAccountServiceServer(reg, api.NewServiceAccountHandler(sas))
+	iamv2pb.RegisterAccessKeyServiceServer(reg, api.NewAccessKeyHandler(keys))
 	return nil
 }
 
@@ -121,6 +158,14 @@ func registerAuthz(r repos, deps mocker.Deps) {
 	e.RegisterKind(domain.KindAccessPermit, func(ctx context.Context, id string) (string, error) {
 		p, err := r.permits.Get(ctx, id)
 		return p.GetMetadata().GetParentId(), err
+	})
+	e.RegisterKind(domain.KindServiceAccount, func(ctx context.Context, id string) (string, error) {
+		sa, err := r.sas.Get(ctx, id)
+		return sa.GetMetadata().GetParentId(), err
+	})
+	e.RegisterKind(domain.KindAccessKey, func(ctx context.Context, id string) (string, error) {
+		k, err := r.keys.Get(ctx, id)
+		return k.GetMetadata().GetParentId(), err
 	})
 	e.SetBindings(domain.NewBindings(r.memberships, r.permits, deps.Clock))
 	api.RegisterAuthzRules(deps.Rules, deps.Config.TenantID)

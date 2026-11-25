@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,12 +81,18 @@ func Start(tb testing.TB) *Server {
 // Main runs the tests and then removes the container Start created.
 func Main(m *testing.M) int {
 	code := m.Run()
+	Cleanup()
+	return code
+}
+
+// Cleanup removes the container Start created (for TestMains that also run
+// other teardown; Main calls it).
+func Cleanup() {
 	if container != "" {
 		if out, err := exec.Command("docker", "rm", "-f", "-v", container).CombinedOutput(); err != nil { //nolint:noctx // teardown after all tests; no test context exists
 			fmt.Fprintf(os.Stderr, "rustfs: remove container %s: %v: %s\n", container, err, out)
 		}
 	}
-	return code
 }
 
 func start() (*Server, error) {
@@ -99,7 +107,9 @@ func start() (*Server, error) {
 	name := "nebius-mocker-rustfs-" + randomHex(4)
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout) //nolint:forbidigo // process-wide fixture shared by all tests of the binary
 	defer cancel()
+	reapOrphans(ctx)
 	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "--name", name, "--label", Label,
+		"--label", pidLabel+"="+strconv.Itoa(os.Getpid()),
 		"-p", "127.0.0.1::9000",
 		"-e", "RUSTFS_ACCESS_KEY="+s.AccessKey, "-e", "RUSTFS_SECRET_KEY="+s.SecretKey,
 		Image).CombinedOutput()
@@ -119,6 +129,40 @@ func start() (*Server, error) {
 		return nil, fmt.Errorf("%w; container logs:\n%s", err, logs)
 	}
 	return s, nil
+}
+
+// pidLabel records the test process that owns a container.
+const pidLabel = "nebius-mocker.test.pid"
+
+// reapOrphans removes labelled containers whose owning test process is gone
+// (a killed or timed-out run). Containers of live runs, e.g. a concurrent
+// suite in another package or checkout, are left alone.
+func reapOrphans(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label="+Label,
+		"--format", `{{.ID}} {{.Label "`+pidLabel+`"}}`).Output()
+	if err != nil {
+		return // best-effort
+	}
+	for line := range strings.Lines(string(out)) {
+		id, pidStr, _ := strings.Cut(strings.TrimSpace(line), " ")
+		pid, err := strconv.Atoi(pidStr)
+		if id == "" || (err == nil && processAlive(pid)) {
+			continue
+		}
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", "-v", id).Run() // best-effort
+	}
+}
+
+// processAlive reports whether a local process with pid exists.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // waitReady polls until the server answers an authenticated ListBuckets.

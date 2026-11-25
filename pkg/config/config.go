@@ -70,6 +70,8 @@ type Config struct {
 	ComputeImagesFile string
 	// Registry configures the Container Registry module.
 	Registry RegistryConfig
+	// Storage configures the Object Storage module (NEBIUS_MOCKER_STORAGE_*).
+	Storage StorageConfig
 }
 
 // Region is one emulated Nebius region.
@@ -88,6 +90,19 @@ func DefaultRegions() []Region {
 		{Name: "us-central1", RoutingCode: "u00"},
 		{Name: "me-west1", RoutingCode: "m00"},
 	}
+}
+
+// StorageConfig configures Object Storage.
+type StorageConfig struct {
+	// S3Listen is the S3 data-plane address; "off" disables the S3 front.
+	S3Listen string
+	// S3Domain is the S3 endpoint host: status.domain_name is "<bucket>.<S3Domain>",
+	// and requests to that host are virtual-hosted style.
+	S3Domain string
+	// Region is the bucket region reported to S3 clients.
+	Region string
+	// PurgeGrace is how long a deleted bucket can be undeleted (default ttl).
+	PurgeGrace time.Duration
 }
 
 // ObjStoreBackend selects the pkg/objstore implementation.
@@ -137,6 +152,12 @@ func Default() Config {
 			Region:    "us-east-1",
 		},
 		Registry: defaultRegistry(),
+		Storage: StorageConfig{
+			S3Listen:   ":4580",
+			S3Domain:   "storage.eu-north1.mocker.localhost",
+			Region:     "eu-north1",
+			PurgeGrace: 7 * 24 * time.Hour,
+		},
 	}
 }
 
@@ -178,6 +199,10 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			return err
 		}},
 		{"COMPUTE_IMAGES_FILE", func(v string) error { c.ComputeImagesFile = v; return nil }},
+		{"STORAGE_S3_LISTEN", func(v string) error { c.Storage.S3Listen = v; return nil }},
+		{"STORAGE_S3_DOMAIN", func(v string) error { c.Storage.S3Domain = v; return nil }},
+		{"STORAGE_REGION", func(v string) error { c.Storage.Region = v; return nil }},
+		{"STORAGE_PURGE_GRACE", func(v string) error { return parsePositive(v, &c.Storage.PurgeGrace) }},
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	for _, p := range parsers {
@@ -294,6 +319,16 @@ func parseObjStore(v string, out *ObjStoreBackend) error {
 		*out = ObjStoreRustFS
 	default:
 		return fmt.Errorf("want memory or rustfs, got %q", v)
+	}
+	return nil
+}
+
+func parsePositive(v string, out *time.Duration) error {
+	if err := parseDuration(v, out); err != nil {
+		return err
+	}
+	if *out == 0 {
+		return fmt.Errorf("must be positive, got %s", v)
 	}
 	return nil
 }

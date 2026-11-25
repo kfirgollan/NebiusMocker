@@ -33,11 +33,14 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_PEERS` | — | `area=host:port,...` remote modules for split deployments |
 | `NEBIUS_MOCKER_GATEWAY` | — | Run as a routing gateway to these peers |
 | `NEBIUS_MOCKER_IAM` | `auto` | `auto` \| `embedded` (IAM stub for single-service images) \| `peer` |
+| `NEBIUS_MOCKER_OBJSTORE` | `memory` | Shared object store (`pkg/objstore`) for modules that keep blobs: `memory` \| `rustfs` |
+| `NEBIUS_MOCKER_OBJSTORE_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_REGION` | `http://127.0.0.1:9000` / `rustfsadmin` / `rustfsadmin` / `us-east-1` | RustFS server used when `NEBIUS_MOCKER_OBJSTORE=rustfs` |
 
 Module-specific keys are named `NEBIUS_MOCKER_<AREA>_<KEY>`, for example `NEBIUS_MOCKER_MK8S_BACKEND=k3s`.
 Implemented so far: `NEBIUS_MOCKER_REGISTRY_BACKEND` (`memory`|`harbor`), `_LISTEN` (`:4590`, `off`), `_FQDN`,
 `_HARBOR_URL`, `_HARBOR_USERNAME`, `_HARBOR_PASSWORD` (see [registry](../services/registry.md#configuration)).
-They are documented in each service doc.
+They are documented in each service doc (for example `NEBIUS_MOCKER_STORAGE_*` in
+[services/storage.md](../services/storage.md#configuration)).
 
 ## Seed data
 

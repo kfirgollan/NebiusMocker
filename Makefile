@@ -24,9 +24,11 @@ test: ## Unit, contract and architecture tests with the race detector
 e2e: ## End-to-end tests: real terraform + official nebius provider, official nebius CLI
 	$(GO) test -tags e2e -count=1 -v ./test/terraform/... ./test/internal/nebiuscli/... ./test/kms/...
 
-# RustFS containers started by test/rustfsfixture carry this label.
+# RustFS containers started by test/rustfsfixture carry this label. Running
+# ones may belong to a concurrent suite (the fixture itself reaps containers of
+# dead test processes), so only stopped leftovers are removed here.
 RUSTFS_LABEL := nebius-mocker.test=rustfs
-RUSTFS_CLEANUP := docker ps -aq --filter label=$(RUSTFS_LABEL) | xargs docker rm -f -v >/dev/null 2>&1 || true
+RUSTFS_CLEANUP := docker ps -aq --filter label=$(RUSTFS_LABEL) --filter status=exited --filter status=created | xargs docker rm -f -v >/dev/null 2>&1 || true
 
 e2e-storage: ## RustFS-backed tests (needs Docker); RustFS is started and removed by the tests
 	@$(RUSTFS_CLEANUP)

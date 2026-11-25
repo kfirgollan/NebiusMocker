@@ -10,10 +10,12 @@ CI with no Nebius account.
 > it is production grade. Its coverage and behavior will keep changing, driven by how I use Nebius. Issues and
 > contributions are welcome.
 
-> Status: early. **IAM groups, memberships and access permits, with enforced authorization,** work end to end with the
-> official Terraform provider. **Compute images** (public catalog per region, custom images imported from Object
-> Storage) work with the provider's image data source, the Go SDK and the `nebius` CLI. See
+> Status: early. **IAM groups, memberships, access permits, service accounts and access keys, with enforced
+> authorization,** and **Object Storage buckets and objects** (S3 data plane backed by [RustFS](https://github.com/rustfs/rustfs))
+> work end to end with the official Terraform provider and SDKs. **Compute images** (public catalog per region, custom
+> images imported from Object Storage) work with the provider's image data source, the Go SDK and the `nebius` CLI. See
 > [docs/services/iam.md](docs/services/iam.md#implementation-status),
+> [docs/services/storage.md](docs/services/storage.md#implementation-status),
 > [docs/services/compute.md](docs/services/compute.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
 > **Container Registry** works with Terraform, the Go SDK, the `nebius` CLI and `docker push/pull` (images stored in
 > [Harbor](https://goharbor.io)); see [docs/services/registry.md](docs/services/registry.md#implementation-status).
@@ -64,6 +66,21 @@ nebius compute image create --parent-id project-e00mock000000000default --name m
   --source-storage-bucket-name my-bucket --source-storage-object-name disk.qcow2
 ```
 
+### Object Storage (S3)
+
+Buckets work out of the box. For object reads and writes, run [RustFS](https://github.com/rustfs/rustfs) and point the
+mocker at it; the mocker's S3 front (`:4580`) checks Nebius access keys and permits and relays to RustFS:
+
+```bash
+docker run -d --name rustfs -p 127.0.0.1:9000:9000 rustfs/rustfs:1.0.6
+NEBIUS_MOCKER_OBJSTORE=rustfs make run
+```
+
+Create a bucket (`nebius_storage_v1_bucket`), a service account with a permit, and a `nebius_iam_v2_access_key`, then
+use any S3 client with that key, region `eu-north1` and endpoint `http://127.0.0.1:4580` (path style), for example
+`aws --endpoint-url http://127.0.0.1:4580 s3 ls s3://my-bucket`. Terraform objects use the official `hashicorp/aws`
+provider; see [docs/services/storage.md](docs/services/storage.md#terraform).
+
 Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/architecture/11-configuration.md)):
 
 | Env | Default | Meaning |
@@ -90,6 +107,8 @@ docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
 ```
 
 Details, including Docker Desktop, are in [docs/services/registry.md](docs/services/registry.md#local-workflow).
+| `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
+| `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 
 ## Development
 
@@ -99,6 +118,7 @@ make check   # lint (layering rules included) + unit/contract/architecture tests
 make e2e     # real terraform + official nebius provider against the mock
 make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
 make e2e-registry  # Harbor + nebius CLI + docker push/pull (needs Docker; Harbor is started and removed)
+make e2e-storage  # Object Storage with RustFS in Docker: Terraform (nebius + aws providers), gosdk + AWS SDK
 ```
 
 Read [docs/architecture](docs/architecture/README.md) first. The Go rules for this repo live in `.claude/skills/`

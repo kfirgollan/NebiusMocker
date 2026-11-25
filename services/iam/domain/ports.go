@@ -6,6 +6,7 @@ import (
 	"context"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
+	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 )
@@ -19,6 +20,7 @@ const (
 	KindAccessPermit      = "accesspermit"
 	KindTenantUserAccount = "tenantuseraccount"
 	KindServiceAccount    = "serviceaccount"
+	KindAccessKey         = "accesskey"
 )
 
 // ContainerRepository stores tenants or projects (both iam.v1.Container; a
@@ -100,3 +102,44 @@ type Hierarchy interface {
 type RoleCatalog interface {
 	Has(role string) bool
 }
+
+// ServiceAccountPage is one page of a service-account listing.
+type ServiceAccountPage struct {
+	Items         []*iampb.ServiceAccount
+	NextPageToken string
+}
+
+// ServiceAccountRepository stores service accounts.
+type ServiceAccountRepository interface {
+	Get(ctx context.Context, id string) (*iampb.ServiceAccount, error)
+	GetByName(ctx context.Context, parentID, name string) (*iampb.ServiceAccount, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (ServiceAccountPage, error)
+	// Create fails with errs.AlreadyExists if the name is taken in the parent.
+	Create(ctx context.Context, sa *iampb.ServiceAccount) error
+	Update(ctx context.Context, sa *iampb.ServiceAccount) error
+	Delete(ctx context.Context, id string) error
+}
+
+// AccessKeyPage is one page of an access-key listing.
+type AccessKeyPage struct {
+	Items         []*iamv2pb.AccessKey
+	NextPageToken string
+}
+
+// AccessKeyRepository stores access keys (with their secrets).
+type AccessKeyRepository interface {
+	Get(ctx context.Context, id string) (*iamv2pb.AccessKey, error)
+	GetByName(ctx context.Context, parentID, name string) (*iamv2pb.AccessKey, error)
+	// GetByAwsID looks a key up by status.aws_access_key_id.
+	GetByAwsID(ctx context.Context, awsID string) (*iamv2pb.AccessKey, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (AccessKeyPage, error)
+	// ListByAccount returns every key of an account (user or service account ID).
+	ListByAccount(ctx context.Context, accountID string) ([]*iamv2pb.AccessKey, error)
+	// Create fails with errs.AlreadyExists on a name or AWS key ID collision.
+	Create(ctx context.Context, k *iamv2pb.AccessKey) error
+	Update(ctx context.Context, k *iamv2pb.AccessKey) error
+	Delete(ctx context.Context, id string) error
+}
+
+// KeyMaterial generates an AWS-style access key ID and secret.
+type KeyMaterial func() (awsAccessKeyID, secret string, err error)

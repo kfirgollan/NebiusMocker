@@ -4,8 +4,10 @@ import (
 	"context"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
+	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
+	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 )
 
 // Service names of the IAM gRPC services served by this module.
@@ -13,7 +15,48 @@ const (
 	groupService      = "nebius.iam.v1.GroupService"
 	membershipService = "nebius.iam.v1.GroupMembershipService"
 	permitService     = "nebius.iam.v1.AccessPermitService"
+	saService         = "nebius.iam.v1.ServiceAccountService"
+	accessKeyService  = "nebius.iam.v2.AccessKeyService"
 )
+
+// VerbGetSecret is the access-key verb that reveals secrets. Only roles that
+// grant it explicitly (admin) allow GetSecret; viewer's "get" does not.
+const VerbGetSecret = "getSecret"
+
+// AccessKeyIDLookup resolves an AWS access key ID to the key's NID (for
+// authorizing GetByAwsId on the key itself).
+type AccessKeyIDLookup func(ctx context.Context, awsID string) (string, error)
+
+// RegisterCredentialRules declares the permissions of the service-account and
+// access-key RPCs.
+func RegisterCredentialRules(r *authz.Rules, keyIDOf AccessKeyIDLookup) {
+	r.CRUD(saService, "iam", "serviceAccounts")
+
+	k := func(method string) string { return "/" + accessKeyService + "/" + method }
+	perm := func(verb string) authz.Permission { return authz.Perm("iam", "accessKeys", verb) }
+	r.CRUD(accessKeyService, "iam", "accessKeys")
+	r.Add(k("GetSecret"), authz.OnID(perm(VerbGetSecret)))
+	r.Add(k("Activate"), authz.OnID(perm(authz.VerbUpdate)))
+	r.Add(k("Deactivate"), authz.OnID(perm(authz.VerbUpdate)))
+	r.Add(k("ListByAccount"), authz.Rule{
+		Permission: perm(authz.VerbList),
+		Target: func(_ context.Context, req any) (string, error) {
+			lr, _ := req.(*iamv2pb.ListAccessKeysByAccountRequest)
+			a := lr.GetAccount()
+			if id := a.GetServiceAccount().GetId(); id != "" {
+				return id, nil
+			}
+			return "", errs.BadRequest(errs.Violation{Field: "account.service_account.id", Message: "required"})
+		},
+	})
+	r.Add(k("GetByAwsId"), authz.Rule{
+		Permission: perm(authz.VerbGet),
+		Target: func(ctx context.Context, req any) (string, error) {
+			gr, _ := req.(*iamv2pb.GetAccessKeyByAwsIdRequest)
+			return keyIDOf(ctx, gr.GetAwsAccessKeyId())
+		},
+	})
+}
 
 // RegisterAuthzRules declares which permission each IAM RPC needs.
 // tenantID is the tenant ListMemberOf is checked on: subjects (user accounts,

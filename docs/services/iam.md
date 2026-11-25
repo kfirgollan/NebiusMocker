@@ -16,7 +16,26 @@
 | `nebius_iam_v1_group`, `_group_membership`, `_access_permit` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
 | Static dev tokens: `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` (members of the seeded groups) | ✅ |
 | `nebius.iam.v1.ProfileService.Get` (whoami; the `nebius` CLI calls it before `iam get-access-token`), derived from the token's principal | ✅ |
+| `nebius.iam.v1.ServiceAccountService`: Create, Get, GetByName, List, Update (reset mask), Delete (cascades to the account's access keys). Parent must be a project | ✅ T1 |
+| `nebius.iam.v2.AccessKeyService`: Create, Get, GetByName, GetSecret, List, ListByAccount, GetByAwsId, Update, Delete, Activate, Deactivate (`*ByAwsId` mutations not yet) | ✅ T1 |
+| Access keys as S3 credentials: Object Storage's S3 front verifies SigV4 with them (`peer.AccessKeys` capability in `pkg/peer`, provided by IAM) | ✅ |
+| `nebius_iam_v1_service_account`, `nebius_iam_v2_access_key` (+ data sources) and the `nebius_iam_v2_access_key_secret` ephemeral resource | ✅ e2e: `test/terraform/storage` |
 | Everything else in this document | Planned |
+
+Access keys: the secret is generated in `services/iam/domain` (`GenerateKeyMaterial`: a 20-character `NMK…` AWS key ID and
+a 40-character secret from `crypto/rand`) and stored with the key in the IAM store (`services/iam/dal`, plus an
+AWS-key-ID → key index). Delivery modes:
+
+| `secret_delivery_mode` | Behavior |
+|---|---|
+| `UNSPECIFIED`, `INLINE` | `status.secret` is returned by `Get`/`List` (upstream: "returned directly in the API response"), and by `GetSecret` |
+| `EXPLICIT` | `status.secret` is empty; only `GetSecret` reveals it |
+| `MYSTERY_BOX` | Rejected with `INVALID_ARGUMENT` (not supported yet; follow-up once MysteryBox ships) |
+
+`GetSecret` needs `iam.accessKeys.getSecret`, which only the `admin` role grants (viewer's `get` does not match it).
+`status.state` is computed on read: `EXPIRED` once `spec.expires_at` passes; `Deactivate`/`Activate` toggle `INACTIVE`.
+Only `ACTIVE` keys of existing, active service accounts authenticate S3 requests. `account`, `expires_at` and
+`secret_delivery_mode` are immutable.
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 

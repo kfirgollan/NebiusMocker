@@ -92,3 +92,26 @@ func TestFromLookupObjStore(t *testing.T) {
 		t.Error("FromLookup(OBJSTORE=s3) succeeded, want error")
 	}
 }
+
+func TestFromLookupStorage(t *testing.T) {
+	t.Parallel()
+	if d := Default().Storage; d.S3Listen != ":4580" || d.Region != "eu-north1" || d.PurgeGrace != 168*time.Hour {
+		t.Fatalf("default storage config = %+v", d)
+	}
+	c, err := FromLookup(lookup(map[string]string{
+		"NEBIUS_MOCKER_STORAGE_S3_LISTEN":   "127.0.0.1:0",
+		"NEBIUS_MOCKER_STORAGE_S3_DOMAIN":   "s3.local",
+		"NEBIUS_MOCKER_STORAGE_REGION":      "eu-west1",
+		"NEBIUS_MOCKER_STORAGE_PURGE_GRACE": "1h",
+	}))
+	if err != nil {
+		t.Fatalf("FromLookup: %v", err)
+	}
+	want := StorageConfig{S3Listen: "127.0.0.1:0", S3Domain: "s3.local", Region: "eu-west1", PurgeGrace: time.Hour}
+	if c.Storage != want {
+		t.Fatalf("Storage = %+v, want %+v", c.Storage, want)
+	}
+	if _, err := FromLookup(lookup(map[string]string{"NEBIUS_MOCKER_STORAGE_PURGE_GRACE": "0s"})); err == nil {
+		t.Error("FromLookup(PURGE_GRACE=0s) succeeded, want error")
+	}
+}
