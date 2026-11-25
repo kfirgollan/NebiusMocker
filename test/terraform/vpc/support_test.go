@@ -216,7 +216,7 @@ var defaults = map[string]string{
 	"pool_source": "", "pool_visibility": "PRIVATE",
 	"net_name": "e2e-net", "net_labels": `team = "platform"`, "net_pools": "",
 	"sub_name": "e2e-sub", "sub_labels": `team = "platform"`,
-	"alloc_name": "e2e-alloc", "alloc_labels": `team = "platform"`, "alloc_cidr": "/32", "alloc_subnet": "sub",
+	"alloc_name": "e2e-alloc", "alloc_labels": `team = "platform"`, "alloc_cidr": "/32", "alloc_subnet": "sub", "alloc_pool": "",
 	"rt_name": "e2e-rt", "rt_labels": `team = "platform"`, "rt_net": "net",
 	"route_name": "e2e-route", "route_labels": `team = "platform"`, "route_desc": "to the appliance", "route_dest": "192.168.0.0/16",
 	"sg_name": "e2e-sg", "sg_labels": `team = "platform"`, "sg_net": "net",
@@ -274,7 +274,7 @@ resource "nebius_vpc_v1_allocation" "alloc" {
   name      = "{{.alloc_name}}"
   labels    = { {{.alloc_labels}} }
   ipv4_private = {
-    subnet_id = nebius_vpc_v1_subnet.{{.alloc_subnet}}.id
+    {{if .alloc_pool}}pool_id   = {{.alloc_pool}}{{else}}subnet_id = nebius_vpc_v1_subnet.{{.alloc_subnet}}.id{{end}}
     cidr      = "{{.alloc_cidr}}"
   }
 }

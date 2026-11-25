@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 
@@ -159,10 +160,13 @@ func (s *RouteService) nextHop(ctx context.Context, rt *vpcpb.RouteTable, dst st
 		if err != nil {
 			return nil, err
 		}
-		sn, err := s.c.r.Subnets.Get(ctx, a.GetStatus().GetDetails().GetSubnetId())
-		if err != nil || sn.GetSpec().GetNetworkId() != rt.GetSpec().GetNetworkId() {
+		in, err := s.c.inNetwork(ctx, a, rt.GetSpec().GetNetworkId())
+		if err != nil {
+			return nil, err
+		}
+		if !in {
 			return nil, errs.BadRequest(errs.Violation{
-				Field: "spec.next_hop.allocation.id", Message: "the allocation must be in a subnet of the route table's network",
+				Field: "spec.next_hop.allocation.id", Message: "the allocation must be in the route table's network (a subnet of it, or one of its private pools)",
 			})
 		}
 		return &vpcpb.NextHopState{NextHop: &vpcpb.NextHopState_Allocation{
@@ -186,4 +190,25 @@ func (s *RouteService) apply(_ context.Context, stored, updated *vpcpb.Route) er
 		return immutable("spec.next_hop")
 	}
 	return nil
+}
+
+// inNetwork reports whether an allocation belongs to a network: through its
+// subnet, or (for an allocation from a pool, with no subnet) through one of the
+// network's private pools. A public address outside a subnet is not in it.
+func (c *core) inNetwork(ctx context.Context, a *vpcpb.Allocation, networkID string) (bool, error) {
+	if id := a.GetStatus().GetDetails().GetSubnetId(); id != "" {
+		sn, err := c.r.Subnets.Get(ctx, id)
+		switch {
+		case errs.IsKind(err, errs.KindNotFound):
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		return sn.GetSpec().GetNetworkId() == networkID, nil
+	}
+	n, err := c.r.Networks.Get(ctx, networkID)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(networkPoolIDs(n, vpcpb.IpVisibility_PRIVATE), a.GetStatus().GetDetails().GetPoolId()), nil
 }

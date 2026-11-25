@@ -12,7 +12,7 @@
 | `PoolService`: Get, GetByName, List, ListAggregated, ListBySourcePool, Create, Update, Delete; child pools carved from `source_pool_id` (`"/16"` or explicit), `status.cidrs`, live `status.assignment` | ✅ T2 |
 | `NetworkService`: Get, GetByName, GetDefault, List, ListAggregated, Create, CreateDefault, Update, Delete; default pools filled in when omitted | ✅ T2 |
 | `SubnetService`: Get, GetByName, List, ListAggregated, ListByNetwork, Create, Update, Delete; `use_network_pools` (shared) or explicit blocks (`"/24"` lowest free, or a free CIDR inside the network's pools), `route_table_id` | ✅ T2 |
-| `AllocationService`: Get, GetByName, List, ListAggregated, ListByPool, ListBySubnet, Create, Update, Delete; private and public, lowest free address (skips network, gateway and broadcast) or an explicit free one | ✅ T2 |
+| `AllocationService`: Get, GetByName, List, ListAggregated, ListByPool, ListBySubnet, Create, Update, Delete; private and public, lowest free address (skips network, gateway and broadcast) or an explicit free one; Update per upstream (only `subnet_id` → own `pool_id`; moves refused) | ✅ T2 |
 | `RouteTableService` (+ ListByNetwork, live `status.assignment`), `RouteService` (next hop: allocation in the same network, or default egress for `0.0.0.0/0`; unique destination per table) | ✅ T2 |
 | `SecurityGroupService` (+ ListByNetwork), `SecurityRuleService` (stored and validated, not enforced; priority 500 and `STATEFUL` defaults; `status.effective_priority`, direction, match) | ✅ T2 |
 | Delete refused while referenced (table below); cascades: route table → routes, security group → rules, network → default route table and security group | ✅ |
@@ -83,14 +83,30 @@ Outputs must be deterministic and must survive an empty `terraform plan`, so **s
   pool. Without `cidr` the lowest free address is used (skipping network, gateway `.1` and broadcast). `cidr` may be
   an address, a CIDR or `/N`. `status.details` records `allocated_cidr`, `pool_id` and `subnet_id`; `static` is
   `true`. `status.assignment` is reserved for compute (an assigned allocation cannot be deleted).
-  The whole allocation spec is treated as immutable (upstream marks only `cidr` `IMMUTABLE`): changing `subnet_id`
-  or `pool_id` in place is refused, because the mock never moves an address.
+- **Allocation updates** follow `allocation.proto`. `cidr` is `IMMUTABLE`, and the provider plans a replacement when
+  it changes. The `pool` oneof "may be changed only from subnet_id to pool_id, and the new pool_id must be equal to
+  status.details.pool_id". The provider plans every `subnet_id`/`pool_id` change and a private↔public switch as an
+  in-place update (only `cidr` is `RequiresReplace` in provider 0.6.91), so the API is what decides:
+
+  | Change | Result |
+  |---|---|
+  | `subnet_id` → `pool_id` = `status.details.pool_id` (also: naming the pool a public allocation was placed in by default) | Accepted. The address does not move; `status.details.subnet_id` is cleared ("populated when created with explicit subnet_id, from a subnet-specific pool, or when assigned"). The allocation stays listed by `ListBySubnet` while its address is in the subnet, no longer blocks deleting the subnet, and keeps its address when the subnet goes. |
+  | `subnet_id` → another subnet | `INVALID_ARGUMENT` on `spec.ipv4_*.subnet_id` |
+  | `subnet_id` → a pool other than `status.details.pool_id` | `INVALID_ARGUMENT` on `spec.ipv4_*.pool_id` |
+  | `pool_id` → another pool, or back to `subnet_id` | `INVALID_ARGUMENT` on `spec.ipv4_*.pool_id` / `subnet_id` |
+  | `ipv4_private` ↔ `ipv4_public` | `INVALID_ARGUMENT` on `spec` (needs another address and pool, which both rules forbid) |
+  | `cidr` | `INVALID_ARGUMENT` on `spec.ipv4_*.cidr`; Terraform replaces instead |
+
+  A refused update changes nothing (not even `resource_version`). The messages name the upstream rule, e.g.
+  `spec.ipv4_private.subnet_id: may be changed only from subnet_id to pool_id <pool> (status.details.pool_id); an
+  allocation cannot move to another subnet`. Nebius's exact wording is not documented, so the code and field (`InvalidArgument`
+  with a field violation) follow the same convention as every other validation error in the mock.
 
 ### Routing
 Every network gets a default route table (`status.default`, referenced by `network.status.default_route_table_id`)
 with one route, `0.0.0.0/0` → default egress gateway. Subnets without `route_table_id` use it. A custom route table
 can only be assigned to subnets of its network. Route destinations are unique per table. A next hop is an allocation
-in a subnet of the same network, or `default_egress_gateway = true`, which is valid only for `0.0.0.0/0`.
+in a subnet of the same network (or, with no subnet, from one of the network's private pools), or `default_egress_gateway = true`, which is valid only for `0.0.0.0/0`.
 `destination` and `next_hop` are immutable; `description` is updatable.
 
 ### Security groups and rules
@@ -112,6 +128,9 @@ several rules may share a priority (DENY is evaluated first), which `status.effe
 ### Aggregated lists
 `ListAggregated` currently returns the same as `List` (the mock has one project per tenant). `ListByNetwork`,
 `ListBySubnet`, `ListByPool` and `ListBySourcePool` filter across all parents and page in creation order.
+`ListBySubnet` returns the allocations associated with the subnet plus, as documented, "unassigned allocations from
+compatible pools": those with no subnet whose address lies in the subnet's blocks (or, for a shared family, in the
+network's pools).
 
 ### Permissions and quotas
 - Permissions: `vpc.pools.*`, `vpc.networks.*`, `vpc.subnets.*`, `vpc.allocations.*`, `vpc.securityGroups.*`,
@@ -161,6 +180,8 @@ is required for M1.
 - Real default subnet prefix sizes and whether upstream echoes resolved CIDRs into `spec`.
 - Whether upstream refuses deleting a route table that still has routes (the mock cascades them).
 - Exact `status.assignment` shape for each consumer type.
+- Whether upstream clears `status.details.subnet_id` when an allocation changes from `subnet_id` to `pool_id`. The
+  mock clears it, which is what the field's documentation implies, and what lets Terraform delete the old subnet.
 
 ## API surface
 

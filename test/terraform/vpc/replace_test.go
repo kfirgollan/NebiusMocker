@@ -3,6 +3,7 @@
 package vpc
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -121,26 +122,42 @@ func TestReplaceOnImmutableChange(t *testing.T) {
 		})
 	}
 
-	// The provider does not mark the allocation's subnet_id as RequiresReplace,
-	// so it plans an in-place update, which the API rejects: the spec is immutable.
-	t.Run("allocation subnet is immutable", func(t *testing.T) {
-		before := tf.state(t)
-		bv := c.version(t, "allocation", before["alloc"].ID)
-		tf.writeConfig(t, base.with("alloc_subnet", "sub2").render(t, corePieces...))
-		tf.expectChanges(t, coreAll, map[string]string{"alloc": "update"})
-		if err := tf.tf.Apply(t.Context(), tfexec.DirOrPlan(planFile)); err == nil {
-			t.Fatal("terraform apply succeeded, want the mock to reject changing the allocation's subnet")
-		}
-		a, err := c.allocs.Get(t.Context(), &vpcpb.GetAllocationRequest{Id: before["alloc"].ID})
-		if err != nil {
-			t.Fatalf("Get allocation: %v", err)
-		}
-		if a.GetSpec().GetIpv4Private().GetSubnetId() != before["sub"].ID || a.GetMetadata().GetResourceVersion() != bv {
-			t.Errorf("allocation changed by a rejected update: %v", a.GetSpec())
-		}
-		tf.writeConfig(t, base.render(t, corePieces...))
-		tf.expectNoChanges(t)
-	})
+	// The provider does not mark subnet_id or pool_id as RequiresReplace, so it
+	// plans these moves in place. Upstream refuses them: the pool oneof "may be
+	// changed only from subnet_id to pool_id, and the new pool_id must be equal
+	// to status.details.pool_id" (allocation.proto). So does the mock, and the
+	// allocation is left as it was.
+	moves := []struct {
+		name    string
+		refusal string // the mock's violation message, as terraform prints it
+		kv      []string
+	}{
+		{"allocation to another subnet", "an allocation cannot move to another subnet", []string{"alloc_subnet", "sub2"}},
+		{"allocation to a pool it does not come from", "must be equal to status.details.pool_id", []string{"alloc_pool", `"` + rootPoolID(t, c, inst) + `"`}},
+	}
+	for _, mv := range moves {
+		t.Run(mv.name, func(t *testing.T) {
+			before := tf.state(t)
+			bv := c.version(t, "allocation", before["alloc"].ID)
+			tf.writeConfig(t, base.with(mv.kv...).render(t, corePieces...))
+			tf.expectChanges(t, coreAll, map[string]string{"alloc": "update"})
+			mark := tf.out.Len()
+			err := tf.tf.Apply(t.Context(), tfexec.DirOrPlan(planFile))
+			// terraform wraps long messages: compare with whitespace collapsed.
+			if out := strings.Join(strings.Fields(tf.out.String()[mark:]), " "); err == nil || !strings.Contains(out, mv.refusal) {
+				t.Fatalf("terraform apply: %v; want the mock to refuse with %q", err, mv.refusal)
+			}
+			a, err := c.allocs.Get(t.Context(), &vpcpb.GetAllocationRequest{Id: before["alloc"].ID})
+			if err != nil {
+				t.Fatalf("Get allocation: %v", err)
+			}
+			if a.GetSpec().GetIpv4Private().GetSubnetId() != before["sub"].ID || a.GetMetadata().GetResourceVersion() != bv {
+				t.Errorf("allocation changed by a rejected update: %v", a.GetSpec())
+			}
+			tf.writeConfig(t, base.render(t, corePieces...))
+			tf.expectNoChanges(t)
+		})
+	}
 
 	// The route table moves networks in a stack without routes.
 	t.Run("route table network", func(t *testing.T) {

@@ -30,9 +30,35 @@ func newAllocationService(c *core) *AllocationService {
 	return s
 }
 
-// ListBySubnet returns one page of the allocations made in a subnet.
+// ListBySubnet returns one page of the allocations available to a subnet:
+// those associated with it (status.details.subnet_id), plus "unassigned
+// allocations from compatible pools" (allocation_service.proto), i.e. those
+// with no subnet whose address lies in the subnet's address space.
 func (s *AllocationService) ListBySubnet(ctx context.Context, subnetID string, pageSize int64, pageToken string) (Page[*vpcpb.Allocation], error) {
-	return s.listWhere(ctx, func(a *vpcpb.Allocation) bool { return a.GetStatus().GetDetails().GetSubnetId() == subnetID }, pageSize, pageToken)
+	sn, err := ref(ctx, s.c.r.Subnets, "subnet_id", subnetID)
+	if err != nil {
+		return Page[*vpcpb.Allocation]{}, err
+	}
+	space := map[vpcpb.IpVisibility][]netip.Prefix{}
+	for _, vis := range []vpcpb.IpVisibility{vpcpb.IpVisibility_PRIVATE, vpcpb.IpVisibility_PUBLIC} {
+		blocks, _, err := s.subnetSpace(ctx, sn, vis, "")
+		if err != nil {
+			return Page[*vpcpb.Allocation]{}, err
+		}
+		space[vis] = prefixes(blocks)
+	}
+	return s.listWhere(ctx, func(a *vpcpb.Allocation) bool {
+		d := a.GetStatus().GetDetails()
+		if d.GetSubnetId() != "" || a.GetStatus().GetAssignment() != nil {
+			return d.GetSubnetId() == subnetID
+		}
+		req, err := requestOf(a.GetSpec())
+		if err != nil {
+			return false
+		}
+		p, err := netip.ParsePrefix(d.GetAllocatedCidr())
+		return err == nil && contained(p, space[req.vis])
+	}, pageSize, pageToken)
 }
 
 // ListByPool returns one page of the allocations made from a pool.
@@ -45,16 +71,9 @@ func (s *AllocationService) build(ctx context.Context, md *commonpb.ResourceMeta
 		return nil, err
 	}
 	a := &vpcpb.Allocation{Metadata: md, Spec: spec}
-	var req addressRequest
-	switch {
-	case spec.GetIpv4Private() != nil:
-		p := spec.GetIpv4Private()
-		req = addressRequest{field: "spec.ipv4_private", cidr: p.GetCidr(), subnetID: p.GetSubnetId(), poolID: p.GetPoolId(), vis: vpcpb.IpVisibility_PRIVATE}
-	case spec.GetIpv4Public() != nil:
-		p := spec.GetIpv4Public()
-		req = addressRequest{field: "spec.ipv4_public", cidr: p.GetCidr(), subnetID: p.GetSubnetId(), poolID: p.GetPoolId(), vis: vpcpb.IpVisibility_PUBLIC}
-	default:
-		return nil, errs.BadRequest(errs.Violation{Field: "spec", Message: "one of ipv4_private or ipv4_public is required"})
+	req, err := requestOf(spec)
+	if err != nil {
+		return nil, err
 	}
 	details, err := s.place(ctx, a, req)
 	if err != nil {
@@ -69,6 +88,20 @@ type addressRequest struct {
 	cidr             string
 	subnetID, poolID string
 	vis              vpcpb.IpVisibility
+}
+
+// requestOf reads the ip_spec oneof of an allocation spec.
+func requestOf(spec *vpcpb.AllocationSpec) (addressRequest, error) {
+	switch {
+	case spec.GetIpv4Private() != nil:
+		p := spec.GetIpv4Private()
+		return addressRequest{field: "spec.ipv4_private", cidr: p.GetCidr(), subnetID: p.GetSubnetId(), poolID: p.GetPoolId(), vis: vpcpb.IpVisibility_PRIVATE}, nil
+	case spec.GetIpv4Public() != nil:
+		p := spec.GetIpv4Public()
+		return addressRequest{field: "spec.ipv4_public", cidr: p.GetCidr(), subnetID: p.GetSubnetId(), poolID: p.GetPoolId(), vis: vpcpb.IpVisibility_PUBLIC}, nil
+	default:
+		return addressRequest{}, errs.BadRequest(errs.Violation{Field: "spec", Message: "one of ipv4_private or ipv4_public is required"})
+	}
 }
 
 // place picks the address of a new allocation.
@@ -199,9 +232,51 @@ func (s *AllocationService) ownBlocks(ctx context.Context, sn *vpcpb.Subnet, f f
 	return blocks, used, nil
 }
 
+// apply validates an update of the spec. Upstream marks only cidr IMMUTABLE,
+// and the pool oneof "may be changed only from subnet_id to pool_id, and the
+// new pool_id must be equal to status.details.pool_id" (allocation.proto). So
+// the one spec change Nebius accepts names the pool the address already comes
+// from: the address stays, and only status.details.subnet_id is cleared. Every other
+// change (another subnet or pool, pool_id back to subnet_id, private to public)
+// is refused with InvalidArgument, and the stored allocation is left untouched.
 func (s *AllocationService) apply(_ context.Context, stored, updated *vpcpb.Allocation) error {
-	if !proto.Equal(stored.GetSpec(), updated.GetSpec()) {
-		return immutable("spec")
+	old, err := requestOf(stored.GetSpec())
+	if err != nil {
+		return err
+	}
+	req, err := requestOf(updated.GetSpec())
+	if err != nil {
+		return err
+	}
+	if req.vis != old.vis {
+		return errs.BadRequest(errs.Violation{Field: "spec", Message: fmt.Sprintf(
+			"%s cannot be changed to %s: cidr is immutable and the pool may change only from subnet_id to status.details.pool_id; create a new allocation",
+			old.field, req.field)})
+	}
+	if req.cidr != old.cidr {
+		return immutable(req.field + ".cidr")
+	}
+	if req.subnetID == old.subnetID && req.poolID == old.poolID {
+		return nil
+	}
+	own := stored.GetStatus().GetDetails().GetPoolId()
+	switch {
+	case req.poolID == "":
+		return errs.BadRequest(errs.Violation{Field: req.field + ".subnet_id", Message: fmt.Sprintf(
+			"may be changed only from subnet_id to pool_id %s (status.details.pool_id); an allocation cannot move to another subnet", own)})
+	case old.poolID != "":
+		return errs.BadRequest(errs.Violation{Field: req.field + ".pool_id", Message: fmt.Sprintf(
+			"may be changed only from subnet_id to pool_id; an allocation cannot move from pool %s to %s", old.poolID, req.poolID)})
+	case req.poolID != own:
+		return errs.BadRequest(errs.Violation{Field: req.field + ".pool_id", Message: fmt.Sprintf(
+			"must be equal to status.details.pool_id %s, the pool the address comes from", own)})
+	}
+	// The allocation now comes from the pool, not the subnet: details.subnet_id
+	// is populated only "when created with explicit subnet_id, from a
+	// subnet-specific pool, or when assigned to a resource".
+	if updated.GetStatus().GetAssignment() == nil {
+		updated.Status = proto.CloneOf(stored.GetStatus())
+		updated.Status.Details.SubnetId = ""
 	}
 	return nil
 }

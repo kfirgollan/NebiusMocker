@@ -122,6 +122,41 @@ func TestInPlaceUpdates(t *testing.T) {
 		tf.expectNoChanges(t)
 	})
 
+	// The one allocation spec change upstream accepts: subnet_id to the pool
+	// the address comes from (status.details.pool_id). The provider plans it
+	// in place, the address and the route through it stay.
+	t.Run("allocation subnet to its pool", func(t *testing.T) {
+		before, err := c.allocs.Get(t.Context(), &vpcpb.GetAllocationRequest{Id: st["alloc"].ID})
+		if err != nil {
+			t.Fatalf("Get allocation: %v", err)
+		}
+		if got := before.GetStatus().GetDetails().GetPoolId(); got != st["pool"].ID {
+			t.Fatalf("status.details.pool_id = %s, want the stack's pool %s", got, st["pool"].ID)
+		}
+		base = base.with("alloc_pool", "nebius_vpc_v1_pool.pool.id")
+		tf.writeConfig(t, base.render(t, corePieces...))
+		tf.expectChanges(t, coreAll, map[string]string{"alloc": "update"})
+		tf.apply(t)
+		assertSameID(t, tf, "alloc", st["alloc"].ID)
+		after, err := c.allocs.Get(t.Context(), &vpcpb.GetAllocationRequest{Id: st["alloc"].ID})
+		if err != nil {
+			t.Fatalf("Get allocation: %v", err)
+		}
+		if p := after.GetSpec().GetIpv4Private(); p.GetPoolId() != st["pool"].ID || p.GetSubnetId() != "" {
+			t.Errorf("spec = %v, want pool_id %s and no subnet_id", after.GetSpec(), st["pool"].ID)
+		}
+		if got, want := after.GetStatus().GetDetails().GetAllocatedCidr(), before.GetStatus().GetDetails().GetAllocatedCidr(); got != want {
+			t.Errorf("allocated_cidr = %s, want %s kept", got, want)
+		}
+		if d := after.GetStatus().GetDetails(); d.GetPoolId() != st["pool"].ID || d.GetSubnetId() != "" {
+			t.Errorf("status.details = %v, want pool %s and no subnet", d, st["pool"].ID)
+		}
+		if got := after.GetMetadata().GetResourceVersion(); got != before.GetMetadata().GetResourceVersion()+1 {
+			t.Errorf("resource_version = %d, want %d", got, before.GetMetadata().GetResourceVersion()+1)
+		}
+		tf.expectNoChanges(t)
+	})
+
 	tf.destroy(t)
 	for _, r := range st {
 		c.gone(t, r.Kind, r.ID)

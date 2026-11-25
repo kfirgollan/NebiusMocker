@@ -974,7 +974,7 @@ func TestUpdateImmutableFields(t *testing.T) {
 			_, err := e.svc.Subnets().Update(ctx, UpdateCmd[*vpcpb.SubnetSpec]{Metadata: md(sn), Spec: subnetSpec(idOf(other), "/24")})
 			return err
 		}},
-		{"allocation spec", func() error {
+		{"allocation cidr", func() error {
 			_, err := e.svc.Allocations().Update(ctx, UpdateCmd[*vpcpb.AllocationSpec]{Metadata: md(alloc), Spec: privateAllocSpec(idOf(sn), "10.0.0.50")})
 			return err
 		}},
