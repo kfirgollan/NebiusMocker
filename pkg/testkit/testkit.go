@@ -91,6 +91,7 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 	s := settings{cfg: config.Default()}
 	s.cfg.Listen = "127.0.0.1:0"
 	s.cfg.IDMode = nid.Sequential
+	s.cfg.Registry.Listen = "127.0.0.1:0"
 	for _, o := range opts {
 		o(&s)
 	}

@@ -75,6 +75,8 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	iampb.RegisterGroupServiceServer(reg, api.NewGroupHandler(groups))
 	iampb.RegisterGroupMembershipServiceServer(reg, api.NewMembershipHandler(memberships))
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))
+	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID))
+	api.RegisterProfileAuthzRule(deps.Rules, deps.Config.TenantID)
 	return nil
 }
 

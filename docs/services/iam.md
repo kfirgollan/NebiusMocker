@@ -15,6 +15,7 @@
 | Authorization (`NEBIUS_MOCKER_AUTHZ=off\|audit\|enforce`) from memberships + permits, inherited down the hierarchy | ✅ |
 | `nebius_iam_v1_group`, `_group_membership`, `_access_permit` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
 | Static dev tokens: `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` (members of the seeded groups) | ✅ |
+| `nebius.iam.v1.ProfileService.Get` (whoami; the `nebius` CLI calls it before `iam get-access-token`), derived from the token's principal | ✅ |
 | Everything else in this document | Planned |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.

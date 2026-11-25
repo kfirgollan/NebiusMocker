@@ -68,6 +68,8 @@ type Config struct {
 	// ComputeImagesFile, when set, replaces the built-in public image catalog
 	// (YAML or JSON; see docs/services/compute.md).
 	ComputeImagesFile string
+	// Registry configures the Container Registry module.
+	Registry RegistryConfig
 }
 
 // Region is one emulated Nebius region.
@@ -134,6 +136,7 @@ func Default() Config {
 			SecretKey: "rustfsadmin",
 			Region:    "us-east-1",
 		},
+		Registry: defaultRegistry(),
 	}
 }
 
@@ -176,6 +179,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		}},
 		{"COMPUTE_IMAGES_FILE", func(v string) error { c.ComputeImagesFile = v; return nil }},
 	}
+	parsers = append(parsers, registryParsers(&c.Registry)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {

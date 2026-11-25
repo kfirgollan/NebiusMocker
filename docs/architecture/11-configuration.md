@@ -35,6 +35,8 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_IAM` | `auto` | `auto` \| `embedded` (IAM stub for single-service images) \| `peer` |
 
 Module-specific keys are named `NEBIUS_MOCKER_<AREA>_<KEY>`, for example `NEBIUS_MOCKER_MK8S_BACKEND=k3s`.
+Implemented so far: `NEBIUS_MOCKER_REGISTRY_BACKEND` (`memory`|`harbor`), `_LISTEN` (`:4590`, `off`), `_FQDN`,
+`_HARBOR_URL`, `_HARBOR_USERNAME`, `_HARBOR_PASSWORD` (see [registry](../services/registry.md#configuration)).
 They are documented in each service doc.
 
 ## Seed data

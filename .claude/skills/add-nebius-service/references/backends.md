@@ -27,7 +27,7 @@ All of the following must hold:
 
 | Area | Backend | Image / notes |
 |---|---|---|
-| Container Registry | [Harbor](https://github.com/goharbor/harbor) | `goharbor/*` v2.16.0+ (arm64 images start at 2.16). Generate the config with `goharbor/prepare`. The mocker maps registry → Harbor project and fronts docker auth with Nebius IAM tokens |
+| Container Registry | [Harbor](https://github.com/goharbor/harbor) | `goharbor/*` v2.16.0+ (arm64 images start at 2.16). Generate the config with `goharbor/prepare`, then start it with a compose override that drops fixed container names, the syslog driver (host port 1514) and fixed ports (`test/registry/harbor/harbor.sh`). The mocker maps registry → Harbor project. Its docker front (`:4590`) takes the Nebius IAM token as the Basic password and forwards to Harbor `/v2/` with admin Basic auth, which Harbor accepts directly, so no token service is needed. Docker Desktop's daemon can't reach host loopback, so e2e adds an nginx forwarder with host networking |
 | Object Storage (and blobs for other services) | [RustFS](https://github.com/rustfs/rustfs) | `rustfs/rustfs`, S3-compatible. Reach it through the shared `pkg/objstore` port. The mocker's S3 front verifies Nebius access keys (SigV4) and forwards with admin credentials |
 | Managed Kubernetes (mk8s) | [k3s](https://github.com/k3s-io/k3s) | `rancher/k3s`: one container per cluster, like LocalStack's EKS |
 | Managed PostgreSQL | [PostgreSQL](https://www.postgresql.org/) | Official `postgres` image, one container per cluster |

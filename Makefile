@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage e2e-images check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-registry check hooks run tidy clean
 
 all: check
 
@@ -37,6 +37,16 @@ e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (need
 	@$(RUSTFS_CLEANUP)
 	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... || status=$$?; \
 	$(RUSTFS_CLEANUP); exit $$status
+
+# e2e-registry starts a throwaway Harbor (test/registry/harbor/harbor.sh), runs
+# the docker/CLI/SDK tests against it and always removes it again.
+REGISTRY_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=registry | xargs docker rm -f -v >/dev/null 2>&1 || true
+
+e2e-registry: ## Harbor-backed registry tests (needs Docker): nebius CLI login, docker push/pull, SDK artifacts
+	@dir=$$(mktemp -d "$${TMPDIR:-/tmp}/nebius-mocker-harbor.XXXXXX"); \
+	trap './test/registry/harbor/harbor.sh down "'"$$dir"'"; $(REGISTRY_CLEANUP)' EXIT INT TERM; \
+	./test/registry/harbor/harbor.sh up "$$dir" && . "$$dir/env" && \
+	$(GO) test -tags e2e_registry -count=1 -v ./test/registry/...
 
 check: lint test ## Everything the pre-commit hook runs
 

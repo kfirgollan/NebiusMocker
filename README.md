@@ -9,6 +9,8 @@ CI with no Nebius account.
 > Storage) work with the provider's image data source, the Go SDK and the `nebius` CLI. See
 > [docs/services/iam.md](docs/services/iam.md#implementation-status),
 > [docs/services/compute.md](docs/services/compute.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
+> **Container Registry** works with Terraform, the Go SDK, the `nebius` CLI and `docker push/pull` (images stored in
+> [Harbor](https://goharbor.io)); see [docs/services/registry.md](docs/services/registry.md#implementation-status).
 
 ## Quick start
 
@@ -65,6 +67,20 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 | `NEBIUS_MOCKER_IDS` | `random` | `sequential` for predictable IDs |
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions (and NID routing codes) with a public image catalog |
 | `NEBIUS_MOCKER_COMPUTE_IMAGES_FILE` | built-in | Replace the public image catalog ([format](docs/services/compute.md#catalogs-seed)) |
+| `NEBIUS_MOCKER_REGISTRY_BACKEND` | `memory` | `harbor` stores images in Harbor and serves docker on `NEBIUS_MOCKER_REGISTRY_LISTEN` (`:4590`) |
+
+### Container Registry with docker
+
+```bash
+test/registry/harbor/harbor.sh up /tmp/harbor && . /tmp/harbor/env     # throwaway Harbor (Docker)
+NEBIUS_MOCKER_REGISTRY_BACKEND=harbor NEBIUS_MOCKER_REGISTRY_HARBOR_URL=$NEBIUS_MOCKER_E2E_HARBOR_URL make run
+
+# the documented Nebius login, with a profile whose endpoint is localhost:4566 and a dev token file
+nebius iam get-access-token --insecure | docker login 127.0.0.1:4590 --username iam --password-stdin
+docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
+```
+
+Details, including Docker Desktop, are in [docs/services/registry.md](docs/services/registry.md#local-workflow).
 
 ## Development
 
@@ -73,6 +89,7 @@ make hooks   # once: install the pre-commit gate
 make check   # lint (layering rules included) + unit/contract/architecture tests with -race
 make e2e     # real terraform + official nebius provider against the mock
 make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
+make e2e-registry  # Harbor + nebius CLI + docker push/pull (needs Docker; Harbor is started and removed)
 ```
 
 Read [docs/architecture](docs/architecture/README.md) first. The Go rules for this repo live in `.claude/skills/`

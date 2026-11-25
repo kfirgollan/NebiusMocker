@@ -14,7 +14,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS) | container-backed VMs (T3, optional) |
 | Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** | k3s backend (T3, M3) |
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, T1 rest | S3 data plane (T3, M3) |
-| Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** | OCI data plane (T3, M3) |
+| Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |
 | MysteryBox (secrets) | [mysterybox.md](mysterybox.md) | 3 | 14 | 3 / 7 | **T2** | — |
 | KMS | [kms.md](kms.md) | 4 | 23 | 2 / 4 | T1 | real crypto (T3, M3) |
 | DNS | [dns.md](dns.md) | 2 | 13 | 2 / 4 | T1 | T2 |
