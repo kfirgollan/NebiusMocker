@@ -12,6 +12,7 @@ import (
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 	"github.com/kfirgollan/NebiusMocker/pkg/serviceerror"
@@ -108,4 +109,37 @@ func decodeOffset(token string) (int, error) {
 		return 0, errs.BadRequest(errs.Violation{Field: "page_token", Message: "malformed page token"})
 	}
 	return n, nil
+}
+
+// RegisterAuthzRules declares the OperationService permissions. The creator of
+// an operation may always read it (it must keep polling after deleting the
+// resource); anyone else needs read access to the operation's resource.
+func RegisterAuthzRules(r *authz.Rules, ops Reader) {
+	creator := func(ctx context.Context, principalID string, req any) bool {
+		g, ok := req.(*commonpb.GetOperationRequest)
+		if !ok {
+			return false
+		}
+		op, err := ops.Get(ctx, g.GetId())
+		return err == nil && op.CreatedBy != "" && op.CreatedBy == principalID
+	}
+	r.Add("/nebius.common.v1.OperationService/Get", authz.Rule{
+		Permission: authz.Perm("common", "operations", authz.VerbGet),
+		AllowIf:    creator,
+		Target: func(ctx context.Context, req any) (string, error) {
+			g, _ := req.(*commonpb.GetOperationRequest)
+			op, err := ops.Get(ctx, g.GetId())
+			if err != nil {
+				return "", err
+			}
+			return op.ResourceID, nil
+		},
+	})
+	r.Add("/nebius.common.v1.OperationService/List", authz.Rule{
+		Permission: authz.Perm("common", "operations", authz.VerbList),
+		Target: func(_ context.Context, req any) (string, error) {
+			l, _ := req.(*commonpb.ListOperationsRequest)
+			return l.GetResourceId(), nil
+		},
+	})
 }

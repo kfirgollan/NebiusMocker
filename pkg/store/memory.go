@@ -87,7 +87,7 @@ func (t *memTx) ByName(kind, parentID, name string) (Record, error) {
 }
 
 func (t *memTx) List(q ListQuery) ([]Record, error) {
-	all := t.visible(q.Kind, q.ParentID)
+	all := t.visibleMatching(q.Kind, func(r Record) bool { return q.AnyParent || r.ParentID == q.ParentID })
 	slices.SortFunc(all, func(a, b Record) int { return compareSeq(a.Seq, b.Seq) })
 	out := make([]Record, 0, len(all))
 	for _, r := range all {
@@ -143,9 +143,14 @@ func (t *memTx) Delete(kind, id string) error {
 
 // visible returns the records of kind under parentID as seen by this tx.
 func (t *memTx) visible(kind, parentID string) []Record {
+	return t.visibleMatching(kind, func(r Record) bool { return r.ParentID == parentID })
+}
+
+// visibleMatching returns the records of kind accepted by keep, as seen by this tx.
+func (t *memTx) visibleMatching(kind string, keep func(Record) bool) []Record {
 	var out []Record
 	for k, r := range t.m.records {
-		if k.kind != kind || r.ParentID != parentID {
+		if k.kind != kind || !keep(r) {
 			continue
 		}
 		if _, gone := t.dels[k]; gone {
@@ -157,7 +162,7 @@ func (t *memTx) visible(kind, parentID string) []Record {
 		out = append(out, r)
 	}
 	for _, r := range t.puts {
-		if r.Kind == kind && r.ParentID == parentID {
+		if r.Kind == kind && keep(r) {
 			out = append(out, r)
 		}
 	}

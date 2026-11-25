@@ -5,6 +5,7 @@ package testkit
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/nebius/gosdk"
 	"github.com/nebius/gosdk/conn"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
@@ -45,6 +47,20 @@ func WithOperationDelay(d time.Duration) Option {
 // WithAuthnRequired rejects anonymous requests.
 func WithAuthnRequired() Option {
 	return func(s *settings) { s.cfg.Authn = config.AuthnRequired }
+}
+
+// WithAuthz sets the authorization mode (default: audit).
+func WithAuthz(mode authz.Mode) Option {
+	return func(s *settings) { s.cfg.Authz = mode }
+}
+
+// WithTokens adds static bearer tokens (token → principal ID).
+func WithTokens(tokens map[string]string) Option {
+	return func(s *settings) {
+		merged := maps.Clone(s.cfg.Tokens)
+		maps.Copy(merged, tokens)
+		s.cfg.Tokens = merged
+	}
 }
 
 // WithLogs writes the mocker's request log to the test output.
@@ -90,10 +106,16 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 // Terraform provider is configured: resolver "*" → Addr, plaintext, static token.
 func (i *Instance) SDK(tb testing.TB) *gosdk.SDK {
 	tb.Helper()
+	return i.SDKAs(tb, i.Token)
+}
+
+// SDKAs is SDK authenticated with the given bearer token.
+func (i *Instance) SDKAs(tb testing.TB, token string) *gosdk.SDK {
+	tb.Helper()
 	sdk, err := gosdk.New(tb.Context(),
 		gosdk.WithResolvers(conn.NewBasicResolver("*", i.Addr)),
 		gosdk.WithDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		gosdk.WithCredentials(gosdk.IAMToken(i.Token)),
+		gosdk.WithCredentials(gosdk.IAMToken(token)),
 	)
 	if err != nil {
 		tb.Fatalf("testkit: gosdk.New: %v", err)

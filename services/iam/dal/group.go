@@ -2,11 +2,9 @@ package dal
 
 import (
 	"context"
-	"fmt"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 
-	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/store"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
@@ -23,16 +21,7 @@ func newGroup() *iampb.Group { return &iampb.Group{} }
 
 // Get returns the group or errs.NotFound.
 func (r *GroupRepo) Get(ctx context.Context, id string) (*iampb.Group, error) {
-	var rec store.Record
-	err := r.st.View(ctx, func(tx store.Tx) error {
-		var gerr error
-		rec, gerr = tx.Get(domain.KindGroup, id)
-		return gerr
-	})
-	if err != nil {
-		return nil, toDomain(err, id)
-	}
-	return decode(rec, newGroup)
+	return get(ctx, r.st, domain.KindGroup, id, newGroup)
 }
 
 // GetByName returns the group named name in parentID or errs.NotFound.
@@ -60,38 +49,15 @@ func (r *GroupRepo) List(ctx context.Context, parentID string, pageSize int, pag
 
 // Create inserts a new group; the name must be unique in its parent.
 func (r *GroupRepo) Create(ctx context.Context, g *iampb.Group) error {
-	return r.write(ctx, g, true)
+	return write(ctx, r.st, domain.KindGroup, g, true, nil)
 }
 
 // Update replaces an existing group.
 func (r *GroupRepo) Update(ctx context.Context, g *iampb.Group) error {
-	return r.write(ctx, g, false)
+	return write(ctx, r.st, domain.KindGroup, g, false, nil)
 }
 
 // Delete removes the group or returns errs.NotFound.
 func (r *GroupRepo) Delete(ctx context.Context, id string) error {
-	err := r.st.Update(ctx, func(tx store.Tx) error { return tx.Delete(domain.KindGroup, id) })
-	return toDomain(err, id)
-}
-
-func (r *GroupRepo) write(ctx context.Context, g *iampb.Group, create bool) error {
-	md := g.GetMetadata()
-	data, err := marshal.Marshal(g)
-	if err != nil {
-		return fmt.Errorf("encode group %s: %w", md.GetId(), err)
-	}
-	err = r.st.Update(ctx, func(tx store.Tx) error {
-		_, getErr := tx.Get(domain.KindGroup, md.GetId())
-		switch {
-		case create && getErr == nil:
-			return errs.AlreadyExists(md.GetId(), "group already exists")
-		case !create && getErr != nil:
-			return getErr
-		}
-		_, putErr := tx.Put(store.Record{
-			Kind: domain.KindGroup, ID: md.GetId(), ParentID: md.GetParentId(), Name: md.GetName(), Data: data,
-		})
-		return putErr
-	})
-	return toDomain(err, md.GetId())
+	return remove(ctx, r.st, domain.KindGroup, id)
 }

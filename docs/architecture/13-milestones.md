@@ -7,7 +7,7 @@ end as the pilot.
 
 - [x] Go module, local gate (`make check`: lint + `go test -race`) — CI, Dockerfile and release workflow still to do
 - [x] `pkg/edge`: h2c listener, reflection, health (the "service not enabled" stub is still to do)
-- [x] Interceptors: request-id, recovery, logging, authn (dev tokens), protovalidate (authz and idempotency still to do; reset mask is read in the api layer)
+- [x] Interceptors: request-id, recovery, logging, authn (dev tokens), protovalidate, authz (`off`/`audit`/`enforce`) — idempotency still to do; reset mask is read in the api layer
 - [ ] `pkg/resource`: generic CRUD, NIDs, metadata rules, field behaviors from annotations, paging
 - [x] `pkg/operations`: engine, single-goroutine scheduler, per-resource locks, `OperationService` v1 (v1alpha1 still to do)
 - [x] `pkg/store`: memory backend with name/parent indexes (references still to do)

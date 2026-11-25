@@ -13,6 +13,7 @@ import (
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/edge"
@@ -40,6 +41,11 @@ type Deps struct {
 	Clock  clock.Clock
 	IDs    nid.Generator
 	Log    *slog.Logger
+	// Authz is where modules register their resource kinds (for ancestry) and,
+	// for IAM, the bindings source.
+	Authz *authz.Engine
+	// Rules is where modules declare the permission each RPC needs.
+	Rules *authz.Rules
 }
 
 // Option customizes a Server.
@@ -84,17 +90,24 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	if err != nil {
 		return nil, err
 	}
+	engine := authz.NewEngine(authz.DefaultCatalog())
+	rules := authz.NewRules()
 	srv := edge.New(log,
 		interceptors.RequestID(),
 		interceptors.Recover(log),
 		interceptors.Log(log, o.clk),
 		interceptors.Authenticate(cfg.Authn, cfg.Tokens),
 		validate,
+		interceptors.Authorize(engine, rules, cfg.Authz, log),
 	)
 	commonpb.RegisterOperationServiceServer(srv.Registrar(), opsapi.NewServer(ops))
+	opsapi.RegisterAuthzRules(rules, ops)
 	return &Server{
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
-		deps: Deps{Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log},
+		deps: Deps{
+			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
+			Authz: engine, Rules: rules,
+		},
 	}, nil
 }
 

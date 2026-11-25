@@ -27,19 +27,35 @@ const (
 
 // GroupService implements IAM group behavior.
 type GroupService struct {
-	groups  GroupRepository
-	tenants TenantRepository
-	ops     Operations
-	ids     IDGenerator
-	clk     clock.Clock
+	groups      GroupRepository
+	tenants     TenantRepository
+	memberships MembershipRepository
+	permits     PermitRepository
+	ops         Operations
+	ids         IDGenerator
+	clk         clock.Clock
 }
 
-// NewGroupService wires a GroupService. All dependencies are required.
-func NewGroupService(groups GroupRepository, tenants TenantRepository, ops Operations, ids IDGenerator, clk clock.Clock) (*GroupService, error) {
-	if groups == nil || tenants == nil || ops == nil || ids == nil || clk == nil {
+// GroupDeps are the dependencies of a GroupService. All are required.
+type GroupDeps struct {
+	Groups      GroupRepository
+	Tenants     TenantRepository
+	Memberships MembershipRepository
+	Permits     PermitRepository
+	Ops         Operations
+	IDs         IDGenerator
+	Clock       clock.Clock
+}
+
+// NewGroupService wires a GroupService.
+func NewGroupService(d GroupDeps) (*GroupService, error) {
+	if d.Groups == nil || d.Tenants == nil || d.Memberships == nil || d.Permits == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("iam: group service dependencies must not be nil")
 	}
-	return &GroupService{groups: groups, tenants: tenants, ops: ops, ids: ids, clk: clk}, nil
+	return &GroupService{
+		groups: d.Groups, tenants: d.Tenants, memberships: d.Memberships, permits: d.Permits,
+		ops: d.Ops, ids: d.IDs, clk: d.Clock,
+	}, nil
 }
 
 // CreateGroupCmd is the input of Create.
@@ -59,14 +75,37 @@ type UpdateGroupCmd struct {
 	Request   proto.Message
 }
 
-// Get returns a group by ID.
+// Get returns a group by ID, with live member counts.
 func (s *GroupService) Get(ctx context.Context, id string) (*iampb.Group, error) {
-	return s.groups.Get(ctx, id)
+	g, err := s.groups.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return g, s.fillCounts(ctx, g)
 }
 
 // GetByName returns a group by its name within a tenant.
 func (s *GroupService) GetByName(ctx context.Context, parentID, name string) (*iampb.Group, error) {
-	return s.groups.GetByName(ctx, parentID, name)
+	g, err := s.groups.GetByName(ctx, parentID, name)
+	if err != nil {
+		return nil, err
+	}
+	return g, s.fillCounts(ctx, g)
+}
+
+// fillCounts sets the status member counts from the memberships.
+func (s *GroupService) fillCounts(ctx context.Context, g *iampb.Group) error {
+	users, sas, err := memberCounts(ctx, s.memberships, g.GetMetadata().GetId())
+	if err != nil {
+		return fmt.Errorf("member counts of %s: %w", g.GetMetadata().GetId(), err)
+	}
+	if g.GetStatus() == nil {
+		g.Status = &iampb.GroupStatus{State: iampb.GroupStatus_ACTIVE}
+	}
+	g.Status.MembersCount = users + sas
+	g.Status.TenantUserAccountsCount = users
+	g.Status.ServiceAccountsCount = sas
+	return nil
 }
 
 // List returns one page of a tenant's groups in creation order.
@@ -80,7 +119,16 @@ func (s *GroupService) List(ctx context.Context, parentID string, pageSize int64
 	if size == 0 {
 		size = defaultPageSize
 	}
-	return s.groups.List(ctx, parentID, size, pageToken)
+	page, err := s.groups.List(ctx, parentID, size, pageToken)
+	if err != nil {
+		return GroupPage{}, err
+	}
+	for _, g := range page.Items {
+		if err := s.fillCounts(ctx, g); err != nil {
+			return GroupPage{}, err
+		}
+	}
+	return page, nil
 }
 
 // Create validates the request, stores the group and returns its operation.
@@ -124,8 +172,43 @@ func (s *GroupService) Delete(ctx context.Context, id string, request proto.Mess
 			_, err := s.groups.Get(ctx, id)
 			return err
 		},
-		Work: func(ctx context.Context) error { return s.groups.Delete(ctx, id) },
+		Work: func(ctx context.Context) error { return s.deleteCascade(ctx, id) },
 	})
+}
+
+// deleteCascade removes the group's memberships and permits, then the group:
+// they are its children and would otherwise grant access through a dead group.
+// Each pass deletes a page, so the loop ends when a fresh listing is empty.
+func (s *GroupService) deleteCascade(ctx context.Context, id string) error {
+	for {
+		page, err := s.memberships.ListByGroup(ctx, id, maxPageSize, "")
+		if err != nil {
+			return err
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		for _, m := range page.Items {
+			if err := s.memberships.Delete(ctx, m.GetMetadata().GetId()); err != nil {
+				return fmt.Errorf("delete membership %s: %w", m.GetMetadata().GetId(), err)
+			}
+		}
+	}
+	for {
+		page, err := s.permits.ListByGroup(ctx, id, maxPageSize, "")
+		if err != nil {
+			return err
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		for _, p := range page.Items {
+			if err := s.permits.Delete(ctx, p.GetMetadata().GetId()); err != nil {
+				return fmt.Errorf("delete permit %s: %w", p.GetMetadata().GetId(), err)
+			}
+		}
+	}
+	return s.groups.Delete(ctx, id)
 }
 
 func (s *GroupService) newGroup(ctx context.Context, cmd CreateGroupCmd) (*iampb.Group, error) {

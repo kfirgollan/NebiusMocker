@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
 )
 
@@ -25,11 +26,17 @@ const (
 	AuthnRequired
 )
 
-// DefaultDevToken authenticates as DefaultDevPrincipal unless tokens are overridden.
+// Built-in dev tokens and the principals they authenticate as. The IAM module
+// seeds each principal into the matching default group (admins, editors,
+// viewers). They are documented local-development tokens, not credentials.
 const (
-	DefaultDevToken     = "nmock-dev-admin" //nolint:gosec // documented local dev token, not a credential
-	DefaultDevPrincipal = "tenantuseraccount-e00mock0000000000devadmin"
-	DefaultTenantID     = "tenant-e00mock0000000000default"
+	DefaultDevToken        = "nmock-dev-admin" //nolint:gosec // documented local dev token
+	DefaultDevPrincipal    = "tenantuseraccount-e00mock0000000000devadmin"
+	DefaultEditorToken     = "nmock-dev-editor" //nolint:gosec // documented local dev token
+	DefaultEditorPrincipal = "tenantuseraccount-e00mock000000000deveditor"
+	DefaultViewerToken     = "nmock-dev-viewer" //nolint:gosec // documented local dev token
+	DefaultViewerPrincipal = "tenantuseraccount-e00mock000000000devviewer"
+	DefaultTenantID        = "tenant-e00mock0000000000default"
 )
 
 // Config is the full process configuration.
@@ -39,6 +46,8 @@ type Config struct {
 	// Services lists enabled areas; empty means all linked modules.
 	Services []string
 	Authn    AuthnMode
+	// Authz selects off, audit (log would-be denials) or enforce.
+	Authz authz.Mode
 	// Tokens maps static bearer tokens to principal IDs.
 	Tokens map[string]string
 	// OperationDelay is how long operations stay running; 0 completes them inline.
@@ -53,9 +62,14 @@ type Config struct {
 // Default returns the configuration used when no environment is set.
 func Default() Config {
 	return Config{
-		Listen:         ":4566",
-		Authn:          AuthnOptional,
-		Tokens:         map[string]string{DefaultDevToken: DefaultDevPrincipal},
+		Listen: ":4566",
+		Authn:  AuthnOptional,
+		Authz:  authz.ModeAudit,
+		Tokens: map[string]string{
+			DefaultDevToken:    DefaultDevPrincipal,
+			DefaultEditorToken: DefaultEditorPrincipal,
+			DefaultViewerToken: DefaultViewerPrincipal,
+		},
 		OperationDelay: 0,
 		IDMode:         nid.Random,
 		RoutingCode:    "e00",
@@ -79,6 +93,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"LISTEN", func(v string) error { c.Listen = v; return nil }},
 		{"SERVICES", func(v string) error { c.Services = splitList(v); return nil }},
 		{"AUTHN", func(v string) error { return parseAuthn(v, &c.Authn) }},
+		{"AUTHZ", func(v string) error { return parseAuthz(v, &c.Authz) }},
 		{"DEV_TOKENS", func(v string) error {
 			t, err := parseTokens(v)
 			c.Tokens = t
@@ -120,6 +135,20 @@ func parseAuthn(v string, out *AuthnMode) error {
 		*out = AuthnRequired
 	default:
 		return fmt.Errorf("want optional or required, got %q", v)
+	}
+	return nil
+}
+
+func parseAuthz(v string, out *authz.Mode) error {
+	switch v {
+	case "off":
+		*out = authz.ModeOff
+	case "audit":
+		*out = authz.ModeAudit
+	case "enforce":
+		*out = authz.ModeEnforce
+	default:
+		return fmt.Errorf("want off, audit or enforce, got %q", v)
 	}
 	return nil
 }

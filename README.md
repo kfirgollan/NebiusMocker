@@ -4,7 +4,8 @@ A local emulator of the [Nebius AI Cloud](https://nebius.com) API, in the spirit
 gRPC services as the real cloud, so the **official** Nebius Terraform provider, CLI and SDKs run against your laptop or
 CI with no Nebius account.
 
-> Status: early. **IAM groups** work end to end with the official Terraform provider. See
+> Status: early. **IAM groups, memberships and access permits, with enforced authorization,** work end to end with the
+> official Terraform provider. See
 > [docs/services/iam.md](docs/services/iam.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
 
 ## Quick start
@@ -40,7 +41,8 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 |---|---|---|
 | `NEBIUS_MOCKER_LISTEN` | `:4566` | gRPC edge address |
 | `NEBIUS_MOCKER_AUTHN` | `optional` | `required` rejects requests without a valid token |
-| `NEBIUS_MOCKER_DEV_TOKENS` | `nmock-dev-admin=<dev user>` | `token=principal,…` static tokens |
+| `NEBIUS_MOCKER_AUTHZ` | `audit` | `enforce` blocks requests the caller's roles do not allow; `audit` only logs them; `off` skips checks |
+| `NEBIUS_MOCKER_DEV_TOKENS` | `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` | `token=principal,…` static tokens |
 | `NEBIUS_MOCKER_OP_DELAY` | `0` | Keep operations running this long (exercise client polling) |
 | `NEBIUS_MOCKER_IDS` | `random` | `sequential` for predictable IDs |
 

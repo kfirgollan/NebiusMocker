@@ -16,7 +16,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_PER_SERVICE_PORTS` | `0` | Also open one port per service |
 | `NEBIUS_MOCKER_AUTHN` | profile | `optional` \| `required` |
 | `NEBIUS_MOCKER_AUTHZ` | profile | `off` \| `audit` \| `enforce` |
-| `NEBIUS_MOCKER_DEV_TOKENS` | `nmock-dev-admin=tenantuseraccount-e00mock…` | Static tokens → principals |
+| `NEBIUS_MOCKER_DEV_TOKENS` | `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` → seeded members of `admins`/`editors`/`viewers` | Static tokens → principals (`token=principal,…` replaces the defaults) |
 | `NEBIUS_MOCKER_TOKEN_SECRET` | random per boot | HMAC secret. Set it explicitly for split deployments and persistence |
 | `NEBIUS_MOCKER_TOKEN_TTL` | `12h` | Access-token lifetime |
 | `NEBIUS_MOCKER_TIMING` | profile | `instant` \| `fast` \| `realistic` \| path to a durations YAML |

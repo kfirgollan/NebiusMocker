@@ -55,7 +55,7 @@ func TestGroupLifecycle(t *testing.T) {
 	inst, svc := startIAM(t, testkit.WithOperationDelay(50*time.Millisecond))
 	ctx := t.Context()
 
-	g := createGroup(t, svc, inst.TenantID, "admins", map[string]string{"team": "core"})
+	g := createGroup(t, svc, inst.TenantID, "platform", map[string]string{"team": "core"})
 	if got, want := g.GetMetadata().GetResourceVersion(), int64(1); got != want {
 		t.Errorf("resource_version = %d, want %d", got, want)
 	}
@@ -63,7 +63,7 @@ func TestGroupLifecycle(t *testing.T) {
 		t.Errorf("status.state = %v, want ACTIVE", got)
 	}
 
-	byName, err := svc.GetByName(ctx, &iampb.GetGroupByNameRequest{ParentId: inst.TenantID, Name: "admins"})
+	byName, err := svc.GetByName(ctx, &iampb.GetGroupByNameRequest{ParentId: inst.TenantID, Name: "platform"})
 	if err != nil {
 		t.Fatalf("GetByName: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGroupErrors(t *testing.T) {
 func TestGroupListPaging(t *testing.T) {
 	t.Parallel()
 	inst, svc := startIAM(t)
-	want := map[string]bool{}
+	want := map[string]bool{"admins": true, "editors": true, "viewers": true} // seeded defaults
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
 		createGroup(t, svc, inst.TenantID, n, nil)
 		want[n] = true

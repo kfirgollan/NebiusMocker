@@ -11,6 +11,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
+
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/store"
 )
@@ -89,4 +91,75 @@ func list[T proto.Message](ctx context.Context, st store.Store, kind, parentID s
 		items = append(items, m)
 	}
 	return items, next, nil
+}
+
+// metadataOf is implemented by every Nebius resource message.
+type metadataOf interface {
+	proto.Message
+	GetMetadata() *commonpb.ResourceMetadata
+}
+
+// get reads one record of kind by ID.
+func get[T proto.Message](ctx context.Context, st store.Store, kind, id string, newMsg func() T) (T, error) {
+	var rec store.Record
+	err := st.View(ctx, func(tx store.Tx) error {
+		var gerr error
+		rec, gerr = tx.Get(kind, id)
+		return gerr
+	})
+	if err != nil {
+		var zero T
+		return zero, toDomain(err, id)
+	}
+	return decode(rec, newMsg)
+}
+
+// write stores msg. With create it fails if the ID exists; otherwise the ID
+// must exist. check, when set, runs inside the transaction (uniqueness rules).
+func write(ctx context.Context, st store.Store, kind string, msg metadataOf, create bool, check func(tx store.Tx) error) error {
+	md := msg.GetMetadata()
+	data, err := marshal.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("encode %s %s: %w", kind, md.GetId(), err)
+	}
+	err = st.Update(ctx, func(tx store.Tx) error {
+		_, getErr := tx.Get(kind, md.GetId())
+		switch {
+		case create && getErr == nil:
+			return errs.AlreadyExists(md.GetId(), kind+" already exists")
+		case !create && getErr != nil:
+			return getErr
+		}
+		if check != nil {
+			if err := check(tx); err != nil {
+				return err
+			}
+		}
+		_, putErr := tx.Put(store.Record{Kind: kind, ID: md.GetId(), ParentID: md.GetParentId(), Name: md.GetName(), Data: data})
+		return putErr
+	})
+	return toDomain(err, md.GetId())
+}
+
+// remove deletes one record of kind.
+func remove(ctx context.Context, st store.Store, kind, id string) error {
+	err := st.Update(ctx, func(tx store.Tx) error { return tx.Delete(kind, id) })
+	return toDomain(err, id)
+}
+
+// siblings decodes every record of kind under parentID inside tx.
+func siblings[T proto.Message](tx store.Tx, kind, parentID string, newMsg func() T) ([]T, error) {
+	recs, err := tx.List(store.ListQuery{Kind: kind, ParentID: parentID})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]T, 0, len(recs))
+	for _, r := range recs {
+		m, err := decode(r, newMsg)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }

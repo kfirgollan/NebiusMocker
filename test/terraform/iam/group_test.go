@@ -30,6 +30,7 @@ import (
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamsvc "github.com/nebius/gosdk/services/nebius/iam/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
@@ -39,6 +40,10 @@ import (
 const providerVersion = "0.6.91"
 
 const planFile = "tfplan"
+
+// seededGroups exist in every mock tenant (like Nebius's default groups) and
+// are not managed by these configs.
+var seededGroups = map[string]bool{"admins": true, "editors": true, "viewers": true}
 
 var mockerLogs = flag.Bool("mocker-logs", false, "print NebiusMocker's request log to the test output")
 
@@ -54,7 +59,7 @@ func mockerOptions(opts ...testkit.Option) []testkit.Option {
 func TestGroupsLifecycle(t *testing.T) {
 	// A non-zero delay makes every operation asynchronous, so the provider's
 	// OperationService polling path is exercised, not just synchronous replies.
-	inst := testkit.StartT(t, []mocker.Module{iam.New()}, mockerOptions(testkit.WithOperationDelay(300*time.Millisecond), testkit.WithAuthnRequired())...)
+	inst := testkit.StartT(t, []mocker.Module{iam.New()}, mockerOptions(testkit.WithOperationDelay(300*time.Millisecond), testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce))...)
 	groups := iamsvc.NewGroupService(inst.SDK(t))
 	tf := newTerraform(t, inst)
 
@@ -104,7 +109,7 @@ func TestGroupsLifecycle(t *testing.T) {
 // TestGroupInPlaceUpdate checks that label and name changes are planned and
 // applied in place (Update with X-ResetMask), keep the same ID and leave no drift.
 func TestGroupInPlaceUpdate(t *testing.T) {
-	inst := testkit.StartT(t, []mocker.Module{iam.New()}, mockerOptions(testkit.WithAuthnRequired())...)
+	inst := testkit.StartT(t, []mocker.Module{iam.New()}, mockerOptions(testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce))...)
 	groups := iamsvc.NewGroupService(inst.SDK(t))
 	tf := newTerraform(t, inst)
 	group := func(name, labels string) string {
@@ -173,6 +178,12 @@ type tfRun struct {
 
 func newTerraform(t *testing.T, inst *testkit.Instance) *tfRun {
 	t.Helper()
+	return newTerraformAs(t, inst, inst.Token)
+}
+
+// newTerraformAs is newTerraform with the provider authenticating with token.
+func newTerraformAs(t *testing.T, inst *testkit.Instance, token string) *tfRun {
+	t.Helper()
 	bin, err := exec.LookPath("terraform")
 	if err != nil {
 		t.Skip("terraform not found on PATH")
@@ -182,7 +193,7 @@ func newTerraform(t *testing.T, inst *testkit.Instance) *tfRun {
 	if err != nil {
 		t.Fatalf("tfexec: %v", err)
 	}
-	r := &tfRun{tf: tf, dir: dir, addr: inst.Addr, token: inst.Token, tenantID: inst.TenantID}
+	r := &tfRun{tf: tf, dir: dir, addr: inst.Addr, token: token, tenantID: inst.TenantID}
 	if err := tf.SetEnv(childEnv(map[string]string{
 		"CHECKPOINT_DISABLE":         "1",
 		"TF_PLUGIN_CACHE_DIR":        pluginCacheDir(t),
@@ -248,7 +259,7 @@ func (r *tfRun) init(t *testing.T) {
 	}
 }
 
-// expectPlan plans to a file and asserts the action for each group (by name).
+// expectPlan plans to a file and asserts the action for each resource (by name).
 func (r *tfRun) expectPlan(t *testing.T, want map[string]string) {
 	t.Helper()
 	if _, err := r.tf.Plan(t.Context(), tfexec.Out(planFile)); err != nil {
@@ -260,7 +271,7 @@ func (r *tfRun) expectPlan(t *testing.T, want map[string]string) {
 	}
 	got := map[string]string{}
 	for _, rc := range plan.ResourceChanges {
-		if rc.Type != "nebius_iam_v1_group" {
+		if !strings.HasPrefix(rc.Type, "nebius_") {
 			t.Errorf("unexpected resource in plan: %s", rc.Address)
 			continue
 		}
@@ -326,7 +337,9 @@ func assertService(t *testing.T, groups iamsvc.GroupService, tenantID string, wa
 	}
 	got := map[string]string{}
 	for _, g := range resp.GetItems() {
-		got[g.GetMetadata().GetName()] = g.GetMetadata().GetId()
+		if !seededGroups[g.GetMetadata().GetName()] {
+			got[g.GetMetadata().GetName()] = g.GetMetadata().GetId()
+		}
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("mock groups = %v, want (terraform state) %v", got, want)

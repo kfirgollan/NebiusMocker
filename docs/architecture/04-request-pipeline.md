@@ -67,8 +67,8 @@ Order matters. Each step can short-circuit with a gRPC status.
 | 3 | **faults** | Match rules from [09](09-quotas-limits-faults.md) and inject latency or errors | any |
 | 4 | **authn** | Parse `authorization: Bearer <token>`; resolve the token to a `Principal` (user account, service account, or anonymous). `TokenExchangeService` and health/reflection are exempt | `UNAUTHENTICATED` |
 | 5 | **rate limit** | Token bucket per (principal, service), configurable | `RESOURCE_EXHAUSTED` + `TooManyRequests` |
-| 6 | **authz** | Map method → permission (from module `Kinds`/explicit table), find the target resource's ancestry, evaluate | `PERMISSION_DENIED` + `PermissionDenied{resource_id}` |
-| 7 | **validation** | `protovalidate` on the request using the `buf.validate` annotations already in the protos | `INVALID_ARGUMENT` + `BadRequest{violations}` |
+| 6 | **validation** | `protovalidate` on the request using the `buf.validate` annotations already in the protos. Runs before authz so targets are read from well-formed requests | `INVALID_ARGUMENT` + `BadRequest{violations}` |
+| 7 | **authz** | Map method → permission (rules each module registers in `authz.Rules`), walk the target resource's ancestry, evaluate | `PERMISSION_DENIED` + `PermissionDenied{resource_id}`; denied reads → `NOT_FOUND` |
 | 8 | **idempotency** | For mutating RPCs that carry `X-Idempotency-Key`, return the stored response if (key, principal, method) was seen, and reject a different payload under the same key | `INVALID_ARGUMENT` on payload mismatch |
 | 9 | **masks** | Parse `X-ResetMask` (Update) and `X-SelectMask` into the request context | `INVALID_ARGUMENT` |
 | 10 | **handler** | Module code / resource framework | domain errors |

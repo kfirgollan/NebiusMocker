@@ -9,8 +9,12 @@
 |---|---|
 | Seeded default tenant (`tenant-e00mock0000000000default`) | ✅ |
 | `nebius.iam.v1.GroupService`: Create, Get, GetByName, List (paged), Update (reset mask, `resource_version`), Delete | ✅ T1 |
-| `nebius_iam_v1_group` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
-| Static dev-token authentication | ✅ |
+| `nebius.iam.v1.GroupMembershipService`: Create, Get, Delete, ListMembers, ListMemberOf (`*WithAttributes` not yet) | ✅ T1 |
+| `nebius.iam.v1.AccessPermitService`: Create, Get, Delete, List | ✅ T1 |
+| Seeded `admins` / `editors` / `viewers` groups with tenant-level `admin` / `editor` / `viewer` permits | ✅ |
+| Authorization (`NEBIUS_MOCKER_AUTHZ=off\|audit\|enforce`) from memberships + permits, inherited down the hierarchy | ✅ |
+| `nebius_iam_v1_group`, `_group_membership`, `_access_permit` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
+| Static dev tokens: `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` (members of the seeded groups) | ✅ |
 | Everything else in this document | Planned |
 
 Covered by unit tests (`services/iam/domain`, `services/iam/dal`), gosdk contract tests (`test/contract`) and the

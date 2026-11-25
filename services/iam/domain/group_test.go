@@ -99,7 +99,10 @@ func newService(t *testing.T) (*domain.GroupService, *fakeGroups, *clock.Manual)
 	t.Helper()
 	groups := &fakeGroups{byID: map[string]*iampb.Group{}}
 	clk := clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	svc, err := domain.NewGroupService(groups, fakeTenants{}, inlineOps{}, &seqIDs{}, clk)
+	svc, err := domain.NewGroupService(domain.GroupDeps{
+		Groups: groups, Tenants: fakeTenants{}, Memberships: newFakeMemberships(), Permits: newFakePermits(),
+		Ops: inlineOps{}, IDs: &seqIDs{}, Clock: clk,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

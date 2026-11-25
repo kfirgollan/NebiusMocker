@@ -41,12 +41,14 @@ type Record struct {
 	Seq uint64
 }
 
-// ListQuery selects records of one kind under one parent, after a cursor.
+// ListQuery selects records of one kind under one parent (or under any parent
+// when AnyParent is set), after a cursor.
 type ListQuery struct {
-	Kind     string
-	ParentID string
-	AfterSeq uint64 // exclusive; 0 starts from the beginning
-	Limit    int    // 0 means no limit
+	Kind      string
+	ParentID  string
+	AnyParent bool
+	AfterSeq  uint64 // exclusive; 0 starts from the beginning
+	Limit     int    // 0 means no limit
 }
 
 // Tx is a read-write view of the store inside a transaction.
