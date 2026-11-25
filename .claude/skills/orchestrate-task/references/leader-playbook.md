@@ -76,6 +76,11 @@ verifies your work.
 
 ## 6. Report (final message)
 
+**Always send the final report to `main` with `SendMessage` (to = "main"), as well as returning it.** A message from
+another leader can resume you, and your returned output then goes to that leader instead of the dispatcher. The
+dispatcher can only verify and close out your task if it receives the report. Also set your final ledger status
+(`done`, `failed` or `blocked`).
+
 At most about 40 lines:
 - the outcome: **shipped** with the commit sha, or **not shipped** with the blocker;
 - what was built;
