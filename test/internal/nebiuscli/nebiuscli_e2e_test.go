@@ -3,6 +3,7 @@
 package nebiuscli_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,11 +27,17 @@ func TestCLIReachesMocker(t *testing.T) {
 		t.Fatalf("nebius version = %q, want %s", res.Stdout, nebiuscli.Version)
 	}
 
-	res, err = cli.Run(t.Context(), "iam", "group", "list", "--parent-id", inst.TenantID, "--format", "json")
-	if err != nil {
-		t.Fatalf("iam group list: %v", err)
+	var groups struct {
+		Items []group `json:"items"`
 	}
-	if !strings.Contains(res.Stdout, `"admins"`) {
-		t.Fatalf("iam group list output does not contain the seeded admins group:\n%s", res.Stdout)
+	cli.JSON(t, &groups, "iam", "group", "list", "--parent-id", inst.TenantID)
+	if !slices.ContainsFunc(groups.Items, func(g group) bool { return g.Metadata.Name == "admins" }) {
+		t.Fatalf("iam group list = %+v, want the seeded admins group", groups.Items)
 	}
+}
+
+type group struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
 }

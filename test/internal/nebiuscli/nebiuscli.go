@@ -25,6 +25,7 @@ package nebiuscli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,7 +71,9 @@ type Result struct {
 	Stderr string
 }
 
-// Binary returns the path of the pinned CLI, installing it on first use.
+// Binary returns the path of the pinned CLI, installing it on first use. The
+// test is skipped when the installer cannot be downloaded (offline); any other
+// install failure fails it.
 func Binary(tb testing.TB) string {
 	tb.Helper()
 	cache, err := os.UserCacheDir()
@@ -102,7 +105,7 @@ func install(tb testing.TB, dir string) error {
 	defer func() { _ = os.RemoveAll(stage) }() // best-effort: staging leftovers
 	script := filepath.Join(stage, "install.sh")
 	if err := download(tb.Context(), InstallerURL, script); err != nil {
-		return err
+		tb.Skipf("nebiuscli: cannot download the CLI installer (offline?): %v", err)
 	}
 	home := filepath.Join(stage, "home")
 	tmp := filepath.Join(stage, "tmp")
@@ -202,6 +205,19 @@ func (c *CLI) Env() []string { return append(baseEnv(), "HOME="+c.home) }
 // fails with an error carrying stderr when the command exits non-zero.
 func (c *CLI) Run(ctx context.Context, args ...string) (Result, error) {
 	return c.exec(ctx, nil, withGlobalFlags(args))
+}
+
+// JSON runs the command with "--format json" appended and decodes stdout into
+// v, failing the test on any error.
+func (c *CLI) JSON(tb testing.TB, v any, args ...string) {
+	tb.Helper()
+	res, err := c.Run(tb.Context(), append(append([]string{}, args...), "--format", "json")...)
+	if err != nil {
+		tb.Fatalf("nebiuscli: %v", err)
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), v); err != nil {
+		tb.Fatalf("nebiuscli: decode JSON output of %s: %v\n%s", strings.Join(args, " "), err, res.Stdout)
+	}
 }
 
 // RunStdin is Run with stdin.
