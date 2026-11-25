@@ -4,17 +4,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 // AIConfig configures the AI endpoints area (NEBIUS_MOCKER_AI_*).
 type AIConfig struct {
-	// Listen is the address of the stub endpoint data plane
-	// (NEBIUS_MOCKER_AI_LISTEN, default 127.0.0.1:4600).
+	// Listen is the address of the stub endpoint data plane, served over
+	// HTTPS (NEBIUS_MOCKER_AI_LISTEN, default 127.0.0.1:4600).
 	Listen string
 	// PublicURL, when set, is the base URL written into endpoint statuses
 	// instead of one derived from the bound listener
-	// (NEBIUS_MOCKER_AI_PUBLIC_URL, e.g. "http://mocker.local:4600").
+	// (NEBIUS_MOCKER_AI_PUBLIC_URL, e.g. "https://mocker.local:4600").
 	PublicURL string
+	// TCPListen is the address of the TLS stub listener for TCP ports
+	// (NEBIUS_MOCKER_AI_TCP_LISTEN, default 127.0.0.1:4601).
+	TCPListen string
+	// TCPDomain is the DNS suffix of TCP port addresses,
+	// tls://<endpoint-id>-p<port>.<TCPDomain>:<port of TCPListen>
+	// (NEBIUS_MOCKER_AI_TCP_DOMAIN, default ai.localhost, which resolves to
+	// loopback).
+	TCPDomain string
+	// TLSDir holds the local CA that signs the data plane's certificates;
+	// clients trust <TLSDir>/ca.pem (NEBIUS_MOCKER_AI_TLS_DIR, default
+	// <user config dir>/nebius-mocker/ca).
+	TLSDir string
 	// Platforms is the compute platform catalog endpoints are validated
 	// against (NEBIUS_MOCKER_AI_PLATFORMS, JSON). It stands in for a compute
 	// PlatformService until one exists.
@@ -68,7 +82,22 @@ func DefaultAIPlatforms() []AIPlatform {
 }
 
 func defaultAI() AIConfig {
-	return AIConfig{Listen: "127.0.0.1:4600", Platforms: DefaultAIPlatforms()}
+	return AIConfig{
+		Listen:    "127.0.0.1:4600",
+		TCPListen: "127.0.0.1:4601",
+		TCPDomain: "ai.localhost",
+		TLSDir:    defaultCADir(),
+		Platforms: DefaultAIPlatforms(),
+	}
+}
+
+// defaultCADir is where the mocker keeps its local CA by default.
+func defaultCADir() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "nebius-mocker", "ca")
 }
 
 func parseAIPlatforms(v string, out *[]AIPlatform) error {

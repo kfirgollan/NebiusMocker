@@ -1,13 +1,15 @@
 package contract
 
 import (
-	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -15,21 +17,21 @@ import (
 	aipb "github.com/nebius/gosdk/proto/nebius/ai/v1"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
+	mysteryboxpb "github.com/nebius/gosdk/proto/nebius/mysterybox/v1"
 	aisvc "github.com/nebius/gosdk/services/nebius/ai/v1"
+	mbsvc "github.com/nebius/gosdk/services/nebius/mysterybox/v1"
 
-	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
-	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
 	"github.com/kfirgollan/NebiusMocker/services/ai"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
+	"github.com/kfirgollan/NebiusMocker/services/mysterybox"
+	"github.com/kfirgollan/NebiusMocker/services/vpc"
 )
 
 const (
-	aiToken     = "s3cret"
-	aiSubnetOK  = "vpcsubnet-known"
-	aiSubnetBad = "vpcsubnet-unknown"
-	aiGiB       = int64(1) << 30
+	aiToken = "s3cret"
+	aiGiB   = int64(1) << 30
 )
 
 // aiEnv is a running mocker with the IAM and AI modules.
@@ -37,14 +39,27 @@ type aiEnv struct {
 	inst *testkit.Instance
 	mod  *ai.Module
 	svc  aisvc.EndpointService
+	// http trusts the data plane's local CA, as `curl --cacert ca.pem` would.
+	http *http.Client
+	ca   *x509.CertPool
 }
 
 func startAI(t *testing.T, extra []mocker.Module, opts ...testkit.Option) *aiEnv {
 	t.Helper()
-	mod := ai.New(ai.WithListen("127.0.0.1:0"))
+	mod := ai.New(ai.WithListen("127.0.0.1:0"), ai.WithTLSDir(t.TempDir()))
 	mods := append([]mocker.Module{iam.New(), mod}, extra...)
 	inst := testkit.StartT(t, mods, opts...)
-	return &aiEnv{inst: inst, mod: mod, svc: aisvc.NewEndpointService(inst.SDK(t))}
+	pem, err := os.ReadFile(mod.CAFile())
+	if err != nil {
+		t.Fatalf("read CA file: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		t.Fatalf("CA file %s holds no certificate", mod.CAFile())
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(client.CloseIdleConnections)
+	return &aiEnv{inst: inst, mod: mod, svc: aisvc.NewEndpointService(inst.SDK(t)), http: client, ca: pool}
 }
 
 // validSpec is a spec the mocker accepts.
@@ -142,7 +157,13 @@ func TestAIEndpointCRUD(t *testing.T) {
 	if len(st.GetInstances()) != 1 {
 		t.Errorf("instances = %d, want 1", len(st.GetInstances()))
 	}
+	if !strings.HasPrefix(env.mod.DataPlaneURL(), "https://") {
+		t.Errorf("DataPlaneURL = %q, want https://", env.mod.DataPlaneURL())
+	}
 	wantURLs := []string{env.mod.DataPlaneURL() + "/" + id}
+	if len(st.GetPublicEndpoints()) != 1 || !strings.HasPrefix(st.GetPublicEndpoints()[0], "https://") {
+		t.Errorf("public_endpoints = %v, want one https:// URL", st.GetPublicEndpoints())
+	}
 	if diff := cmp.Diff(wantURLs, st.GetPublicEndpoints()); diff != "" {
 		t.Errorf("public_endpoints (-want +got):\n%s", diff)
 	}
@@ -330,6 +351,10 @@ func TestAIEndpointValidation(t *testing.T) {
 		{"unknown platform", func(s *aipb.EndpointSpec) { s.Platform = "cpu-nope" }, codes.InvalidArgument},
 		{"bad preset", func(s *aipb.EndpointSpec) { s.Preset = "1000vcpu" }, codes.InvalidArgument},
 		{"missing image", func(s *aipb.EndpointSpec) { s.Image = "" }, codes.InvalidArgument},
+		{"udp port", func(s *aipb.EndpointSpec) {
+			s.AuthToken = ""
+			s.Ports = []*aipb.EndpointSpec_Port{{ContainerPort: 53, Protocol: aipb.EndpointSpec_Port_UDP}}
+		}, codes.InvalidArgument},
 		{"disk too small", func(s *aipb.EndpointSpec) { s.Disk.SizeBytes = aiGiB }, codes.InvalidArgument},
 		{"taken", nil, codes.AlreadyExists},
 	}
@@ -350,91 +375,76 @@ func TestAIEndpointValidation(t *testing.T) {
 	}
 }
 
-// subnetModule registers the "vpcsubnet" kind with a fixed set of IDs.
-type subnetModule struct{}
-
-func (subnetModule) Name() string { return "fakevpc" }
-
-func (subnetModule) Register(_ context.Context, _ grpc.ServiceRegistrar, deps mocker.Deps) error {
-	deps.Authz.RegisterKind("vpcsubnet", func(_ context.Context, id string) (string, error) {
-		if id == aiSubnetOK {
-			return "", nil
-		}
-		return "", errs.NotFound(id)
-	})
-	return nil
-}
-
 func TestAIEndpointSubnetReference(t *testing.T) {
 	t.Parallel()
+	const missing = "vpcsubnet-e00doesnotexist00"
 	setSubnet := func(id string) func(*aipb.EndpointSpec) {
 		return func(s *aipb.EndpointSpec) { s.SubnetId = id }
 	}
 
-	t.Run("registered kind checks existence", func(t *testing.T) {
+	t.Run("vpc enabled checks existence", func(t *testing.T) {
 		t.Parallel()
-		env := startAI(t, []mocker.Module{subnetModule{}})
+		env := startAI(t, []mocker.Module{vpc.New()})
+		c := vpcClientsFor(t, env.inst, env.inst.Token)
+		subnetID := newSubnet(t, c, "ai-sub", newNetwork(t, c, "ai-net"), "/24")
+
 		spec := validSpec()
-		setSubnet(aiSubnetBad)(spec)
+		setSubnet(missing)(spec)
 		_, err := env.svc.Create(t.Context(), aiCreateReq(env.inst.ProjectID, "bad", spec))
 		assertCode(t, err, codes.NotFound)
-		aiCreate(t, env.svc, env.inst.ProjectID, "good", setSubnet(aiSubnetOK))
+		if !strings.Contains(err.Error(), missing) {
+			t.Errorf("error %q does not name the subnet %s", err, missing)
+		}
+		id := aiCreate(t, env.svc, env.inst.ProjectID, "good", setSubnet(subnetID))
+		got, err := env.svc.Get(t.Context(), &aipb.GetEndpointRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.GetSpec().GetSubnetId() != subnetID {
+			t.Errorf("spec.subnet_id = %q, want %q", got.GetSpec().GetSubnetId(), subnetID)
+		}
 	})
-	t.Run("unregistered kind is not checked", func(t *testing.T) {
+	t.Run("vpc not enabled is not checked", func(t *testing.T) {
 		t.Parallel()
 		env := startAI(t, nil)
-		aiCreate(t, env.svc, env.inst.ProjectID, "free", setSubnet(aiSubnetBad))
+		aiCreate(t, env.svc, env.inst.ProjectID, "free", setSubnet(missing))
 	})
-}
-
-// fakeSecrets is a MysteryBox stand-in: secret ID to AUTH_TOKEN value.
-type fakeSecrets map[string]string
-
-func (f fakeSecrets) SecretPayload(_ context.Context, ref peer.SecretRef) (peer.SecretPayload, error) {
-	tok, ok := f[ref.SecretID]
-	if !ok {
-		return peer.SecretPayload{}, errs.NotFound(ref.SecretID)
-	}
-	return peer.SecretPayload{
-		SecretID: ref.SecretID, VersionID: "mbsecver-pinned",
-		Entries: []peer.PayloadEntry{{Key: "AUTH_TOKEN", StringValue: tok}},
-	}, nil
-}
-
-type secretsModule struct{ secrets fakeSecrets }
-
-func (secretsModule) Name() string { return "fakemysterybox" }
-
-func (m secretsModule) Register(_ context.Context, _ grpc.ServiceRegistrar, deps mocker.Deps) error {
-	return peer.Provide[peer.SecretPayloads](deps.Peers, peer.SecretPayloadsKey, m.secrets)
 }
 
 func TestAIEndpointMysteryBox(t *testing.T) {
 	t.Parallel()
-	env := startAI(t, []mocker.Module{secretsModule{fakeSecrets{"mbsec-1": "box-token"}}})
+	env := startAI(t, []mocker.Module{mysterybox.New()})
 	parent := env.inst.ProjectID
+	mb := mbsvc.NewSecretService(env.inst.SDK(t))
+	secretID := mbCreateSecret(t, mb, parent, "ai-token", []*mysteryboxpb.Payload{mbStr("AUTH_TOKEN", "box-token")})
+	versionID := mbPrimary(t, mb, secretID)
 
 	id := aiCreate(t, env.svc, parent, "boxed", func(s *aipb.EndpointSpec) {
 		s.AuthToken = ""
-		s.AuthTokenMysteryboxSecret = &aipb.EndpointSpec_MysteryBoxSecretRef{SecretId: "mbsec-1"}
+		s.AuthTokenMysteryboxSecret = &aipb.EndpointSpec_MysteryBoxSecretRef{SecretId: secretID}
 	})
 	ref := aiGet(t, env.svc, id).GetSpec().GetAuthTokenMysteryboxSecret()
-	if ref.GetSecretId() != "mbsec-1" || ref.GetVersionId() != "mbsecver-pinned" {
-		t.Errorf("secret ref = %v, want mbsec-1 pinned to mbsecver-pinned", ref)
+	if ref.GetSecretId() != secretID || ref.GetVersionId() != versionID {
+		t.Errorf("secret ref = %v, want %s pinned to %s", ref, secretID, versionID)
 	}
 	url := env.mod.DataPlaneURL() + "/" + id + "/x"
-	if res := callDataPlane(t, "GET", url, "Bearer box-token"); res.status != 200 {
+	if res := callDataPlane(t, env.http, http.MethodGet, url, "Bearer box-token"); res.status != http.StatusOK {
 		t.Errorf("box token: status %d, want 200", res.status)
 	}
-	if res := callDataPlane(t, "GET", url, "Bearer "+aiToken); res.status != 401 {
+	if res := callDataPlane(t, env.http, http.MethodGet, url, "Bearer "+aiToken); res.status != http.StatusUnauthorized {
 		t.Errorf("wrong token: status %d, want 401", res.status)
 	}
 
 	spec := validSpec()
 	spec.AuthToken = ""
-	spec.AuthTokenMysteryboxSecret = &aipb.EndpointSpec_MysteryBoxSecretRef{SecretId: "mbsec-unknown"}
+	spec.AuthTokenMysteryboxSecret = &aipb.EndpointSpec_MysteryBoxSecretRef{SecretId: "mbsec-e00doesnotexist00"}
 	_, err := env.svc.Create(t.Context(), aiCreateReq(parent, "missing-secret", spec))
 	assertCode(t, err, codes.NotFound)
+
+	noToken := mbCreateSecret(t, mb, parent, "no-token", []*mysteryboxpb.Payload{mbStr("OTHER", "x")})
+	spec.AuthTokenMysteryboxSecret = &aipb.EndpointSpec_MysteryBoxSecretRef{SecretId: noToken}
+	_, err = env.svc.Create(t.Context(), aiCreateReq(parent, "no-token", spec))
+	assertCode(t, err, codes.InvalidArgument)
 }
 
 func TestAIEndpointSecretView(t *testing.T) {

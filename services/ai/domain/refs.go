@@ -119,6 +119,18 @@ func (s *EndpointService) pinSecret(ctx context.Context, field string, ref secre
 	if err := s.checkRefShape(field+".version_id", versionID, kindSecretVersion); err != nil {
 		return "", "", err
 	}
+	// The endpoint will hand the payload to its workload, so the caller must
+	// be allowed to read it. Checked before the payload is resolved, so a
+	// denied caller learns nothing about its keys.
+	if s.hierarchy.HasKind(kindSecret) {
+		target := secretID
+		if target == "" {
+			target = versionID
+		}
+		if err := s.perms.Require(ctx, permPayloadRead, target); err != nil {
+			return "", "", fmt.Errorf("%s: %w", field, err)
+		}
+	}
 	sp, ok := s.secrets.SecretPayloads()
 	if !ok {
 		if err := s.checkRef(ctx, field+".secret_id", secretID, kindSecret); err != nil {

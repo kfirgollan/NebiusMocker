@@ -3,7 +3,11 @@
 package ai
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,13 +29,19 @@ type endpointDoc struct {
 // TestEndpointQuickstartCLI runs the Nebius docs quickstart for serverless AI
 // endpoints with the official CLI, then calls the endpoint like curl would.
 func TestEndpointQuickstartCLI(t *testing.T) {
-	inst := startMock(t)
+	inst := startMockWithVPC(t)
 	cli := nebiuscli.New(t, nebiuscli.Profile{Addr: inst.Addr, Token: inst.Token, TenantID: inst.TenantID})
 	const (
 		name      = "qs-endpoint-nginx"
 		authToken = "qs-secret-token"
-		subnetID  = "vpcsubnet-e00mock0000000000test"
 	)
+	// The docs point users at the subnet VPC provides by default.
+	var subnet endpointDoc
+	cli.JSON(t, &subnet, "vpc", "subnet", "get-by-name", "--name", "default-subnet", "--parent-id", inst.ProjectID)
+	subnetID := subnet.Metadata.ID
+	if subnetID == "" {
+		t.Fatal("nebius vpc subnet get-by-name default-subnet returned no ID")
+	}
 	run := func(args ...string) string {
 		t.Helper()
 		res, err := cli.Run(t.Context(), args...)
@@ -61,9 +71,10 @@ func TestEndpointQuickstartCLI(t *testing.T) {
 	if e.Status.State != "RUNNING" {
 		t.Fatalf("state after create = %q, want RUNNING", e.Status.State)
 	}
-	i := slices.IndexFunc(e.Status.PublicEndpoints, func(u string) bool { return strings.HasPrefix(u, "http") })
+	// The docs pick the URL with: select(startswith("https://")) | first.
+	i := slices.IndexFunc(e.Status.PublicEndpoints, func(u string) bool { return strings.HasPrefix(u, "https://") })
 	if i < 0 {
-		t.Fatalf("public_endpoints = %v, want an http URL", e.Status.PublicEndpoints)
+		t.Fatalf("public_endpoints = %v, want an https:// URL", e.Status.PublicEndpoints)
 	}
 	url := e.Status.PublicEndpoints[i]
 
@@ -75,31 +86,67 @@ func TestEndpointQuickstartCLI(t *testing.T) {
 		t.Fatalf("endpoint list = %+v, want %s", list.Items, id)
 	}
 
-	assertCall(t, url, authToken, 200)
-	assertCall(t, url, "", 401)
-	assertCall(t, url, "wrong-token", 401)
+	curl(t, inst.CAFile, url, authToken, 200)
+	curl(t, inst.CAFile, url, "", 401)
+	curl(t, inst.CAFile, url, "wrong-token", 401)
 
 	run("ai", "endpoint", "stop", "--id", id)
 	if s := get(id).Status.State; s != "STOPPED" {
 		t.Fatalf("state after stop = %q, want STOPPED", s)
 	}
-	assertCall(t, url, authToken, 503)
+	curl(t, inst.CAFile, url, authToken, 503)
 
 	run("ai", "endpoint", "start", "--id", id)
 	if s := get(id).Status.State; s != "RUNNING" {
 		t.Fatalf("state after start = %q, want RUNNING", s)
 	}
-	assertCall(t, url, authToken, 200)
+	curl(t, inst.CAFile, url, authToken, 200)
 
 	run("ai", "endpoint", "restart", "--id", id)
 	if s := get(id).Status.State; s != "RUNNING" {
 		t.Fatalf("state after restart = %q, want RUNNING", s)
 	}
-	assertCall(t, url, authToken, 200)
+	curl(t, inst.CAFile, url, authToken, 200)
 
 	run("ai", "endpoint", "delete", "--id", id)
 	if _, err := cli.Run(t.Context(), "ai", "endpoint", "get", id); err == nil {
 		t.Fatal("get after delete succeeded, want a not-found error")
 	}
-	assertCall(t, url, authToken, 404)
+	curl(t, inst.CAFile, url, authToken, 404)
+}
+
+// curlCall calls url with the real curl binary, as the docs do, trusting the
+// mock's CA through --cacert. It returns the HTTP status and the body.
+func curlCall(t *testing.T, caFile, url, token string) (status int, body string) {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "body")
+	args := []string{"-sS", "-o", out, "-w", "%{http_code}", "--cacert", caFile}
+	if token != "" {
+		args = append(args, "-H", "Authorization: Bearer "+token)
+	}
+	args = append(args, url)
+	res, err := exec.CommandContext(t.Context(), "curl", args...).Output()
+	if err != nil {
+		t.Fatalf("curl %s: %v (curl is part of the documented flow and must be installed)", url, err)
+	}
+	status, err = strconv.Atoi(strings.TrimSpace(string(res)))
+	if err != nil {
+		t.Fatalf("curl %s printed status %q: %v", url, res, err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read curl body: %v", err)
+	}
+	return status, string(raw)
+}
+
+func curl(t *testing.T, caFile, url, token string, want int) {
+	t.Helper()
+	code, body := curlCall(t, caFile, url, token)
+	if code != want {
+		t.Fatalf("curl %s (token %q) = %d %s, want %d", url, token, code, body, want)
+	}
+	if want == 200 && !strings.Contains(body, "endpoint was called") {
+		t.Fatalf("curl %s body = %s, want it to contain \"endpoint was called\"", url, body)
+	}
 }

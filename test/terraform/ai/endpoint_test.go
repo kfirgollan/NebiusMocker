@@ -11,6 +11,8 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +38,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
 	"github.com/kfirgollan/NebiusMocker/services/ai"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
+	"github.com/kfirgollan/NebiusMocker/test/internal/tfcache"
 )
 
 // providerVersion pins the official provider release under test.
@@ -45,10 +48,49 @@ const planFile = "tfplan"
 
 const endpointToken = "tf-token-1"
 
-func startMock(t *testing.T) *testkit.Instance {
+// mock is a running NebiusMocker plus the CA its AI data plane is signed by.
+type mock struct {
+	*testkit.Instance
+	// CAFile is the PEM CA certificate users trust to reach the data plane.
+	CAFile string
+}
+
+// startMocker starts the IAM module, the extra modules and the AI module with
+// an HTTPS data plane on loopback and a private TLS directory.
+func startMocker(t *testing.T, extra ...mocker.Module) *mock {
 	t.Helper()
-	aiModule := ai.New(ai.WithListen("127.0.0.1:0"))
-	return testkit.StartT(t, []mocker.Module{iam.New(), aiModule}, testkit.WithAuthz(authz.ModeEnforce))
+	aiModule := ai.New(ai.WithListen("127.0.0.1:0"), ai.WithTLSDir(t.TempDir()))
+	modules := append([]mocker.Module{iam.New()}, extra...)
+	modules = append(modules, aiModule)
+	inst := testkit.StartT(t, modules, testkit.WithAuthz(authz.ModeEnforce))
+	return &mock{Instance: inst, CAFile: aiModule.CAFile()}
+}
+
+func startMock(t *testing.T) *mock {
+	t.Helper()
+	return startMocker(t)
+}
+
+// httpsClient trusts only the mock's CA, like curl --cacert.
+func httpsClient(t *testing.T, caFile string) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs:    caPool(t, caFile),
+		MinVersion: tls.VersionTLS12,
+	}}}
+}
+
+func caPool(t *testing.T, caFile string) *x509.CertPool {
+	t.Helper()
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatalf("read CA %s: %v", caFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		t.Fatalf("CA %s holds no certificate", caFile)
+	}
+	return pool
 }
 
 // endpointConfig renders one nginx endpoint with the given image and labels.
@@ -75,7 +117,7 @@ output "public_endpoint" {
 func TestEndpointLifecycle(t *testing.T) {
 	inst := startMock(t)
 	endpoints := aisvc.NewEndpointService(inst.SDK(t))
-	tf := newTerraform(t, inst)
+	tf := newTerraform(t, inst.Instance)
 
 	tf.writeConfig(t, endpointConfig(inst.ProjectID, "nginx:alpine", `env = "dev"`))
 	tf.init(t)
@@ -103,8 +145,8 @@ func TestEndpointLifecycle(t *testing.T) {
 
 	// The endpoint URL in the state answers authorized calls.
 	url := tf.outputString(t, "public_endpoint")
-	assertCall(t, url, endpointToken, http.StatusOK)
-	assertCall(t, url, "", http.StatusUnauthorized)
+	assertCall(t, inst.CAFile, url, endpointToken, http.StatusOK)
+	assertCall(t, inst.CAFile, url, "", http.StatusUnauthorized)
 
 	// Changing the image and labels forces a replacement (there is no Update RPC).
 	tf.writeConfig(t, endpointConfig(inst.ProjectID, "nginx:1.27-alpine", `env = "prod"`))
@@ -125,7 +167,7 @@ func TestEndpointLifecycle(t *testing.T) {
 		t.Errorf("replaced endpoint = %v", repl)
 	}
 	tf.expectNoChanges(t)
-	assertCall(t, tf.outputString(t, "public_endpoint"), endpointToken, http.StatusOK)
+	assertCall(t, inst.CAFile, tf.outputString(t, "public_endpoint"), endpointToken, http.StatusOK)
 
 	tf.destroy(t)
 	list, err := endpoints.List(t.Context(), &aipb.ListEndpointsRequest{ParentId: inst.ProjectID})
@@ -139,7 +181,7 @@ func TestEndpointLifecycle(t *testing.T) {
 
 func TestEndpointDataSource(t *testing.T) {
 	inst := startMock(t)
-	tf := newTerraform(t, inst)
+	tf := newTerraform(t, inst.Instance)
 
 	tf.writeConfig(t, endpointConfig(inst.ProjectID, "nginx:alpine", `env = "dev"`)+`
 data "nebius_ai_v1_endpoint" "by_id" {
@@ -190,10 +232,11 @@ output "by_name" {
 }
 
 // assertCall calls the endpoint URL, with a bearer token when token is set.
-func assertCall(t *testing.T, url, token string, wantStatus int) {
+// The URL must be https, as the status of a real endpoint is.
+func assertCall(t *testing.T, caFile, url, token string, wantStatus int) {
 	t.Helper()
-	if !strings.Contains(url, "://") {
-		url = "http://" + url
+	if !strings.HasPrefix(url, "https://") {
+		t.Fatalf("endpoint URL %q does not start with https://", url)
 	}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -202,7 +245,7 @@ func assertCall(t *testing.T, url, token string, wantStatus int) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpsClient(t, caFile).Do(req)
 	if err != nil {
 		t.Fatalf("call %s: %v", url, err)
 	}
@@ -244,11 +287,12 @@ func newTerraform(t *testing.T, inst *testkit.Instance) *tfRun {
 	}
 	r := &tfRun{tf: tf, dir: dir, addr: inst.Addr, token: inst.Token}
 	if err := tf.SetEnv(childEnv(map[string]string{
-		"CHECKPOINT_DISABLE":         "1",
-		"TF_PLUGIN_CACHE_DIR":        pluginCacheDir(t),
-		"TF_CLI_CONFIG_FILE":         writeCLIConfig(t, dir),
-		"TF_REGISTRY_CLIENT_TIMEOUT": "60",
-		"NEBIUS_IAM_TOKEN":           "", // credentials come from the provider block only
+		"CHECKPOINT_DISABLE":                             "1",
+		"TF_PLUGIN_CACHE_DIR":                            tfcache.Dir(t),
+		"TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE": "1", // reuse the first download; the cache is private
+		"TF_CLI_CONFIG_FILE":                             writeCLIConfig(t, dir),
+		"TF_REGISTRY_CLIENT_TIMEOUT":                     "60",
+		"NEBIUS_IAM_TOKEN":                               "", // credentials come from the provider block only
 	})); err != nil {
 		t.Fatalf("tfexec env: %v", err)
 	}
@@ -424,19 +468,10 @@ func childEnv(overrides map[string]string) map[string]string {
 	return env
 }
 
-// pluginCacheDir keeps downloaded providers between runs.
-func pluginCacheDir(t *testing.T) string {
-	t.Helper()
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = t.TempDir()
-	}
-	dir := filepath.Join(base, "nebius-mocker", "terraform-plugins")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("plugin cache dir: %v", err)
-	}
-	return dir
-}
+// The plugin cache is private to this test binary (see tfcache): a cache
+// shared with concurrently running suites gets its provider binary rewritten
+// under a running terraform.
+func TestMain(m *testing.M) { os.Exit(tfcache.Main(m)) }
 
 // writeCLIConfig isolates the run from the developer's ~/.terraformrc, so a
 // local dev_overrides or mirror config cannot swap in a non-official provider.

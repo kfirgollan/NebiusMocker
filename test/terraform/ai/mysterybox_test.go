@@ -11,18 +11,12 @@ import (
 	aipb "github.com/nebius/gosdk/proto/nebius/ai/v1"
 	aisvc "github.com/nebius/gosdk/services/nebius/ai/v1"
 
-	"github.com/kfirgollan/NebiusMocker/pkg/authz"
-	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
-	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
-	"github.com/kfirgollan/NebiusMocker/services/ai"
-	"github.com/kfirgollan/NebiusMocker/services/iam"
 	"github.com/kfirgollan/NebiusMocker/services/mysterybox"
 )
 
-func startMockWithMysteryBox(t *testing.T) *testkit.Instance {
+func startMockWithMysteryBox(t *testing.T) *mock {
 	t.Helper()
-	modules := []mocker.Module{iam.New(), mysterybox.New(), ai.New(ai.WithListen("127.0.0.1:0"))}
-	return testkit.StartT(t, modules, testkit.WithAuthz(authz.ModeEnforce))
+	return startMocker(t, mysterybox.New())
 }
 
 // mysteryBoxEndpointConfig renders a secret holding one payload entry and an
@@ -62,7 +56,7 @@ output "mb_endpoint" {
 func TestEndpointMysteryBoxAuth(t *testing.T) {
 	inst := startMockWithMysteryBox(t)
 	endpoints := aisvc.NewEndpointService(inst.SDK(t))
-	tf := newTerraform(t, inst)
+	tf := newTerraform(t, inst.Instance)
 
 	tf.writeConfig(t, mysteryBoxEndpointConfig(inst.ProjectID, "AUTH_TOKEN"))
 	tf.init(t)
@@ -86,9 +80,9 @@ func TestEndpointMysteryBoxAuth(t *testing.T) {
 	tf.expectNoChanges(t)
 
 	url := tf.outputString(t, "mb_endpoint")
-	assertCall(t, url, "mb-token-1", http.StatusOK)
-	assertCall(t, url, "wrong", http.StatusUnauthorized)
-	assertCall(t, url, "", http.StatusUnauthorized)
+	assertCall(t, inst.CAFile, url, "mb-token-1", http.StatusOK)
+	assertCall(t, inst.CAFile, url, "wrong", http.StatusUnauthorized)
+	assertCall(t, inst.CAFile, url, "", http.StatusUnauthorized)
 
 	tf.destroy(t)
 }
@@ -96,7 +90,7 @@ func TestEndpointMysteryBoxAuth(t *testing.T) {
 // TestEndpointMysteryBoxMissingKey proves a secret without AUTH_TOKEN is rejected.
 func TestEndpointMysteryBoxMissingKey(t *testing.T) {
 	inst := startMockWithMysteryBox(t)
-	tf := newTerraform(t, inst)
+	tf := newTerraform(t, inst.Instance)
 
 	tf.writeConfig(t, mysteryBoxEndpointConfig(inst.ProjectID, "OTHER_KEY"))
 	tf.init(t)

@@ -94,6 +94,11 @@ func httpPorts(spec *aipb.EndpointSpec) []*aipb.EndpointSpec_Port {
 func validatePorts(spec *aipb.EndpointSpec, add func(field, msg string)) {
 	seen := map[string]bool{}
 	for i, p := range spec.GetPorts() {
+		if p.GetProtocol() == aipb.EndpointSpec_Port_UDP {
+			// Nebius documents no address format for UDP ports, so the mock
+			// cannot produce what the cloud would.
+			add(fmt.Sprintf("spec.ports[%d].protocol", i), "UDP ports are not supported by NebiusMocker")
+		}
 		host := p.GetHostPort()
 		if host == 0 {
 			host = p.GetContainerPort()

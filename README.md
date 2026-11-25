@@ -29,7 +29,8 @@ CI with no Nebius account.
 > [docs/services/vpc.md](docs/services/vpc.md#implementation-status).
 > **Serverless AI endpoints** keep a real inventory (validation, lifecycle, start/stop/restart, auth token or
 > MysteryBox secret) through Terraform, the Go SDK and the `nebius ai endpoint` CLI. No container runs: each endpoint
-> URL points at a stub listener on `:4600` that answers `200 "endpoint was called"` to authorized calls; see
+> URL points at an HTTPS stub on `:4600` (local CA, trust it with `curl --cacert`) that answers
+> `200 "endpoint was called"` to authorized calls; see
 > [docs/services/ai.md](docs/services/ai.md#implementation-status).
 > **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
 > event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
@@ -128,7 +129,8 @@ process. The credential-helper flow (`nebius registry configure-helper`) and the
 [docs/services/registry.md](docs/services/registry.md#running-it-the-documented-setup).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
-| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | Stub data plane that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL) |
+| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL; TCP ports use `NEBIUS_MOCKER_AI_TCP_LISTEN`, `:4601`) |
+| `NEBIUS_MOCKER_AI_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA of the AI data plane; trust `<dir>/ca.pem` (`curl --cacert`) |
 
 ## Development
 

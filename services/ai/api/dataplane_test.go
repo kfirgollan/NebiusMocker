@@ -2,16 +2,24 @@ package api_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/localca"
 	"github.com/kfirgollan/NebiusMocker/services/ai/api"
 	"github.com/kfirgollan/NebiusMocker/services/ai/domain"
 )
@@ -22,6 +30,16 @@ type fakeCalls struct {
 	err  error
 
 	target, authorization string
+
+	tcpCall domain.Call
+	tcpErr  error
+	tcpID   string
+	tcpPort int32
+}
+
+func (f *fakeCalls) AuthorizeTCP(_ context.Context, endpointID string, port int32) (domain.Call, error) {
+	f.tcpID, f.tcpPort = endpointID, port
+	return f.tcpCall, f.tcpErr
 }
 
 func (f *fakeCalls) AuthorizeCall(_ context.Context, target, authorization string) (domain.Call, error) {
@@ -31,12 +49,38 @@ func (f *fakeCalls) AuthorizeCall(_ context.Context, target, authorization strin
 
 func newDataPlane() *api.DataPlane { return api.NewDataPlane(slog.New(slog.DiscardHandler)) }
 
+const tcpDomain = "ai.localhost"
+
+// testTLS is a local CA and a data-plane config signed by it.
+func testTLS(t *testing.T, publicURL string) (api.DataPlaneConfig, *x509.CertPool) {
+	t.Helper()
+	ca, err := localca.LoadOrCreate(t.TempDir(), clock.Real{})
+	if err != nil {
+		t.Fatalf("localca: %v", err)
+	}
+	cert, err := ca.Issue("127.0.0.1", "localhost", "*."+tcpDomain)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	return api.DataPlaneConfig{
+		Listen: "127.0.0.1:0", PublicURL: publicURL, TCPListen: "127.0.0.1:0", TCPDomain: tcpDomain, Cert: cert,
+	}, ca.Pool()
+}
+
 // started starts a data plane on a loopback port and stops it at the
 // end of the test, then returns it.
 func started(t *testing.T, calls api.CallAuthorizer, publicURL string) *api.DataPlane {
 	t.Helper()
+	dp, _ := startedTLS(t, calls, publicURL)
+	return dp
+}
+
+// startedTLS is started, also returning the pool that trusts its certificate.
+func startedTLS(t *testing.T, calls api.CallAuthorizer, publicURL string) (*api.DataPlane, *x509.CertPool) {
+	t.Helper()
+	cfg, pool := testTLS(t, publicURL)
 	dp := newDataPlane()
-	if err := dp.Start(t.Context(), calls, "127.0.0.1:0", publicURL); err != nil {
+	if err := dp.Start(t.Context(), calls, cfg); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() {
@@ -44,7 +88,7 @@ func started(t *testing.T, calls api.CallAuthorizer, publicURL string) *api.Data
 			t.Errorf("Stop: %v", err)
 		}
 	})
-	return dp
+	return dp, pool
 }
 
 func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -159,19 +203,18 @@ func TestServeHTTPBeforeStart(t *testing.T) {
 func TestStartServesRealRequests(t *testing.T) {
 	t.Parallel()
 	calls := &fakeCalls{call: domain.Call{EndpointID: "aiendpoint-1", Port: 80}}
-	dp := newDataPlane()
-	if err := dp.Start(t.Context(), calls, "127.0.0.1:0", ""); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	dp, pool := startedTLS(t, calls, "")
 	base := dp.BaseURL()
-	if base == "" || base == "http://127.0.0.1:0" {
-		t.Fatalf("BaseURL = %q, want the bound address", base)
+	if !strings.HasPrefix(base, "https://127.0.0.1:") || base == "https://127.0.0.1:0" {
+		t.Fatalf("BaseURL = %q, want https on the bound address", base)
 	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(client.CloseIdleConnections)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/aiendpoint-1/x/y", http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -186,8 +229,133 @@ func TestStartServesRealRequests(t *testing.T) {
 	if body["path"] != "/x/y" || body["endpoint_id"] != "aiendpoint-1" || body["message"] != "endpoint was called" {
 		t.Errorf("body = %v", body)
 	}
-	if err := dp.Stop(t.Context()); err != nil {
-		t.Fatalf("Stop: %v", err)
+
+	// A client that does not trust the CA is refused.
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/aiendpoint-1", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Error("GET without the CA succeeded, want a certificate error")
+	}
+}
+
+// tcpHostPort extracts the loopback host:port of a tls:// address; the
+// server name is set on the dial, so no DNS is needed.
+func tcpHostPort(t *testing.T, addr string) string {
+	t.Helper()
+	u, err := url.Parse(addr)
+	if err != nil || u.Scheme != "tls" {
+		t.Fatalf("TCPURL = %q, want a tls:// address (%v)", addr, err)
+	}
+	return net.JoinHostPort("127.0.0.1", u.Port())
+}
+
+// dialTCP connects to the TCP stub listener behind addr with the given SNI and
+// returns the one line it sends.
+func dialTCP(t *testing.T, pool *x509.CertPool, hostPort, serverName string) string {
+	t.Helper()
+	d := tls.Dialer{Config: &tls.Config{RootCAs: pool, ServerName: serverName, MinVersion: tls.VersionTLS12}}
+	conn, err := d.DialContext(t.Context(), "tcp", hostPort)
+	if err != nil {
+		t.Fatalf("dial %s as %s: %v", hostPort, serverName, err)
+	}
+	defer conn.Close()
+	line, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return string(line)
+}
+
+func TestTCPStub(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		call       domain.Call
+		err        error
+		serverName string
+		want       string
+		wantID     string
+		wantPort   int32
+	}{
+		{
+			name: "running", call: domain.Call{EndpointID: "aiendpoint-1", Port: 22}, serverName: "aiendpoint-1-p22.ai.localhost",
+			want: "endpoint was called: aiendpoint-1 port 22\n", wantID: "aiendpoint-1", wantPort: 22,
+		},
+		{
+			name: "unknown endpoint", err: errs.NotFound("aiendpoint-9"), serverName: "aiendpoint-9-p22.ai.localhost",
+			want: "error 404: resource not found\n", wantID: "aiendpoint-9", wantPort: 22,
+		},
+		{
+			name: "stopped", err: errs.BadState("aiendpoint-1", "endpoint is not running"), serverName: "aiendpoint-1-p22.ai.localhost",
+			want: "error 503: endpoint is not running\n", wantID: "aiendpoint-1", wantPort: 22,
+		},
+		{
+			name: "server name without endpoint", serverName: "nope.ai.localhost",
+			want: "error 404: no endpoint in TLS server name; connect to <endpoint-id>-p<port>.ai.localhost\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			calls := &fakeCalls{tcpCall: tt.call, tcpErr: tt.err}
+			dp, pool := startedTLS(t, calls, "")
+			addr := tcpHostPort(t, dp.TCPURL("aiendpoint-1", 22))
+			if got := dialTCP(t, pool, addr, tt.serverName); got != tt.want {
+				t.Errorf("line = %q, want %q", got, tt.want)
+			}
+			if calls.tcpID != tt.wantID || calls.tcpPort != tt.wantPort {
+				t.Errorf("AuthorizeTCP(%q, %d), want (%q, %d)", calls.tcpID, calls.tcpPort, tt.wantID, tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestTCPURL(t *testing.T) {
+	t.Parallel()
+	dp := started(t, &fakeCalls{}, "")
+	u, err := url.Parse(dp.TCPURL("aiendpoint-1", 5432))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Scheme != "tls" || u.Hostname() != "aiendpoint-1-p5432.ai.localhost" || u.Port() == "" || u.Port() == "0" {
+		t.Errorf("TCPURL = %q, want tls://aiendpoint-1-p5432.ai.localhost:<port>", u)
+	}
+}
+
+func TestParseTCPHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		host     string
+		wantID   string
+		wantPort int32
+		wantOK   bool
+	}{
+		{"aiendpoint-abc-p22.ai.localhost", "aiendpoint-abc", 22, true},
+		{"AIENDPOINT-abc-p5432.AI.Localhost", "AIENDPOINT-abc", 5432, true},
+		{"a-p1.ai.localhost", "a", 1, true},
+		{"aiendpoint-abc-p22.other.test", "", 0, false},
+		{"ai.localhost", "", 0, false},
+		{".ai.localhost", "", 0, false},
+		{"nope.ai.localhost", "", 0, false},
+		{"-p22.ai.localhost", "", 0, false},
+		{"aiendpoint-abc-p.ai.localhost", "", 0, false},
+		{"aiendpoint-abc-p0.ai.localhost", "", 0, false},
+		{"aiendpoint-abc-p-5.ai.localhost", "", 0, false},
+		{"aiendpoint-abc-pxx.ai.localhost", "", 0, false},
+		{"aiendpoint-abc-p99999999999.ai.localhost", "", 0, false},
+		{"", "", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			t.Parallel()
+			id, port, ok := api.ParseTCPHost(tt.host, "ai.localhost")
+			if id != tt.wantID || port != tt.wantPort || ok != tt.wantOK {
+				t.Errorf("parseTCPHost(%q) = (%q, %d, %v), want (%q, %d, %v)", tt.host, id, port, ok, tt.wantID, tt.wantPort, tt.wantOK)
+			}
+		})
 	}
 }
 

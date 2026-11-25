@@ -30,6 +30,11 @@ const (
 	kindPricingPolicy = "pricingpolicy"
 )
 
+// permPayloadRead is MysteryBox's permission to read a secret's payload.
+// Wiring a secret into an endpoint hands its payload to the workload, so the
+// caller must hold it on every secret the spec references.
+const permPayloadRead = "mysterybox.payload.read"
+
 // EndpointPage is one page of an endpoint listing.
 type EndpointPage struct {
 	Items         []*aipb.Endpoint
@@ -74,7 +79,20 @@ type SecretSource interface {
 
 // DataPlane tells where the stub data plane serves endpoints.
 type DataPlane interface {
-	// BaseURL is the scheme and authority of the stub listener, e.g.
-	// "http://127.0.0.1:4600".
+	// BaseURL is the scheme and authority of the HTTPS stub listener, e.g.
+	// "https://127.0.0.1:4600".
 	BaseURL() string
+	// TCPURL is the address of one TCP port of an endpoint on the TLS stub
+	// listener, e.g. "tls://aiendpoint-…-p5432.ai.localhost:4601".
+	TCPURL(endpointID string, containerPort int32) string
+}
+
+// CallerPermissions checks the calling principal's own permissions, under the
+// configured authorization mode (satisfied by an adapter over the authz
+// engine). Use it for permissions on resources a request references, beyond
+// the RPC's own rule.
+type CallerPermissions interface {
+	// Require returns errs.PermissionDenied (or errs.Unauthenticated) when
+	// enforcement is on and the caller lacks perm on resourceID.
+	Require(ctx context.Context, perm, resourceID string) error
 }

@@ -150,9 +150,22 @@ func (h *fakeHierarchy) Parent(_ context.Context, id string) (string, error) {
 type fakePayloads struct {
 	secrets []peer.SecretPayload
 	err     error
+
+	mu    sync.Mutex
+	reads int
+}
+
+// readCount is how many payloads were requested.
+func (f *fakePayloads) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 func (f *fakePayloads) SecretPayload(_ context.Context, ref peer.SecretRef) (peer.SecretPayload, error) {
+	f.mu.Lock()
+	f.reads++
+	f.mu.Unlock()
 	if f.err != nil {
 		return peer.SecretPayload{}, f.err
 	}
@@ -185,6 +198,37 @@ func (f *fakeSecrets) set(sp peer.SecretPayloads) {
 type fakeDataPlane struct{}
 
 func (fakeDataPlane) BaseURL() string { return testBaseURL }
+
+func (fakeDataPlane) TCPURL(endpointID string, port int32) string {
+	return "tls://" + endpointID + "-p" + strconv.Itoa(int(port)) + ".dp.test:4601"
+}
+
+// permCall is one CallerPermissions.Require call.
+type permCall struct{ Perm, Resource string }
+
+// fakePerms is a domain.CallerPermissions that allows everything except the
+// resources in deny, and records its calls.
+type fakePerms struct {
+	mu    sync.Mutex
+	deny  map[string]bool
+	calls []permCall
+}
+
+func (f *fakePerms) Require(_ context.Context, perm, resourceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, permCall{perm, resourceID})
+	if f.deny[resourceID] {
+		return &errs.Error{Kind: errs.KindPermissionDenied, ResourceID: resourceID, Message: "denied " + perm}
+	}
+	return nil
+}
+
+func (f *fakePerms) recorded() []permCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
 
 // seqIDs is a sequential domain.IDGenerator: "<type>-<n>", counted per type.
 type seqIDs struct {
@@ -242,6 +286,7 @@ type opts struct {
 	kinds   []string // registered kinds in the hierarchy
 	ids     []string // IDs that exist in the hierarchy
 	secrets peer.SecretPayloads
+	deny    []string // resource IDs the caller may not read payloads of
 }
 
 // harness is a service with its fakes.
@@ -250,6 +295,7 @@ type harness struct {
 	repo    *fakeRepo
 	ops     *fakeOps
 	secrets *fakeSecrets
+	perms   *fakePerms
 }
 
 func newService(t *testing.T, o opts) *harness {
@@ -261,10 +307,13 @@ func newService(t *testing.T, o opts) *harness {
 	for _, id := range o.ids {
 		hier.ids[id] = true
 	}
-	h := &harness{repo: newFakeRepo(), ops: &fakeOps{}, secrets: &fakeSecrets{sp: o.secrets}}
+	h := &harness{repo: newFakeRepo(), ops: &fakeOps{}, secrets: &fakeSecrets{sp: o.secrets}, perms: &fakePerms{deny: map[string]bool{}}}
+	for _, id := range o.deny {
+		h.perms.deny[id] = true
+	}
 	svc, err := domain.NewEndpointService(domain.EndpointDeps{
 		Endpoints: h.repo, Ops: h.ops, IDs: &seqIDs{}, Clock: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		Hierarchy: hier, Secrets: h.secrets, DataPlane: fakeDataPlane{},
+		Hierarchy: hier, Secrets: h.secrets, DataPlane: fakeDataPlane{}, Perms: h.perms,
 		Catalog: testCatalog(), Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {

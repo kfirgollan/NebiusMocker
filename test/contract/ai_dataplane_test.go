@@ -17,7 +17,7 @@ type dataPlaneResult struct {
 }
 
 // callDataPlane sends a request with an optional Authorization header.
-func callDataPlane(t *testing.T, method, url, authorization string) dataPlaneResult {
+func callDataPlane(t *testing.T, client *http.Client, method, url, authorization string) dataPlaneResult {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, url, http.NoBody)
 	if err != nil {
@@ -26,7 +26,7 @@ func callDataPlane(t *testing.T, method, url, authorization string) dataPlaneRes
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
@@ -61,7 +61,7 @@ func TestAIDataPlane(t *testing.T) {
 
 	t.Run("correct token", func(t *testing.T) {
 		t.Parallel()
-		res := callDataPlane(t, http.MethodPost, base+"/"+id+"/v1/chat/completions", "Bearer "+aiToken)
+		res := callDataPlane(t, env.http, http.MethodPost, base+"/"+id+"/v1/chat/completions", "Bearer "+aiToken)
 		if res.status != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %v)", res.status, res.body)
 		}
@@ -75,31 +75,31 @@ func TestAIDataPlane(t *testing.T) {
 	})
 	t.Run("missing token", func(t *testing.T) {
 		t.Parallel()
-		if res := callDataPlane(t, http.MethodGet, base+"/"+id+"/x", ""); res.status != http.StatusUnauthorized {
+		if res := callDataPlane(t, env.http, http.MethodGet, base+"/"+id+"/x", ""); res.status != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", res.status)
 		}
 	})
 	t.Run("wrong token", func(t *testing.T) {
 		t.Parallel()
-		if res := callDataPlane(t, http.MethodGet, base+"/"+id+"/x", "Bearer nope"); res.status != http.StatusUnauthorized {
+		if res := callDataPlane(t, env.http, http.MethodGet, base+"/"+id+"/x", "Bearer nope"); res.status != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", res.status)
 		}
 	})
 	t.Run("stopped endpoint", func(t *testing.T) {
 		t.Parallel()
-		if res := callDataPlane(t, http.MethodGet, base+"/"+stopped+"/x", "Bearer "+aiToken); res.status != http.StatusServiceUnavailable {
+		if res := callDataPlane(t, env.http, http.MethodGet, base+"/"+stopped+"/x", "Bearer "+aiToken); res.status != http.StatusServiceUnavailable {
 			t.Errorf("status = %d, want 503", res.status)
 		}
 	})
 	t.Run("unknown endpoint", func(t *testing.T) {
 		t.Parallel()
-		if res := callDataPlane(t, http.MethodGet, base+"/aiendpoint-nope/x", ""); res.status != http.StatusNotFound {
+		if res := callDataPlane(t, env.http, http.MethodGet, base+"/aiendpoint-nope/x", ""); res.status != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", res.status)
 		}
 	})
 	t.Run("no authentication configured", func(t *testing.T) {
 		t.Parallel()
-		if res := callDataPlane(t, http.MethodGet, base+"/"+open+"/x", ""); res.status != http.StatusOK {
+		if res := callDataPlane(t, env.http, http.MethodGet, base+"/"+open+"/x", ""); res.status != http.StatusOK {
 			t.Errorf("status = %d, want 200", res.status)
 		}
 	})
@@ -124,12 +124,12 @@ func TestAIDataPlaneTwoPorts(t *testing.T) {
 		if urls[i] != want {
 			t.Errorf("public_endpoints[%d] = %q, want %q", i, urls[i], want)
 		}
-		res := callDataPlane(t, http.MethodGet, urls[i]+"/ping", "")
+		res := callDataPlane(t, env.http, http.MethodGet, urls[i]+"/ping", "")
 		if res.status != http.StatusOK || res.body["port"] != float64(port) {
 			t.Errorf("GET %s: status %d, body %v; want 200 with port %d", urls[i], res.status, res.body, port)
 		}
 	}
-	if res := callDataPlane(t, http.MethodGet, fmt.Sprintf("%s/%s:9999/ping", env.mod.DataPlaneURL(), id), ""); res.status != http.StatusNotFound {
+	if res := callDataPlane(t, env.http, http.MethodGet, fmt.Sprintf("%s/%s:9999/ping", env.mod.DataPlaneURL(), id), ""); res.status != http.StatusNotFound {
 		t.Errorf("unknown port: status %d, want 404", res.status)
 	}
 }

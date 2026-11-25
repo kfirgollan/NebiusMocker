@@ -35,6 +35,7 @@ type EndpointService struct {
 	hierarchy Hierarchy
 	secrets   SecretSource
 	dataPlane DataPlane
+	perms     CallerPermissions
 	catalog   Catalog
 	log       *slog.Logger
 }
@@ -48,6 +49,7 @@ type EndpointDeps struct {
 	Hierarchy Hierarchy
 	Secrets   SecretSource
 	DataPlane DataPlane
+	Perms     CallerPermissions
 	Catalog   Catalog
 	Log       *slog.Logger
 }
@@ -55,7 +57,7 @@ type EndpointDeps struct {
 // NewEndpointService wires an EndpointService.
 func NewEndpointService(d EndpointDeps) (*EndpointService, error) {
 	if d.Endpoints == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Hierarchy == nil ||
-		d.Secrets == nil || d.DataPlane == nil || d.Log == nil {
+		d.Secrets == nil || d.DataPlane == nil || d.Perms == nil || d.Log == nil {
 		return nil, errors.New("ai: endpoint service dependencies must not be nil")
 	}
 	if len(d.Catalog) == 0 {
@@ -63,7 +65,7 @@ func NewEndpointService(d EndpointDeps) (*EndpointService, error) {
 	}
 	return &EndpointService{
 		repo: d.Endpoints, ops: d.Ops, ids: d.IDs, clk: d.Clock, hierarchy: d.Hierarchy,
-		secrets: d.Secrets, dataPlane: d.DataPlane, catalog: d.Catalog, log: d.Log,
+		secrets: d.Secrets, dataPlane: d.DataPlane, perms: d.Perms, catalog: d.Catalog, log: d.Log,
 	}, nil
 }
 
@@ -257,18 +259,23 @@ func (s *EndpointService) newEndpoint(ctx context.Context, cmd CreateEndpointCmd
 	return e, nil
 }
 
-// urls returns the stub data-plane URL of every HTTP port. An endpoint with
-// one HTTP port is served at <base>/<id>; with several, each port is served
-// at <base>/<id>:<container_port>.
+// urls returns the stub data-plane address of every port, in spec order.
+// An endpoint with one HTTP port is served at <base>/<id>; with several, each
+// HTTP port at <base>/<id>:<container_port>. TCP ports get a tls:// address
+// on the TLS stub listener, as Nebius gives tls://<host>:443.
 func (s *EndpointService) urls(id string, spec *aipb.EndpointSpec) []string {
-	ports := httpPorts(spec)
+	single := len(httpPorts(spec)) == 1
 	base := s.dataPlane.BaseURL()
-	if len(ports) == 1 {
-		return []string{base + "/" + id}
-	}
-	out := make([]string, 0, len(ports))
-	for _, p := range ports {
-		out = append(out, fmt.Sprintf("%s/%s:%d", base, id, p.GetContainerPort()))
+	var out []string
+	for _, p := range spec.GetPorts() {
+		switch {
+		case p.GetProtocol() == aipb.EndpointSpec_Port_TCP:
+			out = append(out, s.dataPlane.TCPURL(id, p.GetContainerPort()))
+		case single:
+			out = append(out, base+"/"+id)
+		default:
+			out = append(out, fmt.Sprintf("%s/%s:%d", base, id, p.GetContainerPort()))
+		}
 	}
 	return out
 }

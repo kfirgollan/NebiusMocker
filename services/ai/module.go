@@ -11,14 +11,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/url"
+	"path/filepath"
 
 	"google.golang.org/grpc"
 
 	aipb "github.com/nebius/gosdk/proto/nebius/ai/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
+	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/localca"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 	"github.com/kfirgollan/NebiusMocker/services/ai/api"
 	"github.com/kfirgollan/NebiusMocker/services/ai/dal"
 	"github.com/kfirgollan/NebiusMocker/services/ai/domain"
@@ -26,9 +35,12 @@ import (
 
 // Module is the AI service module.
 type Module struct {
-	listen *string // overrides Config.AI.Listen when set
+	listen    *string // overrides Config.AI.Listen when set
+	tcpListen *string // overrides Config.AI.TCPListen when set
+	tlsDir    *string // overrides Config.AI.TLSDir when set
 
 	cfg       config.AIConfig
+	clk       clock.Clock
 	svc       *domain.EndpointService
 	dataPlane *api.DataPlane
 }
@@ -41,9 +53,15 @@ var (
 // Option customizes the module.
 type Option func(*Module)
 
-// WithListen overrides the data-plane listen address (tests use
+// WithListen overrides the HTTPS and TCP stub listen addresses (tests use
 // "127.0.0.1:0").
-func WithListen(addr string) Option { return func(m *Module) { m.listen = &addr } }
+func WithListen(addr string) Option {
+	return func(m *Module) { m.listen, m.tcpListen = &addr, &addr }
+}
+
+// WithTLSDir overrides the directory of the local CA (tests use a temp dir
+// and trust <dir>/ca.pem, as a user would).
+func WithTLSDir(dir string) Option { return func(m *Module) { m.tlsDir = &dir } }
 
 // New returns the AI module.
 func New(opts ...Option) *Module {
@@ -63,11 +81,19 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if m.listen != nil {
 		m.cfg.Listen = *m.listen
 	}
+	if m.tcpListen != nil {
+		m.cfg.TCPListen = *m.tcpListen
+	}
+	if m.tlsDir != nil {
+		m.cfg.TLSDir = *m.tlsDir
+	}
+	m.clk = deps.Clock
 	repo := dal.NewEndpointRepo(deps.Store)
 	m.dataPlane = api.NewDataPlane(deps.Log)
 	svc, err := domain.NewEndpointService(domain.EndpointDeps{
 		Endpoints: repo, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		Hierarchy: deps.Authz, Secrets: peerSecrets{dir: deps.Peers}, DataPlane: m.dataPlane,
+		Perms:   callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
 		Catalog: catalog(m.cfg.Platforms), Log: deps.Log,
 	})
 	if err != nil {
@@ -88,7 +114,33 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.svc == nil {
 		return errors.New("ai: Start before Register")
 	}
-	return m.dataPlane.Start(ctx, m.svc, m.cfg.Listen, m.cfg.PublicURL)
+	ca, err := localca.LoadOrCreate(m.cfg.TLSDir, m.clk)
+	if err != nil {
+		return fmt.Errorf("ai: %w", err)
+	}
+	cert, err := ca.Issue(certHosts(m.cfg)...)
+	if err != nil {
+		return fmt.Errorf("ai: %w", err)
+	}
+	return m.dataPlane.Start(ctx, m.svc, api.DataPlaneConfig{
+		Listen: m.cfg.Listen, PublicURL: m.cfg.PublicURL,
+		TCPListen: m.cfg.TCPListen, TCPDomain: m.cfg.TCPDomain, Cert: cert,
+	})
+}
+
+// CAFile is the CA certificate clients trust to reach the data plane.
+func (m *Module) CAFile() string { return filepath.Join(m.cfg.TLSDir, localca.CertFile) }
+
+// certHosts are the names the data-plane certificate is valid for.
+func certHosts(cfg config.AIConfig) []string {
+	hosts := []string{"127.0.0.1", "localhost", "::1", "*." + cfg.TCPDomain}
+	if u, err := url.Parse(cfg.PublicURL); err == nil && u.Hostname() != "" {
+		hosts = append(hosts, u.Hostname())
+	}
+	if h, _, err := net.SplitHostPort(cfg.Listen); err == nil && h != "" && h != "0.0.0.0" && h != "::" {
+		hosts = append(hosts, h)
+	}
+	return hosts
 }
 
 // Stop implements mocker.Lifecycle.
@@ -105,6 +157,44 @@ func (m *Module) DataPlaneURL() string {
 		return ""
 	}
 	return m.dataPlane.BaseURL()
+}
+
+// callerPerms checks the caller's own permissions on referenced resources
+// with the authz engine, under the configured mode (as the RPC interceptor
+// does for the RPC's own rule).
+type callerPerms struct {
+	engine *authz.Engine
+	mode   authz.Mode
+	log    *slog.Logger
+}
+
+func (c callerPerms) Require(ctx context.Context, perm, resourceID string) error {
+	if c.mode == authz.ModeOff {
+		return nil
+	}
+	p := reqctx.PrincipalFrom(ctx)
+	var denied error
+	if p.Anonymous() {
+		denied = errs.Unauthenticated("authorization requires credentials")
+	} else {
+		d, err := c.engine.Check(ctx, p.ID, authz.Permission(perm), resourceID)
+		if err != nil {
+			return err
+		}
+		if d.Allowed {
+			return nil
+		}
+		denied = &errs.Error{
+			Kind: errs.KindPermissionDenied, ResourceID: resourceID,
+			Message: "permission " + perm + " denied on " + resourceID,
+		}
+	}
+	c.log.WarnContext(ctx, "authz denied", "permission", perm, "resource", resourceID,
+		"principal", p.ID, "enforced", c.mode == authz.ModeEnforce)
+	if c.mode == authz.ModeEnforce {
+		return denied
+	}
+	return nil
 }
 
 // peerSecrets finds the MysteryBox capability at call time.

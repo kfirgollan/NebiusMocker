@@ -22,11 +22,12 @@ Container-based serverless AI workloads:
 | Spec validation: image, ports, auth (`auth_token` ⊕ `auth_token_mysterybox_secret`, exactly one HTTP port), env vars, volumes/S3, injected files, registry credentials, disk minimums, platform/preset or `gpu`/`cpu` selectors | ✅ |
 | Cross-service references (`project`, `vpcsubnet`, `mbsec`, `mbsecver`, `pricingpolicy`) checked through the authz hierarchy; MysteryBox refs pinned through `pkg/peer` `SecretPayloads` | ✅ |
 | Lifecycle state machine as operations, synthetic instance, `status.private_endpoints` / `public_endpoints` | ✅ |
-| Stub data plane on `:4600` (`200` / `401` / `503` / `404`) | ✅ |
+| Stub data plane: HTTPS on `:4600` (`200` / `401` / `503` / `404`) with a mocker-generated local CA; TLS stub for TCP ports on `:4601` | ✅ |
+| Create checks the caller's `mysterybox.payload.read` on every referenced MysteryBox secret | ✅ |
 | Authorization rules for every RPC (`ai.endpoints.get/list/create/delete/start/stop/restart`, plus `getSensitiveData` for view `SECRET`); editors hold start/stop/restart, viewers only get/list | ✅ |
-| `nebius_ai_v1_endpoint` resource and data source with the official Terraform provider, incl. `auth_token_mysterybox_secret` backed by a real `nebius_mysterybox_v1_secret` | ✅ e2e: `test/terraform/ai` |
-| `nebius ai endpoint create/get-by-name/get/list/stop/start/delete` + curl (docs quickstart) | ✅ e2e: `test/terraform/ai` |
-| Not yet: `JobService`, `DevlabService`, `HardwareService`, `applications.v1alpha1.VmAppTemplateService`, `nebius ai endpoint logs`, TCP/UDP port URLs, a caller `mysterybox.payload.read` check on referenced secrets at Create | UNIMPLEMENTED |
+| `nebius_ai_v1_endpoint` resource and data source with the official Terraform provider, incl. `auth_token_mysterybox_secret` backed by a real `nebius_mysterybox_v1_secret` and `subnet_id` from a real `nebius_vpc_v1_subnet` | ✅ e2e: `test/terraform/ai` |
+| `nebius ai endpoint create/get-by-name/get/list/stop/start/restart/delete` + `curl --cacert` (docs quickstart, unmodified `startswith("https://")` filter) | ✅ e2e: `test/terraform/ai` |
+| Not yet: `JobService`, `DevlabService`, `HardwareService`, `applications.v1alpha1.VmAppTemplateService`, `nebius ai endpoint logs`; UDP ports are rejected (`InvalidArgument` on `spec.ports[i].protocol`) | UNIMPLEMENTED |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
@@ -55,10 +56,12 @@ Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v
 - **MysteryBox.** When the mysterybox module provides `peer.SecretPayloadsKey`, every secret reference is resolved:
   a ref with only `secret_id` is pinned to the primary version (`version_id` is filled, as the API documents), the
   auth secret must contain `AUTH_TOKEN`, and registry secrets `REGISTRY_USERNAME`/`REGISTRY_PASSWORD`.
-  These reads go in-process through `pkg/peer`, not over gRPC, so they are **not** subject to
-  `mysterybox.payload.read`. That is intended: the platform reads the secret on the endpoint's behalf, as Nebius
-  does for the running workload, and the caller never sees the payload. Not yet: `Create` does not check that the
-  caller itself holds `mysterybox.payload.read` on the referenced secret; it only checks that the secret exists.
+  Wiring a secret into an endpoint hands its payload to the workload, so `Create` requires the **caller** to hold
+  `mysterybox.payload.read` on every referenced secret (auth token, env vars, S3 credentials, registry credentials).
+  It is checked with the authz engine under the configured mode (`enforce` denies with `PERMISSION_DENIED`, `audit`
+  logs), before the payload is read. In the default roles only `admin` and `mysterybox.payload-viewer` hold it, so an
+  editor needs `mysterybox.payload-viewer` too. The data plane's later reads of the token go in-process through
+  `pkg/peer` and are not RPC-authorized: that is the platform reading the secret on the endpoint's behalf.
 - Input-only secrets (registry password, injected file content, inline S3 credentials) are stored but returned only
   by `Get` with `view = SECRET`. `auth_token` is returned as sent (Terraform keeps it in state as sensitive).
   `view = SECRET` also needs `ai.endpoints.getSensitiveData` (`resource.aiendpoint.getSensitiveData` upstream);
@@ -82,13 +85,19 @@ set.
 
 ### Stub data plane (contract)
 
-The module starts an HTTP listener (`NEBIUS_MOCKER_AI_LISTEN`, default `127.0.0.1:4600`; 4580 is S3 and 4590 the
-registry). Routing is **path-based**, because the mock has no wildcard DNS for per-endpoint hosts:
+The module starts two listeners (4580 is S3 and 4590 the registry). Both use TLS with a certificate signed by a
+**local CA** that the mocker creates on first start and keeps in `NEBIUS_MOCKER_AI_TLS_DIR` (default
+`<user config dir>/nebius-mocker/ca`, e.g. `~/Library/Application Support/nebius-mocker/ca` on macOS,
+`~/.config/nebius-mocker/ca` on Linux). Trust `<dir>/ca.pem` once: `curl --cacert <dir>/ca.pem …`, or add it to your
+OS trust store. The startup log prints the URL.
 
-- an endpoint with one HTTP port is served at `http://127.0.0.1:4600/<endpoint-id>`; with several, each at
-  `http://127.0.0.1:4600/<endpoint-id>:<container_port>`. Those URLs are what `status.public_endpoints` and
-  `status.private_endpoints` contain (real Nebius returns managed `https://` URLs; the mock is plain HTTP, so the
-  quickstart's `select(startswith("https://"))` becomes `startswith("http")`). TCP/UDP ports get no URL.
+**HTTP ports: HTTPS on `NEBIUS_MOCKER_AI_LISTEN` (default `127.0.0.1:4600`).** Routing is path-based, because the
+mock has no wildcard DNS for per-endpoint hosts:
+
+- an endpoint with one HTTP port is served at `https://127.0.0.1:4600/<endpoint-id>`; with several, each at
+  `https://127.0.0.1:4600/<endpoint-id>:<container_port>`. These URLs are what `status.public_endpoints` and
+  `status.private_endpoints` contain, like the managed `https://` URLs of real endpoints, so the quickstart's
+  `select(startswith("https://"))` works unchanged.
 - Anything after the first path segment is the application path: `POST <url>/v1/chat/completions` works.
 
 | Request | Response |
@@ -102,12 +111,32 @@ The `200` body is `{"message":"endpoint was called","endpoint_id":"aiendpoint-�
 The token is `spec.auth_token`, or the `AUTH_TOKEN` entry of the pinned MysteryBox secret version, read at call time
 (`503` if that secret cannot be read).
 
+**TCP ports: TLS on `NEBIUS_MOCKER_AI_TCP_LISTEN` (default `127.0.0.1:4601`).** Nebius gives TCP ports a
+`tls://<host>:443` address used with a TLS client; the mock gives `tls://<endpoint-id>-p<container_port>.ai.localhost:4601`
+(`*.localhost` resolves to loopback; the suffix is `NEBIUS_MOCKER_AI_TCP_DOMAIN`). The listener routes by TLS server
+name (SNI), writes one line and closes the connection:
+
+```text
+endpoint was called: aiendpoint-… port 5432     (RUNNING)
+error 503: endpoint is not running (state STOPPED)
+error 404: …                                     (unknown endpoint, or not one of its TCP ports)
+```
+
+e.g. `openssl s_client -connect 127.0.0.1:4601 -servername <id>-p5432.ai.localhost -CAfile <dir>/ca.pem -quiet`.
+TCP ports carry no endpoint authentication (Nebius allows auth only with a single HTTP port).
+
+**UDP ports are rejected** with `InvalidArgument` on `spec.ports[i].protocol`: Nebius documents no address format
+for them, so the mock could not answer the way the cloud does.
+
 ### Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | Stub data-plane listener |
-| `NEBIUS_MOCKER_AI_PUBLIC_URL` | derived from the listener | Base URL written into endpoint statuses (e.g. behind Docker port mapping) |
+| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub for HTTP ports |
+| `NEBIUS_MOCKER_AI_PUBLIC_URL` | derived from the listener | Base URL written into endpoint statuses (e.g. `https://mocker.local:4600` behind Docker port mapping; its host is added to the certificate) |
+| `NEBIUS_MOCKER_AI_TCP_LISTEN` | `127.0.0.1:4601` | TLS stub for TCP ports |
+| `NEBIUS_MOCKER_AI_TCP_DOMAIN` | `ai.localhost` | DNS suffix of TCP port addresses |
+| `NEBIUS_MOCKER_AI_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA; clients trust `<dir>/ca.pem` |
 | `NEBIUS_MOCKER_AI_PLATFORMS` | built-in catalog | JSON `[{"name":"cpu-d3","cpu":"amd","presets":[{"name":"4vcpu-16gb","vcpus":4}]},{"name":"gpu-h100-sxm","gpu":"H100","presets":[{"name":"1gpu-16vcpu-200gb","gpus":1,"vcpus":16}]}]` |
 
 ### Later

@@ -88,3 +88,29 @@ func checkBearer(authorization, token string) error {
 	}
 	return nil
 }
+
+// AuthorizeTCP decides whether a connection to an endpoint's TCP port on the
+// TLS stub listener may proceed. TCP ports carry no endpoint authentication
+// (Nebius allows auth only with a single HTTP port).
+//
+// Errors: errs.NotFound for an unknown endpoint or a port that is not one of
+// its TCP ports; errs.BadState when the endpoint is not RUNNING.
+func (s *EndpointService) AuthorizeTCP(ctx context.Context, endpointID string, port int32) (Call, error) {
+	e, err := s.repo.Get(ctx, endpointID)
+	if err != nil {
+		return Call{}, err
+	}
+	found := false
+	for _, p := range e.GetSpec().GetPorts() {
+		if p.GetProtocol() == aipb.EndpointSpec_Port_TCP && p.GetContainerPort() == port {
+			found = true
+		}
+	}
+	if !found {
+		return Call{}, errs.NotFound(endpointID + ":" + strconv.Itoa(int(port)))
+	}
+	if st := e.GetStatus().GetState(); st != aipb.EndpointStatus_RUNNING {
+		return Call{}, errs.BadState(endpointID, "endpoint is not running (state "+st.String()+")")
+	}
+	return Call{EndpointID: endpointID, Port: port}, nil
+}

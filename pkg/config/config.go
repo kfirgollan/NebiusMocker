@@ -255,6 +255,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"MYSTERYBOX_KEY", func(v string) error { c.MysteryBox.Key = v; return nil }},
 		{"AI_LISTEN", func(v string) error { c.AI.Listen = v; return nil }},
 		{"AI_PUBLIC_URL", func(v string) error { c.AI.PublicURL = v; return nil }},
+		{"AI_TCP_LISTEN", func(v string) error { c.AI.TCPListen = v; return nil }},
+		{"AI_TCP_DOMAIN", func(v string) error { c.AI.TCPDomain = v; return nil }},
+		{"AI_TLS_DIR", func(v string) error { c.AI.TLSDir = v; return nil }},
 		{"AI_PLATFORMS", func(v string) error { return parseAIPlatforms(v, &c.AI.Platforms) }},
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
