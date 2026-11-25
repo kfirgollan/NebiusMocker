@@ -94,12 +94,19 @@ We register stream interceptors anyway, as a defensive default.
 ## Errors
 
 All errors are `google.rpc.Status` with zero or more `nebius.common.v1.ServiceError` entries in `details`
-(see [05](05-api-conventions.md#errors)). The `pkg/serviceerror` helpers make it hard to return a bare status:
+(see [05](05-api-conventions.md#errors)).
+
+Errors are created as transport-free **kinds** in `domain` and `dal` (`pkg/errs`), and mapped to gRPC only in the `api`
+layer ([ADR-0008](decisions/0008-layered-service-modules.md)):
 
 ```go
-return serviceerror.NotFound(id)                         // NOT_FOUND + ResourceNotFound{resource_id}
-return serviceerror.AlreadyExists(existingID)            // ALREADY_EXISTS + ResourceAlreadyExists
-return serviceerror.Quota(viol...)                       // RESOURCE_EXHAUSTED + QuotaFailure
-return serviceerror.BadState(id, "instance is STOPPED")  // FAILED_PRECONDITION + BadResourceState
-return serviceerror.OpConflict(runningOpID, id)          // ABORTED/FAILED_PRECONDITION + OperationConflict
+// domain / dal: what went wrong
+return errs.NotFound(id)                          // → NOT_FOUND + ResourceNotFound{resource_id}
+return errs.AlreadyExists(existingID)             // → ALREADY_EXISTS + ResourceAlreadyExists
+return errs.QuotaExceeded(viol...)                // → RESOURCE_EXHAUSTED + QuotaFailure
+return errs.BadState(id, "instance is STOPPED")   // → FAILED_PRECONDITION + BadResourceState
+return errs.OperationConflict(runningOpID, id)    // → FAILED_PRECONDITION + OperationConflict
+
+// api: the single mapping point
+return nil, serviceerror.FromDomain(err)          // code + ServiceError detail + retry_type + request/trace IDs
 ```

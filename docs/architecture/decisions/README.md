@@ -12,3 +12,4 @@ To change a decision, add a new ADR that supersedes the old one. Do not rewrite 
 | [0005](0005-authz-audit-default.md) | Authorization defaults to `audit` mode | Accepted |
 | [0006](0006-no-shared-db-across-containers.md) | No shared database across containers; peers talk through public APIs | Accepted |
 | [0007](0007-terraform-first-milestone.md) | Unmodified Terraform provider as the first acceptance target | Accepted |
+| [0008](0008-layered-service-modules.md) | Layered service modules (api / domain / dal), enforced by linters | Accepted |

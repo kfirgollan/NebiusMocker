@@ -5,15 +5,19 @@ The harness has to answer two questions continuously:
 1. **Does the mocker behave like Nebius?** (API fidelity)
 2. **Do real tools work against it?** The first target is the Terraform provider.
 
-It is a layered pyramid. Every layer runs in CI. Layers 1–3 and 5 need no Nebius credentials.
+It is a layered pyramid. Layers 1–3 and 5 need no Nebius credentials.
+
+> **No CI budget (for now).** Every layer runs locally: `make check` (format, lint, unit, contract and arch tests)
+> runs from a git pre-commit hook. `make tf-test`, `make e2e` and `make drift` are run by hand before merging larger
+> changes. The workflow descriptions below still apply if CI becomes available later.
 
 ```text
             ┌──────────────────────────────┐
-  nightly   │ 6. API drift detection        │  upstream nebius/api + provider changed?
+  on demand │ 6. API drift detection        │  upstream nebius/api + provider changed?
             ├──────────────────────────────┤
   opt-in    │ 4. Parity (record ↔ replay)   │  real Nebius tenant ↔ mocker
             ├──────────────────────────────┤
-  per-PR    │ 5. Topology e2e (compose)     │  all-in-one, single, split
+  pre-merge │ 5. Topology e2e (compose)     │  all-in-one, single, split
             │ 3. Terraform scenarios        │  real terraform + real provider binary
             │ 2. Resource conformance kit   │  gosdk client, every kind, generic invariants
             │ 1. Unit tests                 │  framework + module domain rules
@@ -139,7 +143,7 @@ This is our version of LocalStack's snapshot or parity testing.
   request/response/error transcripts are stored under `test/parity/golden/`.
 - **Sanitization**: IDs, timestamps, IPs, tokens and resource versions are replaced with stable placeholders
   (`<id:vpcnetwork:1>`), so the files can be committed safely. A secret scanner runs on the output.
-- **Replay mode** (default, in CI): run the same calls against the mocker and compare **structurally**. The comparison
+- **Replay mode** (default, in `make test`): run the same calls against the mocker and compare **structurally**. The comparison
   covers the same fields being present, the same enum values, the same error codes and detail types, and the same
   operation sync/async shape. It ignores placeholder values and fields listed in a per-test `ignore` list.
 - Each golden file records the API revision and the date it was recorded. A golden file older than N months gets a
@@ -161,7 +165,7 @@ fields are echoed back.
 
 ## 6. API drift detection
 
-This runs as a nightly GitHub Actions workflow:
+Run with `make drift` (by hand for now; a scheduled workflow once CI is available):
 
 1. Fetch `nebius/api@main` and `terraform-provider-nebius@latest`.
 2. `tools/apigen diff` compares services, RPCs, messages and fields against the `gosdk` version pinned in `go.mod`.

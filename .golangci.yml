@@ -1,0 +1,287 @@
+# golangci-lint v2 configuration for NebiusMocker.
+# Rationale for every rule: .claude/skills/go-lint/SKILL.md
+# Layering rules that depguard cannot express (per-area, relative) live in test/arch.
+version: "2"
+
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+  tests: true
+
+issues:
+  # Report everything: one finding must never hide another on the same line.
+  uniq-by-line: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    # Architecture / import hygiene
+    - depguard
+    - forbidigo
+    - importas
+    # Errors
+    - errorlint
+    - errname
+    - nilerr
+    - nilnil
+    # Context & concurrency
+    - containedctx
+    - contextcheck
+    - fatcontext
+    - noctx
+    # Protobuf & API
+    - protogetter
+    - forcetypeassert
+    - exhaustive
+    # Design & complexity
+    - funlen
+    - gocognit
+    - nestif
+    - iface
+    - recvcheck
+    - unparam
+    # Style & modern Go
+    - gocritic
+    - revive
+    - intrange
+    - usestdlibvars
+    - perfsprint
+    - predeclared
+    - misspell
+    - sloglint
+    # Tests
+    - thelper
+    - tparallel
+    # Security
+    - gosec
+    - bodyclose
+    # Suppression discipline
+    - nolintlint
+
+  settings:
+    depguard:
+      rules:
+        # 1. Storage engines and database drivers live only inside pkg/store.
+        storage-engines-only-in-store:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/pkg/store/**"
+          deny:
+            - pkg: go.etcd.io/bbolt
+              desc: "storage engine: only pkg/store/<engine> may import it (DAL rule)"
+            - pkg: database/sql
+              desc: "databases are accessed only through pkg/store (DAL rule)"
+            - pkg: github.com/mattn/go-sqlite3
+              desc: "databases are accessed only through pkg/store (DAL rule)"
+            - pkg: modernc.org/sqlite
+              desc: "databases are accessed only through pkg/store (DAL rule)"
+            - pkg: github.com/jackc/pgx
+              desc: "databases are accessed only through pkg/store (DAL rule)"
+            - pkg: gorm.io
+              desc: "no ORMs; databases are accessed only through pkg/store"
+            - pkg: github.com/redis
+              desc: "databases are accessed only through pkg/store (DAL rule)"
+
+        # 2. pkg/store itself may be imported only by DAL packages and composition roots.
+        store-only-in-dal:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/pkg/store/**"
+            - "!**/services/*/dal/**"
+            - "!**/services/*/module.go"
+            - "!**/pkg/mocker/**"
+            - "!**/pkg/testkit/**"
+            - "!**/pkg/operations/dal/**"
+            - "!**/cmd/**"
+          deny:
+            - pkg: github.com/kfirgollan/NebiusMocker/pkg/store
+              desc: "only dal packages and composition roots touch the store; depend on a domain port instead"
+
+        # 3. Domain (business logic) is transport-free.
+        domain-is-transport-free:
+          list-mode: lax
+          files:
+            - "**/services/*/domain/**"
+            - "**/pkg/resource/**"
+            - "**/pkg/lifecycle/**"
+            - "**/pkg/quota/**"
+            - "**/pkg/errs/**"
+            - "**/pkg/events/**"
+            - "**/pkg/clock/**"
+          deny:
+            - pkg: google.golang.org/grpc
+              desc: "domain must not know about gRPC (codes/status/metadata); return pkg/errs kinds"
+            - pkg: github.com/kfirgollan/NebiusMocker/pkg/serviceerror
+              desc: "error → gRPC mapping happens only in the api layer"
+            - pkg: github.com/kfirgollan/NebiusMocker/pkg/edge
+              desc: "transport package; not allowed in domain"
+            - pkg: github.com/kfirgollan/NebiusMocker/pkg/interceptors
+              desc: "transport package; not allowed in domain"
+            - pkg: net/http
+              desc: "transport; not allowed in domain"
+
+        # 4. DAL is transport-free too.
+        dal-is-transport-free:
+          list-mode: lax
+          files:
+            - "**/services/*/dal/**"
+            - "**/pkg/store/**"
+          deny:
+            - pkg: google.golang.org/grpc
+              desc: "dal returns pkg/errs kinds, never gRPC statuses"
+            - pkg: github.com/kfirgollan/NebiusMocker/pkg/serviceerror
+              desc: "error → gRPC mapping happens only in the api layer"
+            - pkg: net/http
+              desc: "transport; not allowed in dal"
+
+        # 5. Library hygiene, everywhere.
+        hygiene:
+          list-mode: lax
+          files:
+            - $all
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: "use the standard errors package and fmt.Errorf %w"
+            - pkg: "math/rand$"
+              desc: "use math/rand/v2"
+            - pkg: io/ioutil
+              desc: "use io and os"
+            - pkg: github.com/golang/protobuf
+              desc: "use google.golang.org/protobuf"
+            - pkg: "log$"
+              desc: "use log/slog with an injected *slog.Logger"
+            - pkg: github.com/sirupsen/logrus
+              desc: "use log/slog"
+            - pkg: go.uber.org/zap
+              desc: "use log/slog"
+            - pkg: github.com/stretchr/testify
+              desc: "use testing + github.com/google/go-cmp (see go-testing skill)"
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^print(ln)?$
+          msg: "use an injected *slog.Logger"
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "use an injected *slog.Logger (stdout is for cmd/ only)"
+        - pattern: ^time\.(Now|Since|Until|Sleep|After|AfterFunc|Tick|NewTimer|NewTicker)$
+          msg: "inject pkg/clock.Clock so time is controllable in tests"
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: "read configuration through pkg/config"
+        - pattern: ^context\.(Background|TODO)$
+          msg: "propagate the caller's ctx; Background only in main/pkg/mocker, use t.Context() in tests"
+        - pattern: ^errors\.As$
+          msg: "use errors.AsType[E] (Go 1.26)"
+        - pattern: ^panic$
+          msg: "return an error; panic only on invariant violations, with //nolint:forbidigo // <reason>"
+
+    importas:
+      no-unaliased: true
+      alias:
+        - pkg: github.com/nebius/gosdk/proto/nebius/(\w+)/v1
+          alias: ${1}pb
+        - pkg: github.com/nebius/gosdk/proto/nebius/(\w+)/(v1alpha1|v2)
+          alias: ${1}${2}pb
+        - pkg: google.golang.org/genproto/googleapis/rpc/status
+          alias: rpcstatus
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    funlen:
+      lines: 80
+      statements: 50
+    gocognit:
+      min-complexity: 20
+    nestif:
+      min-complexity: 5
+
+    sloglint:
+      no-global: all
+      context: scope
+      static-msg: true
+      key-naming-case: snake
+      attr-only: false
+      kv-only: false
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam # proto messages are passed by pointer already; false positives on cmd structs
+
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: context-as-argument
+        - name: error-return
+        - name: error-strings
+        - name: receiver-naming
+        - name: unexported-return
+        - name: early-return
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: flag-parameter
+
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # The clock package is the one place allowed to touch real time.
+      - path: pkg/clock/
+        linters: [forbidigo]
+        text: "time\\."
+      # Configuration is read in one place.
+      - path: (pkg/config/|cmd/)
+        linters: [forbidigo]
+        text: "os\\."
+      # Process roots create the root context; tests may use TODO in scaffolding.
+      - path: (cmd/|pkg/mocker/)
+        linters: [forbidigo]
+        text: "context\\.(Background|TODO)"
+      # CLIs print to stdout.
+      - path: cmd/
+        linters: [forbidigo]
+        text: "fmt\\.Print"
+      # Tests: allow longer functions and type assertions in helpers.
+      - path: _test\.go
+        linters: [funlen, gocognit, forcetypeassert, gosec]
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+  settings:
+    gofumpt:
+      module-path: github.com/kfirgollan/NebiusMocker
+      extra-rules: true
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/nebius)
+        - localmodule
+      custom-order: true
+  exclusions:
+    generated: lax

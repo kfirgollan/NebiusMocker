@@ -49,13 +49,17 @@ during early development. Splitting later is cheap if versioning needs diverge (
 │   ├── authz/                    # permission catalog, role → permission mapping, decision engine
 │   ├── quota/                    # quota ledger and limit catalog
 │   ├── faults/                   # fault-injection rule engine
-│   ├── serviceerror/             # constructors for nebius.common.v1.ServiceError details on google.rpc.Status
+│   ├── errs/                     # transport-free domain error kinds (NotFound, BadState, QuotaExceeded, …)
+│   ├── serviceerror/             # api-side mapping: errs kinds → google.rpc.Status + nebius.common.v1.ServiceError
+│   ├── clock/                    # the only package allowed to touch real time; Manual clock for tests
+│   ├── config/                   # the only package allowed to read the environment
 │   ├── peer/                     # cross-module lookup interface (in-process and remote gRPC implementations)
 │   ├── admin/                    # admin HTTP API (health, state, reset, snapshots, faults, clock)
 │   ├── seed/                     # declarative seed data loader (YAML)
 │   └── testkit/                  # helpers for users' Go tests: StartT, SDK client factory, fixtures, assertions
 │
 ├── services/                     # one package per Nebius API area; each exports `Module`
+│   │                             #   every area: module.go + api/ (views) + domain/ (logic) + dal/ (data access)
 │   ├── iam/                      #   tenants, projects, SAs, groups, permits, keys, token exchange
 │   ├── vpc/
 │   ├── compute/
@@ -174,8 +178,30 @@ We use code generation only where the upstream surface is large and mechanical:
 already contains `*_grpc.pb.go` with `XxxServiceServer` interfaces and `RegisterXxxServiceServer` functions. Pinning
 `gosdk` in `go.mod` pins the API version we emulate ([ADR-0002](decisions/0002-reuse-gosdk-protos.md)).
 
+## Layers inside a service module
+
+Every area follows the same three-layer split ([ADR-0008](decisions/0008-layered-service-modules.md)):
+
+```text
+services/<area>/
+├── module.go   # composition root: builds dal → domain → api, implements mocker.Module
+├── api/        # views: gRPC handlers, proto ⇄ domain conversion, error mapping. No business decisions.
+├── domain/     # logic: validation, lifecycles, quotas, side effects. Declares its ports (interfaces) in ports.go.
+└── dal/        # data access: the only code that touches pkg/store. Implements domain ports.
+```
+
+Dependency direction is `api → domain ← dal`. Domain and DAL are transport-free: they return `pkg/errs` kinds, and only
+`api` maps them to gRPC status + `ServiceError` via `pkg/serviceerror`. Other adapters, such as mk8s cluster backends or
+the S3 data plane, implement domain ports and follow the DAL rules. The full rulebook is the
+[`go-architecture` skill](../../.claude/skills/go-architecture/SKILL.md).
+
 ## Dependency rules
 
+These are enforced by `.golangci.yml` (depguard + forbidigo) and the `test/arch` architecture test. See the
+[`go-lint` skill](../../.claude/skills/go-lint/SKILL.md).
+
+- Databases and storage engines (`go.etcd.io/bbolt`, `database/sql`, drivers) are imported only under `pkg/store/**`.
+- `pkg/store` is imported only by `services/*/dal`, `services/*/module.go` and the composition roots.
 - `pkg/*` never imports `services/*`.
 - `services/A` never imports `services/B`. Cross-area access goes through `peer.Directory`, so split deployments keep working.
 - Only `cmd/*` and `pkg/mocker` know the full module list.
