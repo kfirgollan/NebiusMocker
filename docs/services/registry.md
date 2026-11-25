@@ -10,20 +10,23 @@
 | `nebius.registry.v1.RegistryService`: Create, Get, GetByName, List (paged), Update (reset mask, `resource_version`), Delete (`force`) | ✅ T2 |
 | `nebius.registry.v1.ArtifactService`: List (paged), Get, Delete. Read live from the image backend | ✅ T2 |
 | `nebius_registry_v1_registry` resource and data source with the official Terraform provider (by ID and by name) | ✅ e2e: `test/terraform/registry` |
-| Docker data plane: `docker login/push/pull` with Nebius IAM tokens, images stored in Harbor | ✅ e2e: `make e2e-registry` |
-| `nebius iam get-access-token \| docker login <fqdn> --username iam --password-stdin` with the official `nebius` CLI | ✅ e2e: `make e2e-registry` |
+| Docker data plane: `docker push/pull` with Nebius IAM tokens, images stored in Harbor, mocker run as a container (the documented setup, also on Docker Desktop) | ✅ e2e: `make e2e-registry` |
+| Short-lived token login: `nebius iam get-access-token \| docker login <fqdn> --username iam --password-stdin` | ✅ e2e: `TestStaticTokenLogin` |
+| Credential helper: `nebius registry configure-helper`, then push/pull with no login, on `cr.<region>.nebius.cloud` | ✅ e2e: `TestCredentialHelper` ([setup](#credential-helper)) |
+| TLS on the gRPC edge and the docker endpoint (`NEBIUS_MOCKER_TLS_CERT_FILE` / `_KEY_FILE`) | ✅ |
 | `nebius.iam.v1.ProfileService.Get` (the CLI calls it before printing a token; served by the IAM module) | ✅ |
 | Authorization of RPCs and of docker pull/push under `NEBIUS_MOCKER_AUTHZ` | ✅ |
-| `nebius registry configure-helper` (docker credential helper) | Not yet: it only writes `cr.<region>.nebius.cloud` entries, so it cannot target a local FQDN |
-| `ListRegistries`/`ListArtifacts` `filter` | Ignored |
+| `ListRegistries` / `ListArtifacts` `filter` | Rejected with `INVALID_ARGUMENT` on field `filter`: no filter syntax is documented upstream (the Compute proto marks the same field "not implemented, filtering could be done on client side") |
 | Quotas (`registry.registry.count`, `registry.size`) | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312, Harbor v2.16.0.
 
 Tests: domain unit tests with fakes (`services/registry/domain`), DAL tests on the memory store
 (`services/registry/dal`), Harbor client and docker front tests over `httptest` (`services/registry/backend/harbor`,
-`services/registry/docker`), gosdk contract tests against the in-memory backend (`test/contract/registry_test.go`),
-Terraform CRUD (`make e2e`), and the Docker + Harbor + CLI flow (`make e2e-registry`).
+`services/registry/docker`), gosdk contract tests against the in-memory backend (`test/contract/registry_test.go`,
+`tls_test.go`), Terraform CRUD (`make e2e`), and the user workflows with the mocker image, Harbor, the `nebius` CLI
+and docker (`make e2e-registry`). The contract tests seed images into the in-memory backend to check API semantics
+only; image upload is proven by `make e2e-registry`, through `docker push`.
 
 ## Overview
 
@@ -51,6 +54,7 @@ docker login/push/pull ────────HTTP :4590──▶ docker front 
   project `e00abc…`. Image names follow Nebius: `<registry_fqdn>/<registry ID suffix>/<image>:<tag>`.
 - **`status.registry_fqdn`** is `NEBIUS_MOCKER_REGISTRY_FQDN`, or `127.0.0.1:<docker endpoint port>` by default.
   Docker treats `127.0.0.0/8` as an insecure (plain HTTP) registry, so no TLS or daemon configuration is needed.
+  For the credential helper set it to `cr.<region>.nebius.cloud` ([below](#credential-helper)).
   `status.images_count` (and the deprecated `spec.images_count`) is read live from the backend.
 - **Artifacts** are read live from Harbor (`/api/v2.0/projects/{p}/repositories/{r}/artifacts?with_tag=true`):
   one artifact per manifest. `name` is the image (repository) name inside the registry, `tags` are its tags, and
@@ -60,7 +64,7 @@ docker login/push/pull ────────HTTP :4590──▶ docker front 
 - **Delete** of a registry that still holds images → `FAILED_PRECONDITION`, unless `force=true` (the real behavior is
   an open question). Deleting removes every Harbor repository and then the project.
 - **Docker front** (`services/registry/docker`, `NEBIUS_MOCKER_REGISTRY_LISTEN`, default `:4590`; started only with
-  the Harbor backend) serves `/v2/`:
+  the Harbor backend; HTTPS when `NEBIUS_MOCKER_TLS_*` is set) serves `/v2/`:
   - `GET /v2/` without credentials → `401` + `WWW-Authenticate: Basic`. The password of `docker login --username iam`
     is the Nebius IAM token, the username is ignored, and a `Bearer` token is accepted too.
   - Every `/v2/<ns>/<image>/{manifests,blobs,tags,referrers}/…` request is authorized by the domain: the token must be
@@ -84,37 +88,86 @@ docker login/push/pull ────────HTTP :4590──▶ docker front 
 | `NEBIUS_MOCKER_REGISTRY_FQDN` | `127.0.0.1:<listen port>` | `status.registry_fqdn` and the host part of image names |
 | `NEBIUS_MOCKER_REGISTRY_HARBOR_URL` | `http://127.0.0.1:8080` | Harbor base URL |
 | `NEBIUS_MOCKER_REGISTRY_HARBOR_USERNAME` / `_PASSWORD` | `admin` / `Harbor12345` | Harbor admin credentials (never given to users) |
+| `NEBIUS_MOCKER_TLS_CERT_FILE` / `_KEY_FILE` | — (plaintext) | PEM certificate and key: the gRPC edge and the docker endpoint serve TLS |
 
-### Local workflow
+### Running it (the documented setup)
+
+Run NebiusMocker **as a container** next to Harbor. That is the setup the tests use, and it is the one that works with
+an unmodified Docker on every platform. Docker Desktop's daemon runs in a VM: it can reach **published container
+ports** on `127.0.0.1`, but not a process listening on the host's loopback (`make run`). On a native Linux daemon both
+work.
 
 ```bash
-test/registry/harbor/harbor.sh up /tmp/harbor          # throwaway Harbor v2.16.0; prints its URL
-. /tmp/harbor/env
-NEBIUS_MOCKER_REGISTRY_BACKEND=harbor NEBIUS_MOCKER_REGISTRY_HARBOR_URL=$NEBIUS_MOCKER_E2E_HARBOR_URL make run
-
-echo nmock-dev-editor > /tmp/mocker-token               # a built-in dev token
-nebius profile create mocker --endpoint localhost:4566 --token-file /tmp/mocker-token   # see below
-nebius registry create --name app --insecure            # status.registry_fqdn: 127.0.0.1:4590
-nebius iam get-access-token --insecure | docker login 127.0.0.1:4590 --username iam --password-stdin
-docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
-test/registry/harbor/harbor.sh down /tmp/harbor
+deploy/harbor/harbor.sh up /tmp/harbor && . /tmp/harbor/env      # Harbor v2.16.0 (Docker), see below
+make docker-image                                                 # builds nebius-mocker:dev (no base image pulled)
+docker run -d --name nebius-mocker --network "$HARBOR_NETWORK" \
+  -p 127.0.0.1:4566:4566 -p 127.0.0.1:4590:4590 \
+  -e NEBIUS_MOCKER_REGISTRY_BACKEND=harbor -e NEBIUS_MOCKER_REGISTRY_HARBOR_URL="$HARBOR_INTERNAL_URL" \
+  nebius-mocker:dev
 ```
 
-The CLI dials `<service>.<endpoint>` (for example `registry.localhost:4566`), so the endpoint must be
-`localhost:<port>`, not an IP address. Plaintext needs `--insecure` on every command. On **Docker Desktop** the daemon
-runs in a VM and cannot reach the host's `127.0.0.1`. The e2e test then runs a tiny nginx forwarder with host
-networking, `test/registry/harbor/forwarder.nginx.conf` (Harbor's own `goharbor/nginx-photon` image), which makes
-the VM's `127.0.0.1:<port>` proxy to `host.docker.internal:<port>`. Use the same trick by hand. A native Linux daemon
-needs nothing.
+If you publish the docker endpoint on another host port, set `NEBIUS_MOCKER_REGISTRY_LISTEN=:<port>` and publish
+`<port>:<port>`, so that `status.registry_fqdn` (`127.0.0.1:<port>`) matches what docker dials.
 
-### Harbor for tests
+The CLI dials `<service>.<endpoint>` (for example `registry.localhost:4566`), so the profile endpoint must be
+`localhost:<port>`, not an IP address. Plaintext needs `--insecure` on every command.
 
-`test/registry/harbor/harbor.sh` generates the configuration with the official `goharbor/prepare:v2.16.0` image (the
-first release with arm64 images). It then starts Harbor under a unique compose project with an override that drops the
-fixed container names, the syslog logging driver (fixed host port 1514) and the fixed proxy port. The proxy binds
-`127.0.0.1:<random>`. The script waits for `/api/v2.0/health` plus an authenticated `/v2/`, and `down` removes the
-containers, networks, volumes and data dir. `make e2e-registry` wraps the whole thing with a trap, so Harbor is removed
-even when tests fail.
+```bash
+echo nmock-dev-editor > ~/.nebius-mocker-token                    # a built-in dev token
+nebius profile create mocker --endpoint localhost:4566 --token-file ~/.nebius-mocker-token
+nebius registry create --name app --insecure                      # status.registry_fqdn: 127.0.0.1:4590
+```
+
+#### Short-lived token login
+
+This is Nebius's documented "CI/CD: short-lived access token" flow, unchanged:
+
+```bash
+nebius iam get-access-token --insecure | docker login 127.0.0.1:4590 --username iam --password-stdin
+docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
+```
+
+#### Credential helper
+
+`nebius registry configure-helper` registers `docker-credential-nebius` for the fixed hosts
+`cr.<region>.nebius.cloud`. The helper runs `nebius registry docker-credential get` without `--insecure`, and the
+profile cannot store that flag. So the helper flow needs what any local stand-in for those hosts needs. The `nebius`
+tools are not modified; only the machine is configured:
+
+1. **TLS from a CA the machine trusts.** Start the mocker with `NEBIUS_MOCKER_TLS_CERT_FILE` / `_KEY_FILE`. The
+   certificate's SANs must cover `cr.<region>.nebius.cloud` and the API names the CLI dials: `api.nebius.cloud`,
+   `cpl.iam.api.nebius.cloud` and `registry.api.nebius.cloud`. Set `NEBIUS_MOCKER_REGISTRY_LISTEN=:443` and
+   `NEBIUS_MOCKER_REGISTRY_FQDN=cr.<region>.nebius.cloud`.
+   - The CLI needs the CA in the system trust store.
+   - dockerd needs it in `/etc/docker/certs.d/cr.<region>.nebius.cloud/ca.crt`.
+2. **Those names resolve to the mocker.** For example, add network aliases on the mocker container for clients on the
+   same Docker network, or add `/etc/hosts` entries.
+3. A profile with `--endpoint api.nebius.cloud:4566` and a token file. Then the documented steps, verbatim:
+   `nebius registry configure-helper`, then `docker push`/`docker pull cr.<region>.nebius.cloud/<id>/app:v1`.
+
+`TestCredentialHelper` does exactly this on a fresh official `docker:dind` container, which plays the Linux machine:
+- it installs `bash`, `curl` and `coreutils`, because the official installer needs GNU `mktemp`;
+- it installs the CA as above;
+- it installs the CLI with the documented `curl … install.sh | bash`;
+- DNS comes from network aliases on the mocker container.
+
+On a macOS host the same setup means trusting the CA in the Keychain (Docker Desktop imports Keychain CAs) and
+mapping the names in `/etc/hosts`. Those are system-wide changes, so the suite does not make them on the developer's
+machine.
+
+### Harbor
+
+`deploy/harbor/harbor.sh` generates the configuration with the official `goharbor/prepare:v2.16.0` image (the first
+release with arm64 images). It then starts Harbor under a unique compose project with an override that drops the fixed
+container names, the syslog logging driver (fixed host port 1514) and the fixed proxy port. The proxy binds
+`127.0.0.1:<random>`. The script waits for `/api/v2.0/health` plus an authenticated `/v2/`, and writes
+`<workdir>/env`:
+- `HARBOR_URL`, the address from the host;
+- `HARBOR_NETWORK` and `HARBOR_INTERNAL_URL`, for the mocker container;
+- the admin credentials.
+
+`down` removes the containers, networks, volumes and data dir. `make e2e-registry` builds the image, starts Harbor and
+removes everything through a trap, even when tests fail.
 
 ## Terraform
 

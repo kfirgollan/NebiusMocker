@@ -3,6 +3,7 @@ package domain
 import (
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,14 +235,14 @@ func TestArtifacts(t *testing.T) {
 		Image{Repository: "web", Digest: "sha256:a"},
 	)
 
-	page, err := e.artifact.List(t.Context(), id, 2, "")
+	page, err := e.artifact.List(t.Context(), ListQuery{ParentID: id, PageSize: 2})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(page.Items) != 2 || page.NextPageToken == "" {
 		t.Fatalf("first page = %d items, token %q", len(page.Items), page.NextPageToken)
 	}
-	rest, err := e.artifact.List(t.Context(), id, 2, page.NextPageToken)
+	rest, err := e.artifact.List(t.Context(), ListQuery{ParentID: id, PageSize: 2, PageToken: page.NextPageToken})
 	if err != nil {
 		t.Fatalf("List page 2: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestArtifacts(t *testing.T) {
 		t.Errorf("Get = %v", got)
 	}
 	// IDs are stable across listings.
-	again, _ := e.artifact.List(t.Context(), id, 0, "")
+	again, _ := e.artifact.List(t.Context(), ListQuery{ParentID: id})
 	if again.Items[2].GetId() != web.GetId() {
 		t.Errorf("artifact ID changed: %s → %s", web.GetId(), again.Items[2].GetId())
 	}
@@ -282,10 +283,10 @@ func TestArtifacts(t *testing.T) {
 	if _, err := e.artifact.Get(t.Context(), web.GetId()); !errs.IsKind(err, errs.KindNotFound) {
 		t.Errorf("Get after delete: %v, want NotFound", err)
 	}
-	if _, err := e.artifact.List(t.Context(), "registry-e00missing", 0, ""); !errs.IsKind(err, errs.KindNotFound) {
+	if _, err := e.artifact.List(t.Context(), ListQuery{ParentID: "registry-e00missing"}); !errs.IsKind(err, errs.KindNotFound) {
 		t.Errorf("List of missing registry: %v, want NotFound", err)
 	}
-	if _, err := e.artifact.List(t.Context(), id, 0, "!!"); !errs.IsKind(err, errs.KindBadRequest) {
+	if _, err := e.artifact.List(t.Context(), ListQuery{ParentID: id, PageToken: "!!"}); !errs.IsKind(err, errs.KindBadRequest) {
 		t.Errorf("List with bad token: %v, want BadRequest", err)
 	}
 }
@@ -295,7 +296,7 @@ func TestArtifactVanishedFromBackend(t *testing.T) {
 	e := newEnv(t)
 	id := e.create(t, "app").GetMetadata().GetId()
 	e.backend.put(Namespace(id), Image{Repository: "web", Digest: "sha256:a"})
-	page, _ := e.artifact.List(t.Context(), id, 0, "")
+	page, _ := e.artifact.List(t.Context(), ListQuery{ParentID: id})
 	artID := page.Items[0].GetId()
 	_ = e.backend.DeleteImage(t.Context(), Namespace(id), "web", "sha256:a")
 	if _, err := e.artifact.Get(t.Context(), artID); !errs.IsKind(err, errs.KindNotFound) {
@@ -342,6 +343,25 @@ func TestAuthorizeDocker(t *testing.T) {
 				t.Fatalf("Authorize(%+v) kind = %v, want %v", tt.req, got, tt.wantKind)
 			}
 		})
+	}
+}
+
+func TestListRejectsFilter(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	id := e.create(t, "app").GetMetadata().GetId()
+	for _, f := range []string{"name = \"app\"", "anything"} {
+		_, err := e.registry.List(t.Context(), ListQuery{ParentID: testProject, Filter: f})
+		if !errs.IsKind(err, errs.KindBadRequest) || !strings.Contains(err.Error(), "filter") {
+			t.Errorf("registry List(filter=%q) = %v, want BadRequest naming filter", f, err)
+		}
+		_, err = e.artifact.List(t.Context(), ListQuery{ParentID: id, Filter: f})
+		if !errs.IsKind(err, errs.KindBadRequest) || !strings.Contains(err.Error(), "filter") {
+			t.Errorf("artifact List(filter=%q) = %v, want BadRequest naming filter", f, err)
+		}
+	}
+	if page, err := e.registry.List(t.Context(), ListQuery{ParentID: testProject}); err != nil || len(page.Items) != 1 {
+		t.Errorf("List without filter = %v, %v", page, err)
 	}
 }
 

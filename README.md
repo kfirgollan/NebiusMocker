@@ -110,15 +110,19 @@ Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/archit
 ### Container Registry with docker
 
 ```bash
-test/registry/harbor/harbor.sh up /tmp/harbor && . /tmp/harbor/env     # throwaway Harbor (Docker)
-NEBIUS_MOCKER_REGISTRY_BACKEND=harbor NEBIUS_MOCKER_REGISTRY_HARBOR_URL=$NEBIUS_MOCKER_E2E_HARBOR_URL make run
+deploy/harbor/harbor.sh up /tmp/harbor && . /tmp/harbor/env      # throwaway Harbor (Docker)
+make docker-image                                                 # nebius-mocker:dev
+docker run -d --name nebius-mocker --network "$HARBOR_NETWORK" -p 127.0.0.1:4566:4566 -p 127.0.0.1:4590:4590 \
+  -e NEBIUS_MOCKER_REGISTRY_BACKEND=harbor -e NEBIUS_MOCKER_REGISTRY_HARBOR_URL="$HARBOR_INTERNAL_URL" nebius-mocker:dev
 
 # the documented Nebius login, with a profile whose endpoint is localhost:4566 and a dev token file
 nebius iam get-access-token --insecure | docker login 127.0.0.1:4590 --username iam --password-stdin
 docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
 ```
 
-Details, including Docker Desktop, are in [docs/services/registry.md](docs/services/registry.md#local-workflow).
+Run the mocker as a container for docker: Docker Desktop's daemon can reach published container ports but not a host
+process. The credential-helper flow (`nebius registry configure-helper`) and the details are in
+[docs/services/registry.md](docs/services/registry.md#running-it-the-documented-setup).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 | `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | Stub data plane that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL) |

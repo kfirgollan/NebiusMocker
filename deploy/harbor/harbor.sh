@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Brings a throwaway Harbor (official goharbor images) up or down for the
-# registry end-to-end tests (make e2e-registry).
+# Brings a throwaway Harbor (official goharbor images) up or down: the image
+# backend of NebiusMocker's Container Registry, for local use and for
+# make e2e-registry. See docs/services/registry.md.
 #
 #   harbor.sh up   <workdir>   generate config with goharbor/prepare, start, wait healthy,
-#                              write <workdir>/env (NEBIUS_MOCKER_E2E_HARBOR_{URL,USERNAME,PASSWORD,VERSION})
+#                              write <workdir>/env: HARBOR_URL (from the host), HARBOR_NETWORK and
+#                              HARBOR_INTERNAL_URL (for containers such as the mocker),
+#                              HARBOR_USERNAME, HARBOR_PASSWORD, HARBOR_VERSION
 #   harbor.sh down <workdir>   stop and remove containers, networks, volumes and <workdir>
 #
 # Everything is scoped to a unique compose project (nmharbor-<random>): no fixed
@@ -133,10 +136,12 @@ up() {
 		return 1
 	fi
 	cat >"$w/env" <<EOF
-export NEBIUS_MOCKER_E2E_HARBOR_URL=$url
-export NEBIUS_MOCKER_E2E_HARBOR_USERNAME=admin
-export NEBIUS_MOCKER_E2E_HARBOR_PASSWORD=$ADMIN_PASSWORD
-export NEBIUS_MOCKER_E2E_HARBOR_VERSION=$HARBOR_VERSION
+export HARBOR_URL=$url
+export HARBOR_NETWORK=$(cat "$w/project")_harbor
+export HARBOR_INTERNAL_URL=http://proxy:8080
+export HARBOR_USERNAME=admin
+export HARBOR_PASSWORD=$ADMIN_PASSWORD
+export HARBOR_VERSION=$HARBOR_VERSION
 EOF
 	log "Harbor ready at $url"
 }

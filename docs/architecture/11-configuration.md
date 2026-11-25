@@ -42,6 +42,8 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 Module-specific keys are named `NEBIUS_MOCKER_<AREA>_<KEY>`, for example `NEBIUS_MOCKER_MK8S_BACKEND=k3s`.
 Implemented so far: `NEBIUS_MOCKER_REGISTRY_BACKEND` (`memory`|`harbor`), `_LISTEN` (`:4590`, `off`), `_FQDN`,
 `_HARBOR_URL`, `_HARBOR_USERNAME`, `_HARBOR_PASSWORD` (see [registry](../services/registry.md#configuration)).
+`NEBIUS_MOCKER_TLS_CERT_FILE` / `NEBIUS_MOCKER_TLS_KEY_FILE` (both or neither) make the gRPC edge and module endpoints
+(the registry's docker endpoint) serve TLS with that PEM certificate.
 They are documented in each service doc (for example `NEBIUS_MOCKER_STORAGE_*` in
 [services/storage.md](../services/storage.md#configuration)).
 VPC: `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` (default `10.0.0.0/13`, the `default-network-pool` of each project) and

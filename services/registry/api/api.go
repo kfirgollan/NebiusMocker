@@ -64,7 +64,9 @@ func (h *RegistryHandler) GetByName(ctx context.Context, req *commonpb.GetByName
 
 // List returns one page of a project's registries.
 func (h *RegistryHandler) List(ctx context.Context, req *registrypb.ListRegistriesRequest) (*registrypb.ListRegistriesResponse, error) {
-	page, err := h.svc.List(ctx, req.GetParentId(), req.GetPageSize(), req.GetPageToken())
+	page, err := h.svc.List(ctx, domain.ListQuery{
+		ParentID: req.GetParentId(), PageSize: req.GetPageSize(), PageToken: req.GetPageToken(), Filter: req.GetFilter(),
+	})
 	if err != nil {
 		return nil, serviceerror.FromDomain(ctx, err)
 	}
@@ -128,7 +130,9 @@ func (h *ArtifactHandler) Get(ctx context.Context, req *registrypb.GetArtifactRe
 
 // List returns one page of a registry's artifacts.
 func (h *ArtifactHandler) List(ctx context.Context, req *registrypb.ListArtifactsRequest) (*registrypb.ListArtifactsResponse, error) {
-	page, err := h.svc.List(ctx, req.GetParentId(), req.GetPageSize(), req.GetPageToken())
+	page, err := h.svc.List(ctx, domain.ListQuery{
+		ParentID: req.GetParentId(), PageSize: req.GetPageSize(), PageToken: req.GetPageToken(), Filter: req.GetFilter(),
+	})
 	if err != nil {
 		return nil, serviceerror.FromDomain(ctx, err)
 	}

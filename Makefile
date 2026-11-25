@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-registry check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-registry docker-image check hooks run tidy clean
 
 all: check
 
@@ -40,15 +40,25 @@ e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (need
 	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... ./test/terraform/compute/... || status=$$?; \
 	$(RUSTFS_CLEANUP); exit $$status
 
-# e2e-registry starts a throwaway Harbor (test/registry/harbor/harbor.sh), runs
-# the docker/CLI/SDK tests against it and always removes it again.
+IMAGE ?= nebius-mocker:dev
+
+docker-image: ## Build the nebius-mocker container image ($(IMAGE)) for the local Docker daemon's architecture
+	@arch=$$(docker version --format '{{.Server.Arch}}') && \
+	CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -o $(BIN_DIR)/linux/nebius-mocker ./cmd/nebius-mocker && \
+	docker build --quiet --tag $(IMAGE) --file deploy/docker/Dockerfile $(BIN_DIR)/linux >/dev/null && \
+	echo "built $(IMAGE) (linux/$$arch)"
+
+# e2e-registry builds the mocker image, starts a throwaway Harbor
+# (deploy/harbor/harbor.sh), runs the CLI/docker/SDK tests against the mocker
+# running as a container (the documented setup), and always removes it all.
 REGISTRY_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=registry | xargs docker rm -f -v >/dev/null 2>&1 || true
 
-e2e-registry: ## Harbor-backed registry tests (needs Docker): nebius CLI login, docker push/pull, SDK artifacts
-	@dir=$$(mktemp -d "$${TMPDIR:-/tmp}/nebius-mocker-harbor.XXXXXX"); \
-	trap './test/registry/harbor/harbor.sh down "'"$$dir"'"; $(REGISTRY_CLEANUP)' EXIT INT TERM; \
-	./test/registry/harbor/harbor.sh up "$$dir" && . "$$dir/env" && \
-	$(GO) test -tags e2e_registry -count=1 -v ./test/registry/...
+e2e-registry: ## Harbor-backed registry tests (needs Docker): CLI login + credential helper, docker push/pull, SDK artifacts
+	@dir=$$(mktemp -d "$${TMPDIR:-/tmp}/nebius-mocker-harbor.XXXXXX"); image=nebius-mocker:e2e-$$$$; \
+	trap './deploy/harbor/harbor.sh down "'"$$dir"'"; $(REGISTRY_CLEANUP); docker rmi -f '"$$image"' >/dev/null 2>&1 || true' EXIT INT TERM; \
+	$(MAKE) --no-print-directory docker-image IMAGE=$$image && \
+	./deploy/harbor/harbor.sh up "$$dir" && . "$$dir/env" && \
+	NEBIUS_MOCKER_E2E_IMAGE=$$image $(GO) test -tags e2e_registry -count=1 -v ./test/registry/...
 
 check: lint test ## Everything the pre-commit hook runs
 

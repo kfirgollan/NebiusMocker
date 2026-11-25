@@ -4,6 +4,8 @@ package mocker
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -71,6 +73,24 @@ type Deps struct {
 	// AuditLog holds the audit events the audit interceptor records for
 	// every module; the audit module serves them.
 	AuditLog *audit.Log
+	// TLS is the server TLS configuration from Config.TLS (nil: plaintext).
+	// Modules that open their own listeners serve TLS with it when set.
+	TLS *tls.Config
+}
+
+// loadTLS reads the configured certificate; it returns nil for plaintext.
+func loadTLS(c config.TLSConfig) (*tls.Config, error) {
+	if !c.Enabled() {
+		return nil, nil //nolint:nilnil // nil means plaintext, by contract
+	}
+	if c.CertFile == "" || c.KeyFile == "" {
+		return nil, errors.New("tls: NEBIUS_MOCKER_TLS_CERT_FILE and NEBIUS_MOCKER_TLS_KEY_FILE must be set together")
+	}
+	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("tls: load %s: %w", c.CertFile, err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
 
 // Option customizes a Server.
@@ -125,13 +145,17 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 			return nil, err
 		}
 	}
+	tlsCfg, err := loadTLS(cfg.TLS)
+	if err != nil {
+		return nil, err
+	}
 	engine := authz.NewEngine(authz.DefaultCatalog())
 	rules := authz.NewRules()
 	auditLog, recorder, err := newAudit(cfg, o.clk, log, ops)
 	if err != nil {
 		return nil, err
 	}
-	srv := edge.New(log,
+	srv := edge.NewTLS(log, tlsCfg,
 		interceptors.RequestID(),
 		interceptors.Recover(log),
 		interceptors.Log(log, o.clk),
@@ -149,7 +173,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
 		deps: Deps{
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
-			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(), AuditLog: auditLog,
+			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(), AuditLog: auditLog, TLS: tlsCfg,
 		},
 	}, nil
 }

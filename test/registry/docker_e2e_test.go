@@ -12,10 +12,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 )
+
+// testLabel marks every container these tests start; make e2e-registry
+// removes leftovers by it.
+const testLabel = "nebius-mocker.test=registry"
 
 // dockerEnv runs the docker CLI against the developer's daemon with an
 // isolated client config (DOCKER_CONFIG in a temp dir), so logins never touch
@@ -31,14 +39,17 @@ func newDockerEnv(t *testing.T) *dockerEnv {
 	}
 	// Resolve the active context's daemon before isolating the client config,
 	// which also holds the context selection.
-	host := strings.TrimSpace(mustOutput(t, exec.CommandContext(t.Context(), "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")))
+	out, err := exec.CommandContext(t.Context(), "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
+	if err != nil {
+		t.Fatalf("docker context inspect: %v", err)
+	}
 	cfgDir := t.TempDir()
 	// A non-empty "auths" makes docker store credentials in this file instead
 	// of auto-detecting the OS credential store.
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{"auths":{"nebius-mocker.invalid":{}}}`), 0o600); err != nil {
 		t.Fatalf("write docker config: %v", err)
 	}
-	env := []string{"DOCKER_CONFIG=" + cfgDir, "DOCKER_HOST=" + host, "HOME=" + t.TempDir()}
+	env := []string{"DOCKER_CONFIG=" + cfgDir, "DOCKER_HOST=" + strings.TrimSpace(string(out)), "HOME=" + t.TempDir()}
 	if path, ok := os.LookupEnv("PATH"); ok { //nolint:forbidigo // docker needs PATH for its plugins (buildx)
 		env = append(env, "PATH="+path)
 	}
@@ -69,52 +80,63 @@ func (d *dockerEnv) try(ctx context.Context, args ...string) (string, error) {
 	return out.String(), err
 }
 
-// isDockerDesktop reports whether the daemon runs in Docker Desktop's VM,
-// which cannot reach the host's loopback where the mocker listens.
-func (d *dockerEnv) isDockerDesktop(t *testing.T) bool {
+// runContainer starts a detached, labelled container and removes it (with its
+// volumes) when the test ends. It returns the container name.
+func (d *dockerEnv) runContainer(t *testing.T, prefix string, args ...string) string {
 	t.Helper()
-	return strings.Contains(d.run(t, "info", "--format", "{{.OperatingSystem}}"), "Docker Desktop")
+	name := prefix + "-" + randomSuffix(t)
+	d.run(t, slices.Concat([]string{"run", "-d", "--name", name, "--label", testLabel}, args)...)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
+		defer cancel()
+		if t.Failed() {
+			logs, _ := d.try(ctx, "logs", "--tail", "60", name)
+			t.Logf("logs of %s:\n%s", name, logs)
+		}
+		_, _ = d.try(ctx, "rm", "-f", "-v", name) // best-effort: make e2e-registry also sweeps by label
+	})
+	return name
 }
 
-// forwardLoopback makes host 127.0.0.1:<port> reachable as the daemon's own
-// 127.0.0.1:<port> (an insecure-by-default registry address) by running
-// nginx (Harbor's own goharbor/nginx-photon image) with host networking in
-// the Docker Desktop VM, proxying to host.docker.internal. On a native Linux
-// daemon loopback is shared and nothing is needed.
-func (d *dockerEnv) forwardLoopback(t *testing.T, addr, nginxImage, confTemplate string) {
+// waitLog waits until the container logs contain want.
+func (d *dockerEnv) waitLog(t *testing.T, name, want string) {
 	t.Helper()
-	if !d.isDockerDesktop(t) {
-		return
-	}
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatalf("forwarder: %v", err)
-	}
-	tmpl, err := os.ReadFile(confTemplate)
-	if err != nil {
-		t.Fatalf("forwarder config: %v", err)
-	}
-	conf := filepath.Join(t.TempDir(), "nginx.conf")
-	if err := os.WriteFile(conf, bytes.ReplaceAll(tmpl, []byte("__PORT__"), []byte(port)), 0o600); err != nil {
-		t.Fatalf("forwarder config: %v", err)
-	}
-	name := "nebius-mocker-regfwd-" + randomSuffix(t)
-	d.run(t, "run", "-d", "--name", name, "--label", "nebius-mocker.test=registry",
-		"--network", "host", "-v", conf+":/etc/nginx/nginx.conf:ro", "--entrypoint", "nginx", nginxImage, "-g", "daemon off;")
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-		defer cancel()
-		_, _ = d.try(ctx, "rm", "-f", "-v", name) // best-effort: make e2e-registry also sweeps by label
+	eventually(t, time.Minute, func() error {
+		out, err := d.try(t.Context(), "logs", name)
+		if err == nil && strings.Contains(out, want) {
+			return nil
+		}
+		return fmt.Errorf("%s logs do not contain %q yet:\n%s", name, want, out)
 	})
 }
 
-func mustOutput(t *testing.T, c *exec.Cmd) string {
+// eventually retries fn every second until it succeeds or timeout passes.
+func eventually(t *testing.T, timeout time.Duration, fn func() error) {
 	t.Helper()
-	out, err := c.Output()
-	if err != nil {
-		t.Fatalf("%s: %v", strings.Join(c.Args, " "), err)
+	clk := clock.Real{}
+	deadline := clk.Now().Add(timeout)
+	for {
+		err := fn()
+		if err == nil {
+			return
+		}
+		if clk.Now().After(deadline) {
+			t.Fatalf("timed out after %s: %v", timeout, err)
+		}
+		<-clk.After(time.Second)
 	}
-	return string(out)
+}
+
+// freePort returns a currently unused loopback TCP port.
+func freePort(t *testing.T) int {
+	t.Helper()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	defer func() { _ = ln.Close() }() // best-effort: probing only
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func randomSuffix(t *testing.T) string {
@@ -126,19 +148,24 @@ func randomSuffix(t *testing.T) string {
 	return hex.EncodeToString(b)
 }
 
-// buildImage builds a one-file image FROM scratch (no base image to pull)
-// with unique content, so every run pushes a new digest.
+// imageContext writes a one-file image context FROM scratch (no base image to
+// pull) with unique content, so every run pushes a new digest.
+func imageContext(t *testing.T) (dockerfile, file string) {
+	t.Helper()
+	return "FROM scratch\nCOPY hello.txt /hello.txt\n", fmt.Sprintf("hello from nebius-mocker %s\n", randomSuffix(t))
+}
+
+// buildImage builds the image context on the host daemon.
 func (d *dockerEnv) buildImage(t *testing.T, ref string) {
 	t.Helper()
 	dir := t.TempDir()
-	files := map[string]string{
-		"Dockerfile": "FROM scratch\nCOPY hello.txt /hello.txt\n",
-		"hello.txt":  fmt.Sprintf("hello from nebius-mocker %s\n", randomSuffix(t)),
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+	dockerfile, content := imageContext(t)
+	for name, data := range map[string]string{"Dockerfile": dockerfile, "hello.txt": content} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	d.run(t, "build", "--quiet", "--tag", ref, dir)
 }
+
+func itoa(n int) string { return strconv.Itoa(n) }

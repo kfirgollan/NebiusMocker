@@ -11,6 +11,7 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
@@ -39,6 +40,7 @@ type Module struct {
 	cfg      config.RegistryConfig
 	front    *docker.Server // nil unless the harbor backend serves docker
 	endpoint *endpoint
+	tls      *tls.Config // serve the docker endpoint over TLS when set (Deps.TLS)
 }
 
 var (
@@ -68,6 +70,7 @@ func (*Module) Name() string { return "registry" }
 // Register builds the module and registers its gRPC services and authz rules.
 func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	m.cfg = deps.Config.Registry
+	m.tls = deps.TLS
 	m.endpoint.configure(m.cfg)
 	if err := m.buildBackend(); err != nil {
 		return err
@@ -136,7 +139,7 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.front == nil {
 		return nil
 	}
-	addr, err := m.front.Start(ctx, m.cfg.Listen)
+	addr, err := m.front.Start(ctx, m.cfg.Listen, m.tls)
 	if err != nil {
 		return err
 	}

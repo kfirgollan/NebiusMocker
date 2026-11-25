@@ -4,6 +4,7 @@ package edge
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"sync"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
@@ -28,9 +30,19 @@ type Server struct {
 	err     error
 }
 
-// New builds a server with the given interceptor chain (outermost first).
+// New builds a plaintext (h2c) server with the given interceptor chain
+// (outermost first).
 func New(log *slog.Logger, interceptors ...grpc.UnaryServerInterceptor) *Server {
-	g := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
+	return NewTLS(log, nil, interceptors...)
+}
+
+// NewTLS is New serving TLS with tlsCfg; a nil tlsCfg means plaintext.
+func NewTLS(log *slog.Logger, tlsCfg *tls.Config, interceptors ...grpc.UnaryServerInterceptor) *Server {
+	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(interceptors...)}
+	if tlsCfg != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	}
+	g := grpc.NewServer(opts...)
 	h := health.NewServer()
 	healthpb.RegisterHealthServer(g, h)
 	reflection.Register(g)

@@ -45,12 +45,16 @@ type ArtifactPage struct {
 }
 
 // List returns one page of a registry's artifacts ordered by (image name, digest).
-func (s *ArtifactService) List(ctx context.Context, registryID string, pageSize int64, pageToken string) (ArtifactPage, error) {
-	size, err := pageSizeOf(pageSize)
+func (s *ArtifactService) List(ctx context.Context, q ListQuery) (ArtifactPage, error) {
+	if err := checkFilter(q.Filter); err != nil {
+		return ArtifactPage{}, err
+	}
+	registryID := q.ParentID
+	size, err := pageSizeOf(q.PageSize)
 	if err != nil {
 		return ArtifactPage{}, err
 	}
-	offset, err := decodeOffset(pageToken)
+	offset, err := decodeOffset(q.PageToken)
 	if err != nil {
 		return ArtifactPage{}, err
 	}

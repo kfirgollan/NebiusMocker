@@ -115,12 +115,15 @@ func (s *RegistryService) GetByName(ctx context.Context, parentID, name string) 
 }
 
 // List returns one page of a project's registries in creation order.
-func (s *RegistryService) List(ctx context.Context, parentID string, pageSize int64, pageToken string) (RegistryPage, error) {
-	size, err := pageSizeOf(pageSize)
+func (s *RegistryService) List(ctx context.Context, q ListQuery) (RegistryPage, error) {
+	if err := checkFilter(q.Filter); err != nil {
+		return RegistryPage{}, err
+	}
+	size, err := pageSizeOf(q.PageSize)
 	if err != nil {
 		return RegistryPage{}, err
 	}
-	page, err := s.repo.List(ctx, parentID, size, pageToken)
+	page, err := s.repo.List(ctx, q.ParentID, size, q.PageToken)
 	if err != nil {
 		return RegistryPage{}, err
 	}

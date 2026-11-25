@@ -71,6 +71,8 @@ type Config struct {
 	ComputeImagesFile string
 	// Registry configures the Container Registry module.
 	Registry RegistryConfig
+	// TLS enables TLS on the mocker's listeners; empty means plaintext.
+	TLS TLSConfig
 	// Storage configures the Object Storage module (NEBIUS_MOCKER_STORAGE_*).
 	Storage StorageConfig
 	// MysteryBox holds the secrets manager's limits and payload key.
@@ -257,6 +259,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	parsers = append(parsers, vpcParsers(&c.VPC)...)
+	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {

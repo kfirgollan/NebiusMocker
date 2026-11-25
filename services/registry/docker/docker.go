@@ -15,6 +15,7 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,12 +86,19 @@ func New(access Access, up Upstream, log *slog.Logger) (*Server, error) {
 // Handler returns the HTTP handler (useful for tests with httptest).
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serve) }
 
-// Start listens on addr and serves until Stop.
-func (s *Server) Start(ctx context.Context, addr string) (net.Addr, error) {
+// Start listens on addr and serves until Stop; with a non-nil tlsCfg it
+// serves HTTPS (needed for registry hosts docker does not treat as insecure,
+// e.g. cr.<region>.nebius.cloud).
+func (s *Server) Start(ctx context.Context, addr string, tlsCfg *tls.Config) (net.Addr, error) {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("registry docker: listen %s: %w", addr, err)
+	}
+	if tlsCfg != nil {
+		cfg := tlsCfg.Clone()
+		cfg.NextProtos = []string{"http/1.1"}
+		ln = tls.NewListener(ln, cfg)
 	}
 	srv := &http.Server{
 		Handler:           s.Handler(),

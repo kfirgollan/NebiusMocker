@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -201,6 +202,41 @@ func TestArtifacts(t *testing.T) {
 	}
 	if _, err := e.artifacts.List(ctx, &registrypb.ListArtifactsRequest{ParentId: "registry-e00mock000000missing"}); status.Code(err) != codes.NotFound {
 		t.Errorf("List in missing registry: %v, want NotFound", err)
+	}
+}
+
+// TestRegistryListFilter: filters are rejected with INVALID_ARGUMENT naming
+// the field, never silently ignored (no filter syntax is documented upstream).
+func TestRegistryListFilter(t *testing.T) {
+	t.Parallel()
+	e := startRegistry(t)
+	ctx := t.Context()
+	id := e.create(t, e.registry, "app").GetMetadata().GetId()
+	_, err := e.registry.List(ctx, &registrypb.ListRegistriesRequest{ParentId: e.inst.ProjectID, Filter: `name = "app"`})
+	assertFilterRejected(t, "RegistryService.List", err)
+	_, err = e.artifacts.List(ctx, &registrypb.ListArtifactsRequest{ParentId: id, Filter: `name = "web"`})
+	assertFilterRejected(t, "ArtifactService.List", err)
+	if _, err := e.registry.List(ctx, &registrypb.ListRegistriesRequest{ParentId: e.inst.ProjectID}); err != nil {
+		t.Errorf("List without filter: %v", err)
+	}
+}
+
+func assertFilterRejected(t *testing.T, rpc string, err error) {
+	t.Helper()
+	st := status.Convert(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("%s with filter: %v, want InvalidArgument", rpc, err)
+	}
+	var fields []string
+	for _, d := range st.Details() {
+		if se, ok := d.(*commonpb.ServiceError); ok {
+			for _, v := range se.GetBadRequest().GetViolations() {
+				fields = append(fields, v.GetField())
+			}
+		}
+	}
+	if !slices.Contains(fields, "filter") {
+		t.Errorf("%s with filter: details %v, want a BadRequest violation on field filter", rpc, st.Details())
 	}
 }
 

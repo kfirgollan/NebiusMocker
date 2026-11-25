@@ -179,6 +179,32 @@ func TestDenials(t *testing.T) {
 	}
 }
 
+func TestStartTLS(t *testing.T) {
+	t.Parallel()
+	certSrc := httptest.NewUnstartedServer(http.NotFoundHandler()) // only for its test certificate
+	certSrc.StartTLS()
+	t.Cleanup(certSrc.Close)
+	u, _ := url.Parse("http://127.0.0.1:1")
+	s, err := New(&fakeAccess{}, Upstream{URL: u}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, err := s.Start(t.Context(), "127.0.0.1:0", certSrc.TLS)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Stop(t.Context()) })
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr.String()+"/v2/", http.NoBody)
+	resp, err := certSrc.Client().Do(req)
+	if err != nil {
+		t.Fatalf("HTTPS ping: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || resp.TLS == nil {
+		t.Errorf("HTTPS ping = %d (tls %v), want 401 over TLS", resp.StatusCode, resp.TLS != nil)
+	}
+}
+
 func TestStartStop(t *testing.T) {
 	t.Parallel()
 	u, _ := url.Parse("http://127.0.0.1:1")
@@ -186,7 +212,7 @@ func TestStartStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr, err := s.Start(t.Context(), "127.0.0.1:0")
+	addr, err := s.Start(t.Context(), "127.0.0.1:0", nil)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
