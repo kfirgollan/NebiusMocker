@@ -70,6 +70,11 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	})
 	api.RegisterAuthzRules(deps.Rules, svc)
 	computepb.RegisterImageServiceServer(reg, api.NewImageHandler(svc))
+	// The membership port is what InstanceService joins GPU clusters through
+	// (spec.gpu_cluster); building it here validates the fabric catalog.
+	if _, err := newGpuClusterMembership(deps); err != nil {
+		return err
+	}
 	return registerDisks(reg, deps, svc)
 }
 

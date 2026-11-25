@@ -1,0 +1,20 @@
+# Built-in InfiniBand fabric catalog of GPU clusters (spec.infiniband_fabric).
+# Source: https://docs.nebius.com/compute/clusters/gpu#fabrics (2026-11-25).
+# One fabric serves one GPU platform in one region. Only fabrics in regions
+# the mocker emulates (NEBIUS_MOCKER_REGIONS) can be used; the others are kept
+# so that a custom region list picks them up. Replace the catalog with
+# NEBIUS_MOCKER_COMPUTE_FABRICS_FILE.
+fabrics:
+  - {name: fabric-2, region: eu-north1, platforms: [gpu-h100-sxm]}
+  - {name: fabric-3, region: eu-north1, platforms: [gpu-h100-sxm]}
+  - {name: fabric-4, region: eu-north1, platforms: [gpu-h100-sxm]}
+  - {name: fabric-6, region: eu-north1, platforms: [gpu-h100-sxm]}
+  - {name: fabric-7, region: eu-north1, platforms: [gpu-h200-sxm]}
+  - {name: fabric-5, region: eu-west1, platforms: [gpu-h200-sxm]}
+  - {name: eu-north2-a, region: eu-north2, platforms: [gpu-h200-sxm]}
+  - {name: eu-west2-a, region: eu-west2, platforms: [gpu-b300-sxm]}
+  - {name: uk-south1-a, region: uk-south1, platforms: [gpu-b300-sxm]}
+  - {name: us-north1-a, region: us-north1, platforms: [gpu-b300-sxm]}
+  - {name: me-west1-a, region: me-west1, platforms: [gpu-b200-sxm-a]}
+  - {name: us-central1-a, region: us-central1, platforms: [gpu-h200-sxm]}
+  - {name: us-central1-b, region: us-central1, platforms: [gpu-b200-sxm]}

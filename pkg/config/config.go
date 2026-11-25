@@ -69,6 +69,9 @@ type Config struct {
 	// ComputeImagesFile, when set, replaces the built-in public image catalog
 	// (YAML or JSON; see docs/services/compute.md).
 	ComputeImagesFile string
+	// ComputeFabricsFile, when set, replaces the built-in InfiniBand fabric
+	// catalog of GPU clusters (YAML or JSON; see docs/services/compute.md).
+	ComputeFabricsFile string
 	// Registry configures the Container Registry module.
 	Registry RegistryConfig
 	// TLS enables TLS on the mocker's listeners; empty means plaintext.
@@ -271,6 +274,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
 	parsers = append(parsers, authParsers(&c.Auth)...)
+	parsers = append(parsers, computeFabricsParsers(&c.ComputeFabricsFile)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {

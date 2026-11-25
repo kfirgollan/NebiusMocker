@@ -157,3 +157,49 @@ type ImageLookup interface {
 	GetLatestByFamily(ctx context.Context, family, parentID string) (*computepb.Image, error)
 	IsPublicProject(id string) bool
 }
+
+// KindGpuCluster is the NID type prefix of GPU clusters.
+const KindGpuCluster = "computegpucluster"
+
+// GpuClusterPage is one page of a GPU cluster listing.
+type GpuClusterPage struct {
+	Items         []*computepb.GpuCluster
+	NextPageToken string
+}
+
+// GpuClusterRepository stores GPU clusters.
+type GpuClusterRepository interface {
+	Get(ctx context.Context, id string) (*computepb.GpuCluster, error)
+	GetByName(ctx context.Context, parentID, name string) (*computepb.GpuCluster, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (GpuClusterPage, error)
+	// Create fails with errs.AlreadyExists if the ID or the name in the parent is taken.
+	Create(ctx context.Context, c *computepb.GpuCluster) error
+	// Mutate is DiskRepository.Mutate for GPU clusters.
+	Mutate(ctx context.Context, id string, fn func(*computepb.GpuCluster) error) (*computepb.GpuCluster, error)
+	// DeleteIf atomically loads the cluster and deletes it unless check
+	// returns an error, which aborts the deletion. A missing cluster is
+	// errs.NotFound.
+	DeleteIf(ctx context.Context, id string, check func(*computepb.GpuCluster) error) error
+}
+
+// ProjectRegions resolves the region of a project (satisfied by
+// peer.ProjectRegions, provided by the iam module).
+type ProjectRegions interface {
+	Region(ctx context.Context, projectID string) (string, error)
+}
+
+// GpuClusterMembership is how instances join and leave GPU clusters
+// (InstanceSpec.gpu_cluster). Satisfied by *GpuClusterMembers. It keeps
+// GpuClusterStatus.instances and a synthetic infiniband_topology_path: no
+// fabric is simulated.
+type GpuClusterMembership interface {
+	// Join atomically checks that the cluster exists (errs.NotFound, naming
+	// spec.gpu_cluster.id), is in projectID (errs.BadRequest) and that its
+	// fabric accepts platform (errs.BadRequest), then appends instanceID to
+	// status.instances and records its topology path, which it returns. A
+	// second Join of the same instance returns the recorded path.
+	Join(ctx context.Context, clusterID, instanceID, projectID, platform string) (topologyPath []string, err error)
+	// Leave removes instanceID from the cluster. A missing cluster or member
+	// is not an error.
+	Leave(ctx context.Context, clusterID, instanceID string) error
+}

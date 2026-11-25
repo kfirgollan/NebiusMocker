@@ -157,6 +157,9 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	if err := peer.Provide[peer.GroupMembers](deps.Peers, peer.GroupMembersKey, domain.NewGroupMembers(r.memberships, deps.Clock)); err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
+	if err := peer.Provide[peer.ProjectRegions](deps.Peers, peer.ProjectRegionsKey, domain.NewProjectRegions(r.projects)); err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
 	api.RegisterCredentialRules(deps.Rules, func(ctx context.Context, awsID string) (string, error) {
 		k, err := r.keys.GetByAwsID(ctx, awsID)
 		return k.GetMetadata().GetId(), err
