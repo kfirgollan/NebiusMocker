@@ -260,16 +260,17 @@ type fixture struct {
 	blobs  *fakeBlobs
 	ops    *fakeOps
 	clk    *clock.Manual
+	disks  *stubDiskReader
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{
-		images: newFakeImages(), blobs: newFakeBlobs(), ops: &fakeOps{},
+		images: newFakeImages(), blobs: newFakeBlobs(), ops: &fakeOps{}, disks: newStubDiskReader(),
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	svc, err := NewImageService(ImageDeps{
-		Images: f.images, OpIndex: &fakeOpIndex{}, Blobs: f.blobs, Projects: fakeProjects{testProject: true},
+		Images: f.images, OpIndex: &fakeOpIndex{}, Blobs: f.blobs, Projects: fakeProjects{testProject: true}, Disks: f.disks,
 		Ops: f.ops, IDs: &fakeIDs{}, Clock: f.clk, Regions: testRegions,
 	})
 	if err != nil {

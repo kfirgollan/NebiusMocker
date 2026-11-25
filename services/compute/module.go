@@ -54,7 +54,8 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	}
 	svc, err := domain.NewImageService(domain.ImageDeps{
 		Images: images, OpIndex: dal.NewOpIndex(deps.Store), Blobs: blobs, Projects: deps.Authz,
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Regions: regions,
+		Disks: dal.NewDiskReader(deps.Store),
+		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Regions: regions,
 	})
 	if err != nil {
 		return fmt.Errorf("compute: %w", err)

@@ -27,6 +27,7 @@ type ImageService struct {
 	opIndex  OperationIndex
 	blobs    Blobs
 	projects Projects
+	disks    DiskReader
 	ops      Operations
 	ids      IDGenerator
 	clk      clock.Clock
@@ -41,6 +42,7 @@ type ImageDeps struct {
 	OpIndex  OperationIndex
 	Blobs    Blobs
 	Projects Projects
+	Disks    DiskReader
 	Ops      Operations
 	IDs      IDGenerator
 	Clock    clock.Clock
@@ -49,7 +51,7 @@ type ImageDeps struct {
 
 // NewImageService wires an ImageService.
 func NewImageService(d ImageDeps) (*ImageService, error) {
-	if d.Images == nil || d.OpIndex == nil || d.Blobs == nil || d.Projects == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.Images == nil || d.OpIndex == nil || d.Blobs == nil || d.Projects == nil || d.Disks == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("compute: image service dependencies must not be nil")
 	}
 	if len(d.Regions) == 0 {
@@ -60,7 +62,7 @@ func NewImageService(d ImageDeps) (*ImageService, error) {
 		public[PublicProjectID(r.RoutingCode)] = r.Name
 	}
 	return &ImageService{
-		images: d.Images, opIndex: d.OpIndex, blobs: d.Blobs, projects: d.Projects,
+		images: d.Images, opIndex: d.OpIndex, blobs: d.Blobs, projects: d.Projects, disks: d.Disks,
 		ops: d.Ops, ids: d.IDs, clk: d.Clock, regions: slices.Clone(d.Regions), public: public,
 	}, nil
 }
@@ -221,7 +223,7 @@ func (s *ImageService) Create(ctx context.Context, cmd CreateImageCmd) (*operati
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
 		Prepare:     func(ctx context.Context) error { return s.prepareCreate(ctx, img, src) },
-		Work:        func(ctx context.Context) error { return s.importPayload(ctx, img.GetMetadata().GetId(), src) },
+		Work:        func(ctx context.Context) error { return s.importSource(ctx, img.GetMetadata().GetId(), src) },
 	})
 }
 
@@ -341,7 +343,7 @@ func (s *ImageService) setState(ctx context.Context, id string, state computepb.
 }
 
 // newImage builds the CREATING image for a Create request.
-func (s *ImageService) newImage(ctx context.Context, cmd CreateImageCmd) (*computepb.Image, *computepb.ImageSpec_SourceStorage, error) {
+func (s *ImageService) newImage(ctx context.Context, cmd CreateImageCmd) (*computepb.Image, *imageSource, error) {
 	md := cmd.Metadata
 	if md.GetId() != "" {
 		return nil, nil, errs.BadRequest(errs.Violation{Field: "metadata.id", Message: "must not be set on create"})
@@ -358,10 +360,7 @@ func (s *ImageService) newImage(ctx context.Context, cmd CreateImageCmd) (*compu
 	if err != nil {
 		return nil, nil, fmt.Errorf("new image id: %w", err)
 	}
-	spec := proto.CloneOf(cmd.Spec)
-	if spec.GetCpuArchitecture() == computepb.ImageSpec_UNSPECIFIED {
-		spec.CpuArchitecture = computepb.ImageSpec_AMD64 // CLI docs: "By default the image uses AMD64"
-	}
+	spec := proto.CloneOf(cmd.Spec) // cpu_architecture defaults are applied by resolveSource
 	now := timestamppb.New(s.clk.Now())
 	return &computepb.Image{
 		Metadata: &commonpb.ResourceMetadata{
@@ -386,44 +385,12 @@ func (s *ImageService) checkParent(ctx context.Context, parentID string) error {
 	return nil
 }
 
-// sourceOf validates the source oneof. Only Object Storage imports are
-// emulated: disks and disk snapshots are not implemented yet, so no disk or
-// snapshot ID can exist.
-func sourceOf(spec *computepb.ImageSpec) (*computepb.ImageSpec_SourceStorage, error) {
-	switch src := spec.GetSource().(type) {
-	case *computepb.ImageSpec_SourceStorage_:
-		st := src.SourceStorage
-		var v []errs.Violation
-		if st.GetBucketName() == "" {
-			v = append(v, errs.Violation{Field: "spec.source_storage.bucket_name", Message: "required"})
-		}
-		if st.GetObjectName() == "" {
-			v = append(v, errs.Violation{Field: "spec.source_storage.object_name", Message: "required"})
-		}
-		if len(v) > 0 {
-			return nil, errs.BadRequest(v...)
-		}
-		return st, nil
-	case *computepb.ImageSpec_SourceDiskId:
-		return nil, &errs.Error{Kind: errs.KindNotFound, ResourceID: src.SourceDiskId, Message: "source disk " + src.SourceDiskId + " not found"}
-	case *computepb.ImageSpec_SourceDiskSnapshotId:
-		return nil, &errs.Error{Kind: errs.KindNotFound, ResourceID: src.SourceDiskSnapshotId, Message: "source disk snapshot " + src.SourceDiskSnapshotId + " not found"}
-	default:
-		return nil, errs.BadRequest(errs.Violation{Field: "spec.source", Message: "one of source_disk_id, source_storage, source_disk_snapshot_id is required"})
-	}
-}
-
-// prepareCreate runs under the resource lock: the source must exist, the
-// family/version pair must be free, then the CREATING image is stored.
-func (s *ImageService) prepareCreate(ctx context.Context, img *computepb.Image, src *computepb.ImageSpec_SourceStorage) error {
-	if _, err := s.blobs.StatSource(ctx, src.GetBucketName(), src.GetObjectName()); err != nil {
-		if errs.IsKind(err, errs.KindNotFound) {
-			return errs.BadRequest(errs.Violation{
-				Field:   "spec.source_storage.object_name",
-				Message: fmt.Sprintf("object %q not found in bucket %q", src.GetObjectName(), src.GetBucketName()),
-			})
-		}
-		return fmt.Errorf("stat source object: %w", err)
+// prepareCreate runs under the resource lock: the source must exist (and a
+// disk or snapshot must be READY), the family/version pair must be free, then
+// the CREATING image is stored.
+func (s *ImageService) prepareCreate(ctx context.Context, img *computepb.Image, src *imageSource) error {
+	if err := s.resolveSource(ctx, img, src); err != nil {
+		return err
 	}
 	if err := s.checkFamilyVersion(ctx, img); err != nil {
 		return err

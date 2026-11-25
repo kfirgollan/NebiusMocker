@@ -90,8 +90,8 @@ func TestCreateValidation(t *testing.T) {
 		{name: "no source", parent: testProject, spec: &computepb.ImageSpec{}, wantKind: errs.KindBadRequest},
 		{name: "empty bucket", parent: testProject, spec: storageSpec("", "o"), wantKind: errs.KindBadRequest},
 		{name: "missing object", parent: testProject, spec: storageSpec("b", "nope"), wantKind: errs.KindBadRequest},
-		{name: "disk source", parent: testProject, spec: &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceDiskId{SourceDiskId: "computedisk-e00x"}}, wantKind: errs.KindNotFound},
-		{name: "snapshot source", parent: testProject, spec: &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceDiskSnapshotId{SourceDiskSnapshotId: "computedisksnapshot-e00x"}}, wantKind: errs.KindNotFound},
+		{name: "unknown disk", parent: testProject, spec: &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceDiskId{SourceDiskId: "computedisk-e00x"}}, wantKind: errs.KindNotFound},
+		{name: "unknown snapshot", parent: testProject, spec: &computepb.ImageSpec{Source: &computepb.ImageSpec_SourceDiskSnapshotId{SourceDiskSnapshotId: "computedisksnapshot-e00x"}}, wantKind: errs.KindNotFound},
 		{name: "ok", parent: testProject, spec: storageSpec("b", "o")},
 	}
 	for _, tt := range tests {

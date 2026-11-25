@@ -31,6 +31,11 @@ func (s *ImageService) importPayload(ctx context.Context, id string, src *comput
 		}
 		return err
 	}
+	return s.markReady(ctx, id, in)
+}
+
+// markReady sets the READY status derived from the stored payload.
+func (s *ImageService) markReady(ctx context.Context, id string, in Inspection) error {
 	img, err := s.images.Get(ctx, id)
 	if err != nil {
 		return err
