@@ -9,6 +9,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/services/ai"
+	"github.com/kfirgollan/NebiusMocker/services/audit"
 	"github.com/kfirgollan/NebiusMocker/services/compute"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
 	"github.com/kfirgollan/NebiusMocker/services/kms"
@@ -19,5 +20,5 @@ import (
 )
 
 func main() {
-	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New()))
+	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New(), audit.New()))
 }

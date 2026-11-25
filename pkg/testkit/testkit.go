@@ -57,6 +57,17 @@ func WithOperationDelay(d time.Duration) Option {
 	return func(s *settings) { s.cfg.OperationDelay = d }
 }
 
+// WithAuditExportDuration keeps audit event exports RUNNING for d before
+// they write their objects (default: exports finish inside Start).
+func WithAuditExportDuration(d time.Duration) Option {
+	return func(s *settings) { s.cfg.Audit.ExportDuration = d }
+}
+
+// WithAuditReads also records Get/List calls as audit events.
+func WithAuditReads() Option {
+	return func(s *settings) { s.cfg.Audit.Reads = true }
+}
+
 // WithAuthnRequired rejects anonymous requests.
 func WithAuthnRequired() Option {
 	return func(s *settings) { s.cfg.Authn = config.AuthnRequired }

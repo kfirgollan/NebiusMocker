@@ -79,6 +79,8 @@ type Config struct {
 	VPC VPCConfig
 	// AI configures the AI endpoints area and its stub data plane.
 	AI AIConfig
+	// Audit configures the audit event log (NEBIUS_MOCKER_AUDIT_*).
+	Audit AuditConfig
 }
 
 // Region is one emulated Nebius region.
@@ -126,6 +128,18 @@ type MysteryBoxConfig struct {
 	// Key is the base64 AES-256 key payloads are sealed with; empty means a
 	// random key per process.
 	Key string
+}
+
+// AuditConfig configures audit event capture.
+type AuditConfig struct {
+	// MaxEvents bounds the in-memory event log; the oldest events are evicted.
+	MaxEvents int
+	// Reads also records Get/List calls (default: only mutating calls and
+	// authorization denials, like Nebius control-plane audit logs).
+	Reads bool
+	// ExportDuration is how long an audit event export stays RUNNING
+	// before it writes its objects; 0 exports inside the Start call.
+	ExportDuration time.Duration
 }
 
 // ObjStoreBackend selects the pkg/objstore implementation.
@@ -176,6 +190,7 @@ func Default() Config {
 			Region:    "us-east-1",
 		},
 		Registry: defaultRegistry(),
+		Audit:    AuditConfig{MaxEvents: 50_000},
 		Storage: StorageConfig{
 			S3Listen:   ":4580",
 			S3Domain:   "storage.eu-north1.mocker.localhost",
@@ -228,6 +243,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"STORAGE_S3_DOMAIN", func(v string) error { c.Storage.S3Domain = v; return nil }},
 		{"STORAGE_REGION", func(v string) error { c.Storage.Region = v; return nil }},
 		{"STORAGE_PURGE_GRACE", func(v string) error { return parsePositive(v, &c.Storage.PurgeGrace) }},
+		{"AUDIT_MAX_EVENTS", func(v string) error { return parsePositiveInt(v, &c.Audit.MaxEvents) }},
+		{"AUDIT_READS", func(v string) error { return parseBool(v, &c.Audit.Reads) }},
+		{"AUDIT_EXPORT_DURATION", func(v string) error { return parseDuration(v, &c.Audit.ExportDuration) }},
 		{"MYSTERYBOX_MAX_ENTRIES", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxEntries) }},
 		{"MYSTERYBOX_MAX_VALUE_BYTES", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxValueBytes) }},
 		{"MYSTERYBOX_MAX_VERSIONS", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxVersions) }},
@@ -376,5 +394,14 @@ func parsePositive(v string, out *time.Duration) error {
 	if *out == 0 {
 		return fmt.Errorf("must be positive, got %s", v)
 	}
+	return nil
+}
+
+func parseBool(v string, out *bool) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("want true or false, got %q", v)
+	}
+	*out = b
 	return nil
 }

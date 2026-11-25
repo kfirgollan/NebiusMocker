@@ -32,6 +32,9 @@ func Authorize(engine *authz.Engine, rules *authz.Rules, mode authz.Mode, log *s
 				"method", info.FullMethod, "principal", reqctx.PrincipalFrom(ctx).ID,
 				"enforced", mode == authz.ModeEnforce, "reason", reason)
 			if mode == authz.ModeEnforce {
+				if info := reqctx.InfoFrom(ctx); info != nil {
+					info.Denied = true
+				}
 				return nil, serviceerror.FromDomain(ctx, err)
 			}
 		}

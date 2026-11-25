@@ -24,6 +24,10 @@ func (p Principal) Anonymous() bool { return p.ID == "" }
 type Info struct {
 	RequestID string
 	Principal Principal
+	// Denied is set by the authorization interceptor when it rejects the
+	// request, so outer interceptors (audit) can tell a denial from a
+	// handler error with the same code.
+	Denied bool
 }
 
 // WithInfo returns ctx carrying info.

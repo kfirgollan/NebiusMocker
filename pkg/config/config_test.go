@@ -141,3 +141,31 @@ func TestFromLookupMysteryBox(t *testing.T) {
 		}
 	}
 }
+
+func TestFromLookupAudit(t *testing.T) {
+	t.Parallel()
+	if got := Default().Audit; got != (AuditConfig{MaxEvents: 50_000}) {
+		t.Fatalf("default audit = %+v", got)
+	}
+	c, err := FromLookup(lookup(map[string]string{
+		"NEBIUS_MOCKER_AUDIT_MAX_EVENTS":      "1000",
+		"NEBIUS_MOCKER_AUDIT_READS":           "true",
+		"NEBIUS_MOCKER_AUDIT_EXPORT_DURATION": "2s",
+	}))
+	if err != nil {
+		t.Fatalf("FromLookup: %v", err)
+	}
+	if want := (AuditConfig{MaxEvents: 1000, Reads: true, ExportDuration: 2 * time.Second}); c.Audit != want {
+		t.Fatalf("Audit = %+v, want %+v", c.Audit, want)
+	}
+	for _, env := range []map[string]string{
+		{"NEBIUS_MOCKER_AUDIT_MAX_EVENTS": "0"},
+		{"NEBIUS_MOCKER_AUDIT_MAX_EVENTS": "many"},
+		{"NEBIUS_MOCKER_AUDIT_READS": "sometimes"},
+		{"NEBIUS_MOCKER_AUDIT_EXPORT_DURATION": "-1s"},
+	} {
+		if _, err := FromLookup(lookup(env)); err == nil {
+			t.Errorf("FromLookup(%v) succeeded, want error", env)
+		}
+	}
+}

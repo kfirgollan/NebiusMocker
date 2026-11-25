@@ -91,12 +91,20 @@ const (
 	// RoleMysteryBoxPayloadViewer may read MysteryBox secret payloads, which
 	// viewer and editor may not.
 	RoleMysteryBoxPayloadViewer = "mysterybox.payload-viewer"
+	// RoleAuditor reads everything a viewer reads plus the audit log, and
+	// runs audit exports.
+	RoleAuditor = "auditor"
 )
 
 // permMysteryBoxPayloadRead reads decrypted secret payloads. Its verb is not
 // "get", so the viewer and editor read patterns do not grant it (Nebius docs:
 // only admin and mysterybox.payload-viewer may read payloads).
 const permMysteryBoxPayloadRead = "mysterybox.payload.read"
+
+// auditPermissions are the audit service's permissions. Audit events carry
+// request payloads and principals of every service, so reading them is not
+// part of viewer or editor: only admin and auditor hold them.
+const auditPermissions = "audit.*.*"
 
 // Catalog is the set of known roles.
 type Catalog struct {
@@ -112,11 +120,11 @@ func NewCatalog(roles ...Role) *Catalog {
 	return c
 }
 
-// DefaultCatalog returns viewer, editor, admin and the service roles.
+// DefaultCatalog returns viewer, editor, admin, auditor and the service roles.
 func DefaultCatalog() *Catalog {
 	read := []string{"*.*." + VerbGet, "*.*." + VerbList}
 	return NewCatalog(
-		Role{Name: RoleViewer, Grants: read},
+		Role{Name: RoleViewer, Grants: read, Excludes: []string{auditPermissions}},
 		Role{
 			Name: RoleEditor,
 			Grants: append(slices.Clone(read), "*.*."+VerbCreate, "*.*."+VerbUpdate, "*.*."+VerbDelete,
@@ -126,10 +134,14 @@ func DefaultCatalog() *Catalog {
 				"kms.*.encrypt", "kms.*.decrypt", "kms.*.sign", "kms.*.rotate", "kms.*.undelete",
 				"*.*."+VerbStart, "*.*."+VerbStop, "*.*."+VerbRestart),
 			// Editors manage resources, not who may access them.
-			Excludes: []string{"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete"},
+			Excludes: []string{
+				"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete",
+				auditPermissions,
+			},
 		},
 		Role{Name: RoleAdmin, Grants: []string{"*"}},
 		Role{Name: RoleMysteryBoxPayloadViewer, Grants: []string{permMysteryBoxPayloadRead}},
+		Role{Name: RoleAuditor, Grants: append(slices.Clone(read), auditPermissions)},
 	)
 }
 

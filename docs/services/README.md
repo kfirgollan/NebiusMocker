@@ -26,7 +26,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
 | Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release, T0 rest | T2 with k3s (M3) |
 | Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 | — |
-| Audit | [audit.md](audit.md) | 2 | 5 | 0 / 0 | T0 | T1 from request journal (M4) |
+| Audit | [audit.md](audit.md) | 2 | 5 | 0 / 0 | **T2** | — |
 | Logging | [logging.md](logging.md) | 2 | 5 | 0 / 0 | T0 | T1 (M4) |
 | Maintenance | [maintenance.md](maintenance.md) | 1 | 3 | 0 / 0 | T0 | T1 (M4) |
 | Common (operations) | [common.md](common.md) | 2 | 4 | all | **T2** (framework) | — |

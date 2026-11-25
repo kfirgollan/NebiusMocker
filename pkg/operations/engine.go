@@ -27,6 +27,9 @@ type Engine struct {
 	delay time.Duration
 	log   *slog.Logger
 
+	// onFinish observes every finished operation (set before Start).
+	onFinish func(ctx context.Context, op *Operation)
+
 	mu      sync.Mutex
 	active  map[string]string // resource ID → running operation ID
 	started bool
@@ -194,6 +197,17 @@ func (e *Engine) finish(ctx context.Context, op *Operation, workErr error) {
 		e.log.WarnContext(ctx, "operation failed", "op_id", op.ID, "resource_id", op.ResourceID, "error", workErr)
 	}
 	e.unlock(op.ResourceID)
+	if e.onFinish != nil {
+		e.onFinish(ctx, op.clone())
+	}
+}
+
+// OnFinish registers fn to observe every operation when it finishes, after
+// its result is stored. fn runs on the goroutine that completed the
+// operation (the caller of Submit when the delay is zero), so it must be
+// fast and must not call Submit. Call it before Start; there is one observer.
+func (e *Engine) OnFinish(fn func(ctx context.Context, op *Operation)) {
+	e.onFinish = fn
 }
 
 // loop is the single scheduler goroutine: it owns the due-heap, so no lock is needed on it.

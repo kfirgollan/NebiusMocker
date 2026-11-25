@@ -31,6 +31,9 @@ CI with no Nebius account.
 > MysteryBox secret) through Terraform, the Go SDK and the `nebius ai endpoint` CLI. No container runs: each endpoint
 > URL points at a stub listener on `:4600` that answers `200 "endpoint was called"` to authorized calls; see
 > [docs/services/ai.md](docs/services/ai.md#implementation-status).
+> **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
+> event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
+> `nebius audit`; see [docs/services/audit.md](docs/services/audit.md#implementation-status).
 
 ## Quick start
 

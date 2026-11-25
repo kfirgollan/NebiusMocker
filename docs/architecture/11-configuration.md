@@ -29,6 +29,9 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_RATE_LIMIT` | off | For example `compute=50/s,*=200/s` |
 | `NEBIUS_MOCKER_FAULTS_FILE` | — | YAML fault rules loaded at boot |
 | `NEBIUS_MOCKER_JOURNAL` | `0` | Record all RPCs to `DATA_DIR/journal.jsonl` (secrets redacted) |
+| `NEBIUS_MOCKER_AUDIT_MAX_EVENTS` | `50000` | Capacity of the in-memory audit event log; the oldest events are evicted ([audit](../services/audit.md)) |
+| `NEBIUS_MOCKER_AUDIT_READS` | `false` | Also record Get/List calls as audit events (default: mutating calls and authz denials only) |
+| `NEBIUS_MOCKER_AUDIT_EXPORT_DURATION` | `0` | How long an audit export stays `RUNNING` before writing its objects; `0` exports inside `Start` |
 | `NEBIUS_MOCKER_LOG_LEVEL` / `_LOG_FORMAT` | `info` / `text` | `debug` logs every request with principal, permission decision and timing |
 | `NEBIUS_MOCKER_PEERS` | — | `area=host:port,...` remote modules for split deployments |
 | `NEBIUS_MOCKER_GATEWAY` | — | Run as a routing gateway to these peers |

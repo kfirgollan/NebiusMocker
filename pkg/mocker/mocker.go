@@ -9,10 +9,12 @@ import (
 	"net"
 	"slices"
 
+	"google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/grpc"
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/audit"
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
@@ -26,6 +28,7 @@ import (
 	opsapi "github.com/kfirgollan/NebiusMocker/pkg/operations/api"
 	opsdal "github.com/kfirgollan/NebiusMocker/pkg/operations/dal"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/serviceerror"
 	"github.com/kfirgollan/NebiusMocker/pkg/store"
 )
 
@@ -65,6 +68,9 @@ type Deps struct {
 	// capabilities other areas consume (e.g. MysteryBox secret payloads)
 	// and Lookup the ones they need at call time.
 	Peers *peer.Directory
+	// AuditLog holds the audit events the audit interceptor records for
+	// every module; the audit module serves them.
+	AuditLog *audit.Log
 }
 
 // Option customizes a Server.
@@ -121,11 +127,19 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	}
 	engine := authz.NewEngine(authz.DefaultCatalog())
 	rules := authz.NewRules()
+	auditLog, recorder, err := newAudit(cfg, o.clk, log, ops)
+	if err != nil {
+		return nil, err
+	}
 	srv := edge.New(log,
 		interceptors.RequestID(),
 		interceptors.Recover(log),
 		interceptors.Log(log, o.clk),
 		interceptors.Authenticate(cfg.Authn, cfg.Tokens),
+		interceptors.Audit(interceptors.AuditConfig{
+			Recorder: recorder, Hierarchy: engine, Rules: rules,
+			Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID,
+		}),
 		validate,
 		interceptors.Authorize(engine, rules, cfg.Authz, log),
 	)
@@ -135,7 +149,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
 		deps: Deps{
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
-			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(),
+			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(), AuditLog: auditLog,
 		},
 	}, nil
 }
@@ -200,6 +214,31 @@ func (s *Server) stopModules(ctx context.Context) {
 		}
 	}
 }
+
+// newAudit builds the audit event log and its recorder, and reports
+// operation completions to it (the DONE/ERROR event of async calls).
+func newAudit(cfg config.Config, clk clock.Clock, log *slog.Logger, ops *operations.Engine) (*audit.Log, *audit.Recorder, error) {
+	auditLog, err := audit.NewLog(cfg.Audit.MaxEvents)
+	if err != nil {
+		return nil, nil, err
+	}
+	rec, err := audit.NewRecorder(auditLog, clk, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The IAM module seeds both under this name; events about them carry it
+	// in resource.hierarchy.name.
+	rec.RememberName(cfg.TenantID, seededName)
+	rec.RememberName(cfg.ProjectID, seededName)
+	ops.OnFinish(func(ctx context.Context, op *operations.Operation) {
+		st := serviceerror.StatusProto(ctx, op.Err)
+		rec.OperationFinished(ctx, op.ID, code.Code(st.GetCode()), st.GetMessage())
+	})
+	return auditLog, rec, nil
+}
+
+// seededName is the name of the seeded default tenant and project.
+const seededName = "default"
 
 // newObjStore builds the configured object-storage backend.
 func newObjStore(cfg config.ObjStoreConfig, clk clock.Clock) (objstore.Store, error) {
