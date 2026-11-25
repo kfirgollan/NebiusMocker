@@ -203,3 +203,42 @@ type GpuClusterMembership interface {
 	// is not an error.
 	Leave(ctx context.Context, clusterID, instanceID string) error
 }
+
+// KindFilesystem is the NID type prefix of shared filesystems.
+const KindFilesystem = "computefilesystem"
+
+// FilesystemPage is one page of a filesystem listing.
+type FilesystemPage struct {
+	Items         []*computepb.Filesystem
+	NextPageToken string
+}
+
+// FilesystemRepository stores shared filesystems.
+type FilesystemRepository interface {
+	Get(ctx context.Context, id string) (*computepb.Filesystem, error)
+	GetByName(ctx context.Context, parentID, name string) (*computepb.Filesystem, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (FilesystemPage, error)
+	// Create fails with errs.AlreadyExists if the ID or the name in the parent is taken.
+	Create(ctx context.Context, fs *computepb.Filesystem) error
+	// Mutate atomically loads the filesystem, lets fn change it and stores
+	// the result. An error from fn aborts without writing. It returns the
+	// stored filesystem, or errs.NotFound.
+	Mutate(ctx context.Context, id string, fn func(*computepb.Filesystem) error) (*computepb.Filesystem, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// FilesystemAttachments records which instances a shared filesystem is
+// attached to (FilesystemStatus.read_write_attachments). The instance service
+// calls it on instance Create/Update/Delete; it enforces that the instance is
+// stopped and that mount tags are unique. Satisfied by *FilesystemAttach.
+type FilesystemAttachments interface {
+	// Attach atomically checks that the filesystem exists (errs.NotFound),
+	// is in projectID (errs.BadRequest), is READY (errs.BadState) and that
+	// mode is READ_WRITE, the only mode Nebius supports (READ_ONLY and
+	// UNSPECIFIED are errs.BadRequest), then adds instanceID to
+	// read_write_attachments. Attaching the same instance twice is a no-op.
+	Attach(ctx context.Context, fsID, instanceID, projectID string, mode computepb.AttachedFilesystemSpec_AttachMode) error
+	// Detach removes instanceID from the filesystem's attachments. A missing
+	// filesystem or attachment is not an error.
+	Detach(ctx context.Context, fsID, instanceID string) error
+}

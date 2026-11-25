@@ -75,6 +75,11 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if _, err := newGpuClusterMembership(deps); err != nil {
 		return err
 	}
+	// The attachment port is what InstanceService attaches shared
+	// filesystems through (spec.filesystems).
+	if _, err := newFilesystemAttachments(deps); err != nil {
+		return err
+	}
 	return registerDisks(reg, deps, svc)
 }
 
