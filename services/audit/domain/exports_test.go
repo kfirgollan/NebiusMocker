@@ -286,6 +286,50 @@ func TestStartWithNoMatchesWritesNoObjects(t *testing.T) {
 	}
 }
 
+func TestStartExportsOnlyTheRequestedEventType(t *testing.T) {
+	t.Parallel()
+	under := []string{tenantID, projectID}
+	tests := []struct {
+		name string
+		typ  auditv2pb.EventType
+		want []string
+	}{
+		{"control plane", auditv2pb.EventType_CONTROL_PLANE, []string{"c1", "c2"}},
+		{"data plane", auditv2pb.EventType_DATA_PLANE, []string{"d1", "d2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			log := newLog(t, 100,
+				eventSpec{id: "c1", at: at(0), service: "IAM", action: "CREATE", resID: "group-1", hierarchy: under},
+				eventSpec{id: "d1", at: at(1), service: "STORAGE", action: "PUT_OBJECT", resID: bucketID, hierarchy: under, dataPlane: true},
+				eventSpec{id: "c2", at: at(2), service: "IAM", action: "DELETE", resID: "group-1", hierarchy: under},
+				eventSpec{id: "d2", at: at(3), service: "STORAGE", action: "GET_OBJECT", resID: bucketID, hierarchy: under, dataPlane: true},
+			)
+			r := newRig(t, rigOpts{log: log})
+			cmd := startCmd()
+			cmd.Spec.Params.EventType = tt.typ
+			_, exp := r.startOK(t, cmd)
+			if got := state(exp); got != "AUDIT_EVENT_EXPORT_STATE_DONE" {
+				t.Fatalf("state = %s (%s), want DONE", got, exp.GetStatus().GetMessage())
+			}
+			var got []string
+			for _, key := range r.objectKeys(t) {
+				for _, l := range r.readLines(t, key) {
+					ev := &auditv2pb.AuditEvent{}
+					if err := protojson.Unmarshal([]byte(l), ev); err != nil {
+						t.Fatalf("line %q: %v", l, err)
+					}
+					got = append(got, ev.GetId())
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("exported events = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStartFailsWhenWriterFails(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOpts{writer: failingWriter{err: errBoom}})
@@ -323,7 +367,7 @@ func TestStartValidation(t *testing.T) {
 		{"no bucket id", func(c *domain.StartExportCmd) {
 			c.Spec.GetNebiusObjectStorage().Bucket = &auditv2pb.NebiusObjectStorageDestination_BucketById{BucketById: &auditv2pb.BucketById{}}
 		}, errs.KindBadRequest},
-		{"data plane", func(c *domain.StartExportCmd) { c.Spec.Params.EventType = auditv2pb.EventType_DATA_PLANE }, errs.KindBadRequest},
+		{"unknown event type", func(c *domain.StartExportCmd) { c.Spec.Params.EventType = 7 }, errs.KindBadRequest},
 		{"unknown region", func(c *domain.StartExportCmd) { c.Region = "mars-1" }, errs.KindBadRequest},
 		{"missing region", func(c *domain.StartExportCmd) { c.Region = "" }, errs.KindBadRequest},
 		{"bucket rejected", func(c *domain.StartExportCmd) {

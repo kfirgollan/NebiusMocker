@@ -17,8 +17,11 @@
 | `nebius audit v2 audit-event list` / `audit-event-export start\|get\|list\|cancel` with the official CLI; the destination bucket is created with `nebius storage bucket create` | ✅ e2e: `test/audit` |
 | Terraform-driven changes (IAM groups, KMS keys, VPC networks and subnets) produce the matching events, checked with filters via the SDK | ✅ e2e: `test/terraform/audit` |
 | Export into a real bucket, downloaded with the AWS SDK through the Object Storage S3 front | ✅ e2e: `test/audit` (`make e2e-storage`, RustFS) |
-| Data-plane events (`DATA_PLANE`, S3 object reads/writes) | Not yet: `DATA_PLANE` is rejected with `INVALID_ARGUMENT` |
-| `resource.state` (previous/current), `authentication.federation`, static-key credentials | Not yet |
+| `resource.state`: `previous` (before an update or delete) and `current` (after a create or update), each the resource's own `Get` view (metadata, spec, status), redacted | ✅ contract + e2e: `test/terraform/audit` (IAM, KMS, VPC) |
+| `DATA_PLANE` in List and exports: selected by `event_type`, never mixed with `CONTROL_PLANE` | ✅ |
+| `peer.AuditSink`: data planes record `DATA_PLANE` events from structured fields; the audit module provides it | ✅ |
+| Object Storage S3 front emitting `DATA_PLANE` events (bucket `object_audit_logging`) | Not yet: in progress (waits on the storage front rework) |
+| `authentication.federation` | Not yet |
 | Persistence of events across restarts | Not yet (the log sits behind a port; a persistent implementation can replace it) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
@@ -54,12 +57,30 @@ audited with no change to its code:
 | `service.name` | API area upper-cased; documented exceptions `vpc` → `VIRTUAL_NETWORKS`, `mysterybox` → `MBOX`, `msp.postgresql` → `MSP_POSTGRESQL`, `msp.mlflow` → `MSP_MLFLOW`, `msp.serverless` → `MSP_SERVERLESS` |
 | `action` | method name in UPPER_SNAKE: `CREATE`, `UPDATE`, `DELETE`, `ROTATE`, `START`, … |
 | `type` | `ai.nebius.<area>.<NID prefix>.<action lowercase>`, e.g. `ai.nebius.iam.group.delete` |
+| `resource.state` | see [Resource state](#resource-state) |
 | `resource.metadata` | id from `Operation.resource_id`, else the request's `id`/`metadata.id`; `type` = NID prefix; `name` from the request, or remembered from an earlier event about the same id (so Delete events carry the name) |
 | `resource.hierarchy` | ancestors from the authz engine (`deps.Authz.Parent`), tenant first, resolved **before** the handler runs; the seeded tenant and project are named `default` |
 | `authentication` | principal → `subject.tenant_user_id` or `subject.service_account_id` (and `subject.name` = the principal ID); `token_credential.masked_token` = JWT without signature, or `prefix***hash` for opaque dev tokens |
 | `request` | `request_id` (also `trace_id`), `user_agent`, `client_ip`, `idempotency_id` (`X-Idempotency-Key`), `parameters` = redacted request |
 | `response` | gRPC `status_code`, `error_message`, `payload` = redacted response |
 | `status` | `STARTED` for a running operation, then `DONE`/`ERROR` when it finishes; `DONE`/`ERROR` for synchronous calls and denials |
+
+### Resource state
+
+`resource.state` follows the Nebius event reference: `previous` is the resource before an UPDATE or DELETE, `current`
+the resource after a CREATE or UPDATE. Both are the JSON (proto field names) of what the changed service's own `Get`
+returns for `resource.metadata.id`, so they hold `metadata`, `spec` and `status` exactly as a client sees them, after
+the same `Sanitize()` redaction as request and response payloads.
+
+- **How:** `interceptors.ResourceStates` wraps the registrar modules register on and remembers each gRPC service's
+  `Get`. The interceptor calls that `Get` in process, without the interceptor chain (so it is neither authorized nor
+  audited), before the handler for `previous` and after it for `current`. A service without a `Get` by `id`, or a
+  resource that cannot be read (created by a failed call, or deleted), simply has no such side.
+- **Asynchronous operations:** the `STARTED` event carries `previous` only. The `DONE` event repeats it and adds
+  `current`, read when the operation finishes (the operation engine's `OnFinish` hook).
+- **No state** for failed or denied calls, and for reads recorded with `NEBIUS_MOCKER_AUDIT_READS`.
+- A soft delete that leaves the resource readable (e.g. a KMS key scheduled for deletion) has a `current` too,
+  showing the resource as it now is.
 
 **Which calls:** methods whose authz verb is neither `get` nor `list` (by name when no rule exists), plus every call
 that `enforce` mode denied. Real Nebius control-plane logs show management operations; reads are included with
@@ -103,17 +124,16 @@ service.name = 'IAM' AND resource.hierarchy.id:'project-e00' AND regex(resource.
 ### List
 
 `parent_id` must exist; events match when `parent_id` is the resource or one of its ancestors. `start` is inclusive and
-`end` exclusive. `region` must be one of the emulated regions (`NEBIUS_MOCKER_REGIONS`), else `INVALID_ARGUMENT`
+`end` exclusive. `event_type` selects `CONTROL_PLANE` (also when unspecified) or `DATA_PLANE` events; the two are
+stored apart and never mixed. `region` must be one of the emulated regions (`NEBIUS_MOCKER_REGIONS`), else `INVALID_ARGUMENT`
 (`unknown region <r>; known: …`). The mocker serves one control plane, so every recorded event belongs to the
-**default region** (the first one); List in another known region returns no events. `event_type` `DATA_PLANE` is
-rejected with `INVALID_ARGUMENT` (`DATA_PLANE (Object Storage data-plane) events are not recorded by NebiusMocker yet;
-use CONTROL_PLANE`); `EVENT_TYPE_UNSPECIFIED` is `CONTROL_PLANE`. `page_size` is 0–500 (default 100). Results are oldest
+**default region** (the first one); List in another known region returns no events. `page_size` is 0–500 (default 100). Results are oldest
 first, and `page_token` is an opaque cursor that survives eviction.
 
 ### Exports
 
-- **Start** validates the region (as for List), the params (`from < to`, filter, event type; `DATA_PLANE` is rejected
-  on `spec.params.event_type`) and the destination bucket. It creates the export
+- **Start** validates the region (as for List), the params (`from < to`, filter, and `spec.params.event_type`, which is required:
+  `CONTROL_PLANE` or `DATA_PLANE`, and the export holds only events of that type) and the destination bucket. It creates the export
   as `RUNNING` and returns an operation whose `resource_id` is the export; `status.export_operation_id` is that
   operation's id.
 - **Objects:** the matching events are written as JSON Lines (proto field names), at most 10 000 per object, to
@@ -152,6 +172,32 @@ Audit events expose every service's request payloads and principals. So `viewer`
 `admin` holds it, and the new built-in role **`auditor`** (viewer reads plus `audit.*.*`) can be granted with an
 access permit. The Nebius docs say a dedicated tenant role is needed but do not name it on the page.
 
+### Data-plane events
+
+Object Storage records object access as `DATA_PLANE` events when the bucket's `spec.object_audit_logging` asks for it
+([Nebius docs](https://docs.nebius.com/object-storage/logs)). Data planes are not gRPC, so they report through the
+transport-free capability `peer.AuditSink` (`pkg/peer/audit.go`), which the audit module provides. A caller looks it up
+per request: with the audit module disabled there is no sink and nothing is recorded. The sink applies the Nebius
+policy itself, so a caller reports every request it serves:
+
+| Mode (`object_audit_logging`) | Recorded operations |
+|---|---|
+| `NONE` (default) | none |
+| `MUTATE_ONLY` | `PutObject`, `CopyObject`, `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `AbortMultipartUpload`, `CompleteMultipartUpload`, `DeleteObject`, `DeleteObjects`, `DeleteObjectVersion` |
+| `ALL` | the above plus `GetObject`, `HeadObject`, `ListParts`, `ListObjectVersions`, `ListObjects` (and `ListObjectsV2`), `ListMultipartUploads` |
+
+Other S3 calls (`GetObjectAcl`, bucket calls) and responses with HTTP 400 or 429 are never recorded.
+
+| Event field | Value |
+|---|---|
+| `source` / `action` / `type` | `s3/PutObject` / `PUT_OBJECT` / `ai.nebius.storage.storagebucket.put_object` |
+| `service.name` | `STORAGE` |
+| `resource` | the bucket (`id`, `name`, `type` `storagebucket`) and its hierarchy, tenant first |
+| `authentication` | `authentication_type` `STATIC_KEY`; `subject.service_account_id` the key's service account; `static_key_credential.id` the Nebius access key ID (`accesskey-…`); `authenticated` false for an unknown key or a bad signature |
+| `request` | `client_ip`, `user_agent`, `request_id`; `parameters` `bucket_name`, `object_key` (or `object_keys` for `DeleteObjects`), `version`, plus e.g. `prefix`, `upload_id`. Never credentials or signatures |
+| `response` | `status_code` from the HTTP status (403 → `PERMISSION_DENIED`, a credential error → `UNAUTHENTICATED`, 404 → `NOT_FOUND`, 5xx → `INTERNAL`); `error_message` the S3 error code and message; `payload` `http_status`, `error_code` and e.g. `etag` |
+| `status` | `DONE`, or `ERROR` for HTTP ≥ 400 |
+
 ## Terraform
 
 _No Terraform provider objects use this area._ The e2e instead checks that Terraform-driven changes in other areas
@@ -167,7 +213,9 @@ _No Terraform provider objects use this area._ The e2e instead checks that Terra
 
 ## Known gaps
 
-- No data-plane (S3) events (`DATA_PLANE` is rejected), `resource.state`, federation or static-key credentials.
+- The S3 front does not emit data-plane events yet; federation is not modeled.
+- `source`, `action` and `type` of data-plane events are not documented by Nebius; the mocker derives them like
+  control-plane ones (`s3/<Operation>`, UPPER_SNAKE action).
 - `authentication.subject.name` is the principal ID; the mocker has no user names.
 - Every event belongs to the default region; there is no per-region event history.
 - Events live in memory only.

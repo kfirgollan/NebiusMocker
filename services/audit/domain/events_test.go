@@ -167,7 +167,7 @@ func TestListErrors(t *testing.T) {
 		}), errs.KindBadRequest, "page_token"},
 		{"unknown region", with(func(q *domain.ListEventsQuery) { q.Region = "mars-1" }), errs.KindBadRequest, "region"},
 		{"missing region", with(func(q *domain.ListEventsQuery) { q.Region = "" }), errs.KindBadRequest, "region"},
-		{"data plane", with(func(q *domain.ListEventsQuery) { q.EventType = auditv2pb.EventType_DATA_PLANE }), errs.KindBadRequest, "event_type"},
+		{"unknown event type", with(func(q *domain.ListEventsQuery) { q.EventType = 7 }), errs.KindBadRequest, "event_type"},
 		{"unknown parent", with(func(q *domain.ListEventsQuery) { q.ParentID = "tenant-missing" }), errs.KindNotFound, ""},
 	}
 	for _, tt := range tests {
@@ -181,6 +181,44 @@ func TestListErrors(t *testing.T) {
 				if e, ok := errors.AsType[*errs.Error](err); !ok || len(e.Violations) == 0 || e.Violations[0].Field != tt.field {
 					t.Fatalf("err = %#v, want violation on %q", err, tt.field)
 				}
+			}
+		})
+	}
+}
+
+func TestListByEventType(t *testing.T) {
+	t.Parallel()
+	under := []string{tenantID, projectID}
+	log := newLog(t, 100,
+		eventSpec{id: "c1", at: at(0), service: "IAM", action: "CREATE", resID: "group-1", hierarchy: under},
+		eventSpec{id: "d1", at: at(1), service: "STORAGE", action: "PUT_OBJECT", resID: bucketID, hierarchy: under, dataPlane: true},
+		eventSpec{id: "c2", at: at(2), service: "IAM", action: "DELETE", resID: "group-1", hierarchy: under},
+		eventSpec{id: "d2", at: at(3), service: "STORAGE", action: "GET_OBJECT", resID: bucketID, hierarchy: under, dataPlane: true},
+	)
+	svc, err := domain.NewEventService(log, newFakeHierarchy(), knownRegions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		typ  auditv2pb.EventType
+		want []string
+	}{
+		{"unspecified is control plane", auditv2pb.EventType_EVENT_TYPE_UNSPECIFIED, []string{"c1", "c2"}},
+		{"control plane", auditv2pb.EventType_CONTROL_PLANE, []string{"c1", "c2"}},
+		{"data plane", auditv2pb.EventType_DATA_PLANE, []string{"d1", "d2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, _, err := svc.List(t.Context(), domain.ListEventsQuery{
+				Region: region, ParentID: projectID, Start: at(0), End: at(10), EventType: tt.typ,
+			})
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if !slices.Equal(ids(got), tt.want) {
+				t.Fatalf("List(%v) = %v, want %v", tt.typ, ids(got), tt.want)
 			}
 		})
 	}

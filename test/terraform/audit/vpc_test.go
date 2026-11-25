@@ -54,6 +54,13 @@ func TestTerraformVPCAudit(t *testing.T) {
 		ev := events.expect(1, "resource.metadata.id='"+r.id+"' AND action='CREATE'")[0]
 		checkCommon(t, ev, inst.TenantID)
 		checkVPC(t, ev, r.kind, r.name, "create", inst.ProjectID)
+		want := map[string]string{"metadata.name": r.name}
+		if r.kind == "vpcnetwork" {
+			want["metadata.labels.env"] = "dev"
+		} else {
+			want["spec.network_id"] = netID
+		}
+		checkCreateState(t, "create "+r.kind, r.id, ev, want)
 	}
 
 	tf.Write(t, fmt.Sprintf(vpcResources, inst.ProjectID, "prod"))
@@ -63,11 +70,19 @@ func TestTerraformVPCAudit(t *testing.T) {
 	ev := events.expect(1, "service.name='VIRTUAL_NETWORKS' AND action='UPDATE'")[0]
 	checkCommon(t, ev, inst.TenantID)
 	checkVPC(t, ev, "vpcnetwork", "audit-net", "update", inst.ProjectID)
+	checkUpdateState(t, "network update", ev, map[string]string{"metadata.labels.env": "dev"},
+		map[string]string{"metadata.id": netID, "metadata.name": "audit-net", "metadata.labels.env": "prod"})
 
 	tf.Destroy(t)
 	deletes := events.expect(2, "action='DELETE' AND resource.hierarchy.id='"+inst.ProjectID+"' AND regex(resource.metadata.type, '^vpc(network|subnet)$')")
 	for _, ev := range deletes {
 		checkCommon(t, ev, inst.TenantID)
+		switch ev.GetResource().GetMetadata().GetId() {
+		case netID:
+			checkDeleteState(t, "network delete", ev, map[string]string{"metadata.id": netID, "metadata.labels.env": "prod"})
+		case subID:
+			checkDeleteState(t, "subnet delete", ev, map[string]string{"metadata.id": subID, "spec.network_id": netID})
+		}
 	}
 	if got := []string{deletes[0].GetResource().GetMetadata().GetId(), deletes[1].GetResource().GetMetadata().GetId()}; !slices.Contains(got, netID) || !slices.Contains(got, subID) {
 		t.Errorf("deleted resources = %v, want %s and %s", got, netID, subID)

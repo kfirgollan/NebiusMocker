@@ -167,9 +167,10 @@ func TestTerraformLifecycleAudit(t *testing.T) {
 	for _, c := range []struct {
 		id, service, rtype string
 		hier               []string
+		want               map[string]string
 	}{
-		{groupID, "IAM", "group", []string{inst.TenantID}},
-		{keyID, "KMS", "kmssymkey", []string{inst.TenantID, inst.ProjectID}},
+		{groupID, "IAM", "group", []string{inst.TenantID}, map[string]string{"metadata.name": "audit-group", "metadata.labels.team": "a"}},
+		{keyID, "KMS", "kmssymkey", []string{inst.TenantID, inst.ProjectID}, map[string]string{"metadata.name": "audit-key", "spec.description": "first", "spec.algorithm": "AES_256"}},
 	} {
 		started := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='CREATE' AND status='STARTED'", c.id))
 		done := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='CREATE' AND status='DONE'", c.id))
@@ -182,6 +183,8 @@ func TestTerraformLifecycleAudit(t *testing.T) {
 				t.Errorf("create event of %s: hierarchy = %v, want %v", c.id, hierarchyIDs(ev), c.hier)
 			}
 		}
+		checkStartedState(t, "create STARTED "+c.id, started[0], nil)
+		checkCreateState(t, "create DONE "+c.id, c.id, done[0], c.want)
 		if done[0].GetTime().AsTime().Before(started[0].GetTime().AsTime()) {
 			t.Errorf("DONE event of %s (%v) is before STARTED (%v)", c.id, done[0].GetTime().AsTime(), started[0].GetTime().AsTime())
 		}
@@ -199,10 +202,20 @@ func TestTerraformLifecycleAudit(t *testing.T) {
 	tf.ExpectPlan(t, map[string]string{"nebius_iam_v1_group.g": "update", "nebius_kms_v1_symmetric_key.k": "update"})
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
+	oldVals := map[string]map[string]string{
+		groupID: {"metadata.name": "audit-group", "metadata.labels.team": "a"},
+		keyID:   {"metadata.name": "audit-key", "spec.description": "first", "spec.algorithm": "AES_256"},
+	}
+	newVals := map[string]map[string]string{
+		groupID: {"metadata.id": groupID, "metadata.name": "audit-group-renamed", "metadata.labels.team": "b"},
+		keyID:   {"metadata.id": keyID, "metadata.name": "audit-key", "spec.description": "second", "spec.algorithm": "AES_256"},
+	}
 	for _, id := range []string{groupID, keyID} {
-		events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='UPDATE' AND status='STARTED'", id))
+		started := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='UPDATE' AND status='STARTED'", id))
+		checkStartedState(t, "update STARTED "+id, started[0], oldVals[id])
 		done := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='UPDATE' AND status='DONE'", id))
 		checkCommon(t, done[0], inst.TenantID)
+		checkUpdateState(t, "update DONE "+id, done[0], oldVals[id], newVals[id])
 		// The CREATE events are untouched by the update.
 		events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='CREATE' AND status='DONE'", id))
 	}
@@ -214,9 +227,11 @@ func TestTerraformLifecycleAudit(t *testing.T) {
 	// Destroy.
 	tf.Destroy(t)
 	for _, id := range []string{groupID, keyID} {
-		events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='DELETE' AND status='STARTED'", id))
+		started := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='DELETE' AND status='STARTED'", id))
+		checkStartedState(t, "delete STARTED "+id, started[0], newVals[id])
 		done := events.expect(1, fmt.Sprintf("resource.metadata.id='%s' AND action='DELETE' AND status='DONE'", id))
 		checkCommon(t, done[0], inst.TenantID)
+		checkDeleteState(t, "delete DONE "+id, done[0], newVals[id])
 	}
 	// Both resources are under the tenant; only the key is under the project.
 	del := events.expect(1, "action='DELETE' AND status='DONE' AND resource.hierarchy.id='"+inst.ProjectID+"'")
@@ -253,9 +268,19 @@ func TestTerraformSyncAudit(t *testing.T) {
 	}
 	events.expect(0, "status='STARTED'")
 	events.expect(0, "action='GET'")
+	checkCreateState(t, "sync create", groupID, got[0], map[string]string{"metadata.name": "sync-group", "metadata.labels.team": "a"})
+
+	tf.Write(t, fmt.Sprintf(resources, inst.TenantID, "sync-group", "b", inst.ProjectID, "d"))
+	tf.ExpectPlan(t, map[string]string{"nebius_iam_v1_group.g": "update", "nebius_kms_v1_symmetric_key.k": "no-op"})
+	tf.Apply(t)
+	upd := events.expect(1, "resource.metadata.id='"+groupID+"' AND action='UPDATE'")
+	checkUpdateState(t, "sync update", upd[0], map[string]string{"metadata.name": "sync-group", "metadata.labels.team": "a"},
+		map[string]string{"metadata.id": groupID, "metadata.name": "sync-group", "metadata.labels.team": "b"})
 
 	tf.Destroy(t)
 	events.expect(2, "action='DELETE' AND status='DONE'")
+	del := events.expect(1, "resource.metadata.id='"+groupID+"' AND action='DELETE'")
+	checkDeleteState(t, "sync delete", del[0], map[string]string{"metadata.id": groupID, "metadata.labels.team": "b"})
 }
 
 func stateID(t *testing.T, tf *tfharness.Run, addr string) string {

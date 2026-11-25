@@ -55,7 +55,7 @@ func TestLogAppendAssignsSeq(t *testing.T) {
 		t.Fatal(err)
 	}
 	for want := uint64(1); want <= 3; want++ {
-		e, err := l.Append(testEvent("e"))
+		e, err := l.Append(testEvent("e"), auditv2pb.EventType_CONTROL_PLANE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestLogEviction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 5 {
-		if _, err := l.Append(testEvent("e")); err != nil {
+		if _, err := l.Append(testEvent("e"), auditv2pb.EventType_CONTROL_PLANE); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestLogSinceStopsEarly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 4 {
-		if _, err := l.Append(testEvent("e")); err != nil {
+		if _, err := l.Append(testEvent("e"), auditv2pb.EventType_CONTROL_PLANE); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,7 +123,7 @@ func TestEntryEventRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := testEvent("evt-1")
-	e, err := l.Append(want)
+	e, err := l.Append(want, auditv2pb.EventType_CONTROL_PLANE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestEntryFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := l.Append(testEvent("evt-1"))
+	e, err := l.Append(testEvent("evt-1"), auditv2pb.EventType_CONTROL_PLANE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +168,47 @@ func TestLogAppendWithoutTime(t *testing.T) {
 	}
 	ev := testEvent("e")
 	ev.Time = nil
-	if _, err := l.Append(ev); err == nil {
+	if _, err := l.Append(ev, auditv2pb.EventType_CONTROL_PLANE); err == nil {
 		t.Fatal("Append(no time) error = nil, want error")
 	}
 	if l.Len() != 0 {
 		t.Errorf("Len() = %d after failed append, want 0", l.Len())
+	}
+}
+
+func TestLogAppendType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		typ     auditv2pb.EventType
+		wantErr bool
+	}{
+		{name: "control plane", typ: auditv2pb.EventType_CONTROL_PLANE},
+		{name: "data plane", typ: auditv2pb.EventType_DATA_PLANE},
+		{name: "unspecified", typ: auditv2pb.EventType_EVENT_TYPE_UNSPECIFIED, wantErr: true},
+		{name: "unknown value", typ: auditv2pb.EventType(7), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			l, err := NewLog(5)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, err := l.Append(testEvent("e"), tt.typ)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Append(%v) error = %v, wantErr %v", tt.typ, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if got := l.Len(); got != 0 {
+					t.Errorf("Len() after rejected append = %d, want 0", got)
+				}
+				return
+			}
+			if e.Type != tt.typ {
+				t.Errorf("Entry.Type = %v, want %v", e.Type, tt.typ)
+			}
+		})
 	}
 }
 
@@ -186,7 +222,7 @@ func TestLogConcurrent(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 100 {
-				if _, err := l.Append(testEvent("e")); err != nil {
+				if _, err := l.Append(testEvent("e"), auditv2pb.EventType_CONTROL_PLANE); err != nil {
 					t.Error(err)
 					return
 				}

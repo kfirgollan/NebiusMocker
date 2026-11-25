@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/genproto/googleapis/rpc/code"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
@@ -17,6 +18,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	auditv2pb "github.com/nebius/gosdk/proto/nebius/audit/v2"
@@ -455,6 +458,148 @@ func TestAuditReturnsNextResultUnchanged(t *testing.T) {
 	resp, err := env.call(ctx, "/"+groupSvc+"/Update", &iampb.UpdateGroupRequest{Metadata: &commonpb.ResourceMetadata{Id: "group-1"}}, returning(wantResp, wantErr))
 	if resp != any(wantResp) || err != wantErr { //nolint:errorlint // identity check
 		t.Errorf("got (%v, %v), want (%v, %v)", resp, err, wantResp, wantErr)
+	}
+}
+
+// fakeStates answers each read of an ID with the next queued state; a nil
+// entry (or an exhausted queue) means "not readable".
+type fakeStates struct {
+	mu    sync.Mutex
+	queue map[string][]*structpb.Struct
+	calls []string // "method id" per read
+}
+
+func (f *fakeStates) ResourceState(_ context.Context, method, id string) (*structpb.Struct, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, method+" "+id)
+	q := f.queue[id]
+	if len(q) == 0 {
+		return nil, false
+	}
+	f.queue[id] = q[1:]
+	return q[0], q[0] != nil
+}
+
+func stateOf(t *testing.T, name string) *structpb.Struct {
+	t.Helper()
+	s, err := structpb.NewStruct(map[string]any{"name": name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestAuditResourceState(t *testing.T) {
+	t.Parallel()
+	const (
+		update = "/" + groupSvc + "/Update"
+		create = "/" + groupSvc + "/Create"
+		del    = "/" + groupSvc + "/Delete"
+		get    = "/" + groupSvc + "/Get"
+	)
+	updateReq := &iampb.UpdateGroupRequest{Metadata: &commonpb.ResourceMetadata{Id: "group-1"}}
+	deleteReq := &iampb.DeleteGroupRequest{Id: "group-1"}
+	tests := []struct {
+		name         string
+		method       string
+		req          any
+		reads        []*structpb.Struct // queued states of group-1: before, then after
+		resp         any
+		err          error
+		deny         bool
+		wantPrevious string // "" = absent
+		wantCurrent  string
+		wantReads    int
+	}{
+		{
+			name: "update with plain response", method: update, req: updateReq, resp: &iampb.Group{},
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantPrevious: "before", wantCurrent: "after", wantReads: 2,
+		},
+		{
+			name: "update with finished operation", method: update, req: updateReq, resp: finishedOp(code.Code_OK, ""),
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantPrevious: "before", wantCurrent: "after", wantReads: 2,
+		},
+		{
+			name: "create has no previous", method: create, req: createGroupReq(), resp: finishedOp(code.Code_OK, ""),
+			reads: []*structpb.Struct{stateOf(t, "after")}, wantCurrent: "after", wantReads: 1,
+		},
+		{
+			name: "delete has no current", method: del, req: deleteReq, resp: finishedOp(code.Code_OK, ""),
+			reads: []*structpb.Struct{stateOf(t, "before"), nil}, wantPrevious: "before", wantReads: 2,
+		},
+		{
+			name: "running operation has no current", method: update, req: updateReq, resp: runningOp(),
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantPrevious: "before", wantReads: 1,
+		},
+		{
+			name: "failed operation has no current", method: update, req: updateReq, resp: finishedOp(code.Code_INTERNAL, "boom"),
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantPrevious: "before", wantReads: 1,
+		},
+		{
+			name: "handler error has no state", method: update, req: updateReq, err: status.Error(codes.Internal, "boom"),
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantReads: 1,
+		},
+		{
+			name: "denied call has no state", method: update, req: updateReq, resp: &iampb.Group{}, deny: true,
+			reads: []*structpb.Struct{stateOf(t, "before"), stateOf(t, "after")}, wantReads: 1,
+		},
+		{
+			name: "read method never reads state", method: get, req: &iampb.GetGroupRequest{Id: "group-1"}, resp: &iampb.Group{},
+			reads: []*structpb.Struct{stateOf(t, "before")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs := &fakeStates{queue: map[string][]*structpb.Struct{"group-1": tt.reads}}
+			l, err := audit.NewLog(10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, err := audit.NewRecorder(l, clock.NewManual(time.Unix(0, 0).UTC()), slog.New(slog.DiscardHandler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rules := authz.NewRules()
+			rules.CRUD(groupSvc, "iam", "groups")
+			icpt := Audit(AuditConfig{Recorder: rec, Hierarchy: &fakeHierarchy{}, Rules: rules, Reads: true, States: fs})
+			ctx, info := reqContext(t, "useraccount-alice")
+			next := func(context.Context, any) (any, error) {
+				info.Denied = tt.deny
+				return tt.resp, tt.err
+			}
+			if _, err := icpt(ctx, tt.req, &grpc.UnaryServerInfo{FullMethod: tt.method}, next); err != tt.err { //nolint:errorlint // identity check
+				t.Fatalf("err = %v, want %v", err, tt.err)
+			}
+			var evs []*auditv2pb.AuditEvent
+			for e := range l.Since(0) {
+				ev, err := e.Event()
+				if err != nil {
+					t.Fatal(err)
+				}
+				evs = append(evs, ev)
+			}
+			if len(evs) != 1 {
+				t.Fatalf("events = %d, want 1", len(evs))
+			}
+			var want *auditv2pb.ResourceState
+			if tt.wantPrevious != "" || tt.wantCurrent != "" {
+				want = &auditv2pb.ResourceState{}
+				if tt.wantPrevious != "" {
+					want.Previous = stateOf(t, tt.wantPrevious)
+				}
+				if tt.wantCurrent != "" {
+					want.Current = stateOf(t, tt.wantCurrent)
+				}
+			}
+			if diff := cmp.Diff(want, evs[0].GetResource().GetState(), protocmp.Transform()); diff != "" {
+				t.Errorf("resource.state mismatch (-want +got):\n%s", diff)
+			}
+			if len(fs.calls) != tt.wantReads {
+				t.Errorf("state reads = %v, want %d", fs.calls, tt.wantReads)
+			}
+		})
 	}
 }
 

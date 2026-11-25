@@ -36,6 +36,3 @@ func (r regionSet) check(field, region string) error {
 
 // holdsEvents reports whether region is the one that holds the recorded events.
 func (r regionSet) holdsEvents(region string) bool { return region == r.names[0] }
-
-// dataPlaneUnsupported is the message of a rejected DATA_PLANE event type.
-const dataPlaneUnsupported = "DATA_PLANE (Object Storage data-plane) events are not recorded by NebiusMocker yet; use CONTROL_PLANE"

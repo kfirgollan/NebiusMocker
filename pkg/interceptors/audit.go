@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	auditv2pb "github.com/nebius/gosdk/proto/nebius/audit/v2"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
@@ -45,6 +46,9 @@ type AuditConfig struct {
 	Reads bool
 	// DefaultTenant owns events whose resource hierarchy cannot be resolved.
 	DefaultTenant string
+	// States reads resource.state: previous before a mutating call, current
+	// after it. Nil leaves resource.state empty.
+	States audit.StateReader
 }
 
 // Audit records one audit event per mutating RPC and per authorization
@@ -58,8 +62,12 @@ func Audit(cfg AuditConfig) grpc.UnaryServerInterceptor {
 		}
 		read := isRead(cfg.Rules, info.FullMethod)
 		var target subject
+		var previous *structpb.Struct
 		if !read || cfg.Reads {
 			target = resolveSubject(ctx, cfg, info.FullMethod, req)
+		}
+		if !read {
+			previous = readState(ctx, cfg, info.FullMethod, target.id)
 		}
 		resp, err := next(ctx, req)
 		denied := reqctx.InfoFrom(ctx) != nil && reqctx.InfoFrom(ctx).Denied
@@ -70,9 +78,37 @@ func Audit(cfg AuditConfig) grpc.UnaryServerInterceptor {
 			target = resolveSubject(ctx, cfg, info.FullMethod, req)
 		}
 		ev, runningOp := buildEvent(ctx, cfg, call{method: info.FullMethod, req: req, resp: resp, err: err, target: target})
+		if !read && err == nil && !denied {
+			setState(ctx, cfg, ev, info.FullMethod, previous, runningOp)
+		}
 		cfg.Recorder.Record(ctx, ev, runningOp)
 		return resp, err
 	}
+}
+
+// readState reads the state of resource id through the service of method,
+// or nil when there is no reader, no ID or nothing to read.
+func readState(ctx context.Context, cfg AuditConfig, method, id string) *structpb.Struct {
+	if cfg.States == nil || id == "" {
+		return nil
+	}
+	st, _ := cfg.States.ResourceState(ctx, method, id)
+	return st
+}
+
+// setState fills resource.state of a successful mutating call, with Nebius
+// semantics: previous is the resource before the call (absent for a Create),
+// current the resource after it (absent once it is deleted). A running
+// operation gets its current state when it finishes (audit.Recorder).
+func setState(ctx context.Context, cfg AuditConfig, ev *auditv2pb.AuditEvent, method string, previous *structpb.Struct, runningOp string) {
+	var current *structpb.Struct
+	if runningOp == "" && ev.GetStatus() == auditv2pb.Status_DONE {
+		current = readState(ctx, cfg, method, ev.GetResource().GetMetadata().GetId())
+	}
+	if previous == nil && current == nil {
+		return
+	}
+	ev.Resource.State = &auditv2pb.ResourceState{Previous: previous, Current: current}
 }
 
 // call is one completed RPC.

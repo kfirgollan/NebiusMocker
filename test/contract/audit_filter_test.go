@@ -2,7 +2,6 @@ package contract
 
 import (
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -110,17 +109,27 @@ func TestAuditFilters(t *testing.T) {
 	}
 }
 
-// TestAuditDataPlaneRejected checks that DATA_PLANE is refused by name, not
-// answered with an empty list.
-func TestAuditDataPlaneRejected(t *testing.T) {
+// TestAuditDataPlaneEventType checks that DATA_PLANE lists succeed and hold
+// none of the control-plane events, which stay under CONTROL_PLANE.
+func TestAuditDataPlaneEventType(t *testing.T) {
 	t.Parallel()
 	env, _ := startFilterFixture(t)
 	req := auditListReq(env.inst.TenantID, "")
 	req.EventType = auditv2pb.EventType_DATA_PLANE
-	_, err := env.events.List(t.Context(), req)
-	assertCode(t, err, codes.InvalidArgument)
-	if !strings.Contains(err.Error(), "DATA_PLANE") {
-		t.Errorf("err = %v, want it to name DATA_PLANE", err)
+	resp, err := env.events.List(t.Context(), req)
+	if err != nil {
+		t.Fatalf("List DATA_PLANE: %v", err)
+	}
+	if got := eventNames(resp.GetItems()); len(got) != 0 {
+		t.Errorf("DATA_PLANE list = %v, want no control-plane events", got)
+	}
+	req.EventType = auditv2pb.EventType_CONTROL_PLANE
+	resp, err = env.events.List(t.Context(), req)
+	if err != nil {
+		t.Fatalf("List CONTROL_PLANE: %v", err)
+	}
+	if got := eventNames(resp.GetItems()); !slices.Equal(got, filterGroupNames) {
+		t.Errorf("CONTROL_PLANE list = %v, want %v", got, filterGroupNames)
 	}
 }
 

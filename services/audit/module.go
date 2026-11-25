@@ -64,6 +64,13 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err != nil {
 		return fmt.Errorf("audit: %w", err)
 	}
+	sink, err := domain.NewDataPlaneSink(deps.AuditRecorder, deps.Authz)
+	if err != nil {
+		return fmt.Errorf("audit: %w", err)
+	}
+	if err := peer.Provide(deps.Peers, peer.AuditSinkKey, peer.AuditSink(sink)); err != nil {
+		return fmt.Errorf("audit: %w", err)
+	}
 	auditv2pb.RegisterAuditEventServiceServer(reg, api.NewEventHandler(events))
 	auditv2pb.RegisterAuditEventExportServiceServer(reg, api.NewExportHandler(m.exports))
 	return nil

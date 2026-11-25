@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	auditv2pb "github.com/nebius/gosdk/proto/nebius/audit/v2"
@@ -32,7 +33,25 @@ const (
 
 // Sink stores events. *Log implements it.
 type Sink interface {
-	Append(ev *auditv2pb.AuditEvent) (*Entry, error)
+	Append(ev *auditv2pb.AuditEvent, typ auditv2pb.EventType) (*Entry, error)
+}
+
+// StateReader reads the current state of a resource for resource.state: the
+// view its own service's Get returns, already redacted. method is the full
+// gRPC method of the call that changed the resource
+// ("/nebius.iam.v1.GroupService/Update"); ok is false when the resource
+// cannot be read (it is gone, or the service has no Get by ID).
+type StateReader interface {
+	ResourceState(ctx context.Context, method, id string) (state *structpb.Struct, ok bool)
+}
+
+// RecorderOption configures a Recorder.
+type RecorderOption func(*Recorder)
+
+// WithStateReader makes the Recorder fill resource.state.current of the
+// DONE event of an asynchronous operation, read when it finishes.
+func WithStateReader(sr StateReader) RecorderOption {
+	return func(r *Recorder) { r.state = sr }
 }
 
 // Recorder stamps events (ID, time, versions), fills in resource names it
@@ -41,9 +60,10 @@ type Sink interface {
 // blocks for long: every method is a few map operations and one append under
 // one mutex.
 type Recorder struct {
-	sink Sink
-	clk  clock.Clock
-	log  *slog.Logger
+	sink  Sink
+	clk   clock.Clock
+	log   *slog.Logger
+	state StateReader // nil: resource.state.current of async operations stays empty
 
 	mu      sync.Mutex
 	pending map[string]*auditv2pb.AuditEvent // operation ID → STARTED event
@@ -58,16 +78,20 @@ type opResult struct {
 }
 
 // NewRecorder returns a recorder appending to sink.
-func NewRecorder(sink Sink, clk clock.Clock, log *slog.Logger) (*Recorder, error) {
+func NewRecorder(sink Sink, clk clock.Clock, log *slog.Logger, opts ...RecorderOption) (*Recorder, error) {
 	if sink == nil || clk == nil || log == nil {
 		return nil, errors.New("audit: recorder needs a sink, a clock and a logger")
 	}
-	return &Recorder{
+	r := &Recorder{
 		sink: sink, clk: clk, log: log,
 		pending: map[string]*auditv2pb.AuditEvent{},
 		early:   map[string]opResult{},
 		names:   map[string]string{},
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r, nil
 }
 
 // RememberName records the display name of a resource, for events about it
@@ -81,20 +105,22 @@ func (r *Recorder) RememberName(id, name string) {
 	r.rememberLocked(id, name)
 }
 
-// Record stores ev. When runningOpID is set, ev describes an operation that
+// Record stores ev as a CONTROL_PLANE event. When runningOpID is set, ev describes an operation that
 // is still running (status STARTED): a second event with status DONE or
 // ERROR is recorded once OperationFinished reports it.
 func (r *Recorder) Record(ctx context.Context, ev *auditv2pb.AuditEvent, runningOpID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.fillNamesLocked(ev)
-	r.appendLocked(ctx, ev)
+	r.appendLocked(ctx, ev, auditv2pb.EventType_CONTROL_PLANE)
 	if runningOpID == "" {
 		return
 	}
 	if res, ok := r.early[runningOpID]; ok {
+		// The operation finished while its RPC was returning: the caller
+		// built ev before that, so there is no current state to add.
 		r.dropEarlyLocked(runningOpID)
-		r.appendLocked(ctx, finished(ev, res))
+		r.appendLocked(ctx, finished(ev, res, nil), auditv2pb.EventType_CONTROL_PLANE)
 		return
 	}
 	if len(r.pending) >= maxPendingOps {
@@ -104,21 +130,41 @@ func (r *Recorder) Record(ctx context.Context, ev *auditv2pb.AuditEvent, running
 	r.pending[runningOpID] = proto.CloneOf(ev)
 }
 
+// RecordDataPlane stores ev as a DATA_PLANE event (Object Storage object
+// access). It is stamped and named like a control-plane event.
+func (r *Recorder) RecordDataPlane(ctx context.Context, ev *auditv2pb.AuditEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fillNamesLocked(ev)
+	r.appendLocked(ctx, ev, auditv2pb.EventType_DATA_PLANE)
+}
+
 // OperationFinished records the completion event of a running operation
 // whose STARTED event was recorded. c is the operation's final status code.
+// For a successful operation, resource.state.current is the resource as its
+// service's Get returns it now (see WithStateReader).
 func (r *Recorder) OperationFinished(ctx context.Context, opID string, c code.Code, message string) {
 	res := opResult{code: c, message: message}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	started, ok := r.pending[opID]
 	if !ok {
 		// Not recorded yet (the operation finished inside its RPC) or not
 		// audited at all. Keep the result briefly in case Record follows.
 		r.rememberEarlyLocked(opID, res)
+		r.mu.Unlock()
 		return
 	}
 	delete(r.pending, opID)
-	r.appendLocked(ctx, finished(started, res))
+	r.mu.Unlock()
+
+	// Read the state outside the lock: it calls into a service.
+	var current *structpb.Struct
+	if id := started.GetResource().GetMetadata().GetId(); r.state != nil && c == code.Code_OK && id != "" {
+		current, _ = r.state.ResourceState(ctx, "/"+started.GetSource(), id)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appendLocked(ctx, finished(started, res, current), auditv2pb.EventType_CONTROL_PLANE)
 }
 
 // Forget drops what is known about an operation that finished inside its
@@ -129,12 +175,12 @@ func (r *Recorder) Forget(opID string) {
 	r.dropEarlyLocked(opID)
 }
 
-func (r *Recorder) appendLocked(ctx context.Context, ev *auditv2pb.AuditEvent) {
+func (r *Recorder) appendLocked(ctx context.Context, ev *auditv2pb.AuditEvent, typ auditv2pb.EventType) {
 	ev.Id = newEventID()
 	ev.Time = timestamppb.New(r.clk.Now())
 	ev.SpecVersion = SpecVersion
 	ev.EventVersion = EventVersion
-	if _, err := r.sink.Append(ev); err != nil {
+	if _, err := r.sink.Append(ev, typ); err != nil {
 		r.log.ErrorContext(ctx, "audit: append event", "type", ev.GetType(), "error", err)
 	}
 }
@@ -190,12 +236,21 @@ func (r *Recorder) dropEarlyLocked(opID string) {
 	}
 }
 
-// finished derives the DONE/ERROR event of an operation from its STARTED event.
-func finished(started *auditv2pb.AuditEvent, res opResult) *auditv2pb.AuditEvent {
+// finished derives the DONE/ERROR event of an operation from its STARTED
+// event; current, when set, becomes resource.state.current.
+func finished(started *auditv2pb.AuditEvent, res opResult, current *structpb.Struct) *auditv2pb.AuditEvent {
 	ev := proto.CloneOf(started)
 	ev.Status = auditv2pb.Status_DONE
 	if res.code != code.Code_OK {
 		ev.Status = auditv2pb.Status_ERROR
+	}
+	if current != nil && ev.GetResource() != nil {
+		st := ev.GetResource().GetState()
+		if st == nil {
+			st = &auditv2pb.ResourceState{}
+			ev.Resource.State = st
+		}
+		st.Current = current
 	}
 	if ev.GetResponse() == nil {
 		ev.Response = &auditv2pb.Response{}

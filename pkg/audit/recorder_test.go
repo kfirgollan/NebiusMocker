@@ -1,13 +1,17 @@
 package audit
 
 import (
+	"context"
 	"log/slog"
 	"regexp"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	auditv2pb "github.com/nebius/gosdk/proto/nebius/audit/v2"
 
@@ -233,6 +237,133 @@ func TestOperationFinishedUnknown(t *testing.T) {
 	r.OperationFinished(t.Context(), "op-nobody", code.Code_OK, "")
 	if got := l.Len(); got != 0 {
 		t.Errorf("Len() = %d, want 0", got)
+	}
+}
+
+func TestRecordDataPlane(t *testing.T) {
+	t.Parallel()
+	r, l, _ := newTestRecorder(t)
+	r.RememberName("project-x", "px")
+	ev := startedEvent("object-1", "o")
+	ev.Resource.Hierarchy = []*auditv2pb.ResourceMetadata{{Id: "project-x"}}
+	r.RecordDataPlane(t.Context(), ev)
+
+	var entries []*Entry
+	for e := range l.Since(0) {
+		entries = append(entries, e)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Type != auditv2pb.EventType_DATA_PLANE {
+		t.Errorf("Entry.Type = %v, want DATA_PLANE", entries[0].Type)
+	}
+	got, err := entries[0].Event()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uuidV4.MatchString(got.GetId()) {
+		t.Errorf("id = %q, want UUID v4", got.GetId())
+	}
+	if !got.GetTime().AsTime().Equal(t0) {
+		t.Errorf("time = %v, want %v", got.GetTime().AsTime(), t0)
+	}
+	if got.GetSpecVersion() != SpecVersion || got.GetEventVersion() != EventVersion {
+		t.Errorf("versions = %q/%q, want %q/%q", got.GetSpecVersion(), got.GetEventVersion(), SpecVersion, EventVersion)
+	}
+	if name := got.GetResource().GetHierarchy()[0].GetName(); name != "px" {
+		t.Errorf("hierarchy name = %q, want px", name)
+	}
+}
+
+func TestRecordControlPlaneType(t *testing.T) {
+	t.Parallel()
+	r, l, _ := newTestRecorder(t)
+	r.Record(t.Context(), startedEvent("group-1", "g"), "")
+	for e := range l.Since(0) {
+		if e.Type != auditv2pb.EventType_CONTROL_PLANE {
+			t.Errorf("Entry.Type = %v, want CONTROL_PLANE", e.Type)
+		}
+	}
+}
+
+// fakeStates serves fixed resource states and records each read.
+type fakeStates struct {
+	states map[string]*structpb.Struct
+	calls  []string // "method id" per read
+}
+
+func (f *fakeStates) ResourceState(_ context.Context, method, id string) (*structpb.Struct, bool) {
+	f.calls = append(f.calls, method+" "+id)
+	st, ok := f.states[id]
+	return st, ok
+}
+
+func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
+	t.Helper()
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestOperationFinishedState(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		withReader   bool
+		c            code.Code
+		wantCurrent  bool
+		wantReadCall bool
+	}{
+		{name: "ok with reader", withReader: true, c: code.Code_OK, wantCurrent: true, wantReadCall: true},
+		{name: "error with reader", withReader: true, c: code.Code_INTERNAL},
+		{name: "ok without reader", c: code.Code_OK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			l, err := NewLog(10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := mustStruct(t, map[string]any{"spec": map[string]any{"size": float64(2)}})
+			previous := mustStruct(t, map[string]any{"spec": map[string]any{"size": float64(1)}})
+			fs := &fakeStates{states: map[string]*structpb.Struct{"group-1": current}}
+			var opts []RecorderOption
+			if tt.withReader {
+				opts = append(opts, WithStateReader(fs))
+			}
+			r, err := NewRecorder(l, clock.NewManual(t0), slog.New(slog.DiscardHandler), opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := startedEvent("group-1", "g")
+			started.Source = "nebius.iam.v1.GroupService/Update"
+			started.Resource.State = &auditv2pb.ResourceState{Previous: previous}
+			r.Record(t.Context(), started, "op-1")
+			r.OperationFinished(t.Context(), "op-1", tt.c, "")
+
+			evs := events(t, l)
+			if len(evs) != 2 {
+				t.Fatalf("events = %d, want 2", len(evs))
+			}
+			want := &auditv2pb.ResourceState{Previous: previous}
+			if tt.wantCurrent {
+				want.Current = current
+			}
+			if diff := cmp.Diff(want, evs[1].GetResource().GetState(), protocmp.Transform()); diff != "" {
+				t.Errorf("DONE/ERROR resource.state mismatch (-want +got):\n%s", diff)
+			}
+			var wantCalls []string
+			if tt.wantReadCall {
+				wantCalls = []string{"/nebius.iam.v1.GroupService/Update group-1"}
+			}
+			if diff := cmp.Diff(wantCalls, fs.calls); diff != "" {
+				t.Errorf("reader calls mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

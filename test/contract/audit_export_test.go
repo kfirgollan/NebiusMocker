@@ -363,7 +363,7 @@ func TestAuditExportInvalidRequests(t *testing.T) {
 		{"bad regex", env.startReq("regex(action, '(')", "")},
 		{"bucket id of another kind", env.startReqTo("", "", "project-x")},
 		{"unknown bucket", env.startReqTo("", "", "storagebucket-e00missing00000000")},
-		{"data plane events", mod(func(r *auditv2pb.StartRequest) { r.Spec.Params.EventType = auditv2pb.EventType_DATA_PLANE })},
+		{"unknown event type", mod(func(r *auditv2pb.StartRequest) { r.Spec.Params.EventType = 7 })},
 		{"unknown region", mod(func(r *auditv2pb.StartRequest) { r.Region = "mars-1" })},
 		{"event type unspecified", mod(func(r *auditv2pb.StartRequest) {
 			r.Spec.Params.EventType = auditv2pb.EventType_EVENT_TYPE_UNSPECIFIED
@@ -398,16 +398,20 @@ func TestAuditExportInvalidRequests(t *testing.T) {
 	})
 }
 
-// TestAuditExportDataPlaneRejected checks that DATA_PLANE exports are refused by name.
-func TestAuditExportDataPlaneRejected(t *testing.T) {
+// TestAuditExportDataPlane checks that a DATA_PLANE export is accepted and
+// finishes DONE without writing control-plane events.
+func TestAuditExportDataPlane(t *testing.T) {
 	t.Parallel()
-	env, _ := startExportEnv(t)
+	env, mem := startExportEnv(t)
 	req := env.startReq("", "")
 	req.Spec.Params.EventType = auditv2pb.EventType_DATA_PLANE
-	_, err := env.exports.Start(t.Context(), req)
-	assertCode(t, err, codes.InvalidArgument)
-	if !strings.Contains(err.Error(), "DATA_PLANE") {
-		t.Errorf("err = %v, want it to name DATA_PLANE", err)
+	id := env.startExport(t, req)
+	exp := env.getExport(t, id)
+	if got := exp.GetStatus().GetState(); got != auditv2pb.AuditEventExportState_AUDIT_EVENT_EXPORT_STATE_DONE {
+		t.Fatalf("state = %v (%s), want DONE", got, exp.GetStatus().GetMessage())
+	}
+	if keys := exportedObjects(t, mem, "auditlogs/"); len(keys) != 0 {
+		t.Errorf("DATA_PLANE export wrote %v, want nothing", keys)
 	}
 }
 

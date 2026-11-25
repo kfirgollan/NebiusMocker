@@ -61,8 +61,9 @@ func (s *EventService) List(ctx context.Context, q ListEventsQuery) (events []*a
 	if err := s.regions.check("region", q.Region); err != nil {
 		return nil, "", err
 	}
-	if q.EventType == auditv2pb.EventType_DATA_PLANE {
-		return nil, "", errs.BadRequest(errs.Violation{Field: "event_type", Message: dataPlaneUnsupported})
+	eventType, err := listEventType(q.EventType)
+	if err != nil {
+		return nil, "", err
 	}
 	if q.PageSize < 0 || q.PageSize > maxEventPageSize {
 		return nil, "", errs.BadRequest(errs.Violation{
@@ -90,7 +91,7 @@ func (s *EventService) List(ctx context.Context, q ListEventsQuery) (events []*a
 	if !s.regions.holdsEvents(q.Region) {
 		return []*auditv2pb.AuditEvent{}, "", nil
 	}
-	sc := scope{parentID: q.ParentID, from: q.Start, to: q.End, filter: filter}
+	sc := scope{parentID: q.ParentID, eventType: eventType, from: q.Start, to: q.End, filter: filter}
 
 	var matched []*audit.Entry
 	for e := range s.events.Since(cursor) {
@@ -117,17 +118,32 @@ func (s *EventService) List(ctx context.Context, q ListEventsQuery) (events []*a
 	return events, nextPageToken, nil
 }
 
-// scope selects the entries of one parent in a half-open time range.
-type scope struct {
-	parentID string
-	from, to time.Time
-	filter   audit.Filter
+// listEventType resolves List's event_type: unspecified means CONTROL_PLANE,
+// as the API documents.
+func listEventType(t auditv2pb.EventType) (auditv2pb.EventType, error) {
+	switch t {
+	case auditv2pb.EventType_EVENT_TYPE_UNSPECIFIED, auditv2pb.EventType_CONTROL_PLANE:
+		return auditv2pb.EventType_CONTROL_PLANE, nil
+	case auditv2pb.EventType_DATA_PLANE:
+		return t, nil
+	default:
+		return 0, errs.BadRequest(errs.Violation{Field: "event_type", Message: fmt.Sprintf("unknown event type %d", t)})
+	}
 }
 
-// match reports whether e is in the time range, under the parent and passes
-// the filter. The cheap checks come first.
+// scope selects the entries of one event type and parent in a half-open
+// time range.
+type scope struct {
+	parentID  string
+	eventType auditv2pb.EventType
+	from, to  time.Time
+	filter    audit.Filter
+}
+
+// match reports whether e has the event type, is in the time range, under
+// the parent and passes the filter. The cheap checks come first.
 func (sc *scope) match(e *audit.Entry) bool {
-	if e.Time.Before(sc.from) || !e.Time.Before(sc.to) {
+	if e.Type != sc.eventType || e.Time.Before(sc.from) || !e.Time.Before(sc.to) {
 		return false
 	}
 	if e.Fields.ResourceID != sc.parentID && !slices.Contains(e.Fields.HierarchyIDs, sc.parentID) {

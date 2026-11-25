@@ -198,6 +198,15 @@ type eventSpec struct {
 	resName string
 	// hierarchy lists ancestor IDs, tenant first.
 	hierarchy []string
+	// dataPlane stores the event as DATA_PLANE (default CONTROL_PLANE).
+	dataPlane bool
+}
+
+func (s eventSpec) eventType() auditv2pb.EventType {
+	if s.dataPlane {
+		return auditv2pb.EventType_DATA_PLANE
+	}
+	return auditv2pb.EventType_CONTROL_PLANE
 }
 
 func (s eventSpec) event() *auditv2pb.AuditEvent {
@@ -225,7 +234,7 @@ func newLog(tb testing.TB, capacity int, specs ...eventSpec) *audit.Log {
 		tb.Fatal(err)
 	}
 	for i := range specs {
-		if _, err := l.Append(specs[i].event()); err != nil {
+		if _, err := l.Append(specs[i].event(), specs[i].eventType()); err != nil {
 			tb.Fatal(err)
 		}
 	}

@@ -20,8 +20,12 @@ const DefaultMaxEvents = 50_000
 type Entry struct {
 	// Seq increases by one per appended event, starting at 1. It is the
 	// paging cursor: it survives eviction of older events.
-	Seq    uint64
-	Time   time.Time
+	Seq  uint64
+	Time time.Time
+	// Type is CONTROL_PLANE (management RPCs) or DATA_PLANE (Object
+	// Storage object access). AuditEvent has no such field; List and
+	// exports select on it.
+	Type   auditv2pb.EventType
 	Fields Fields
 	data   []byte // deterministic proto encoding of the event
 }
@@ -58,8 +62,12 @@ func NewLog(capacity int) (*Log, error) {
 	return &Log{buf: make([]*Entry, capacity), next: 1}, nil
 }
 
-// Append encodes and stores ev, evicting the oldest event if the log is full.
-func (l *Log) Append(ev *auditv2pb.AuditEvent) (*Entry, error) {
+// Append encodes and stores ev as an event of type typ (CONTROL_PLANE or
+// DATA_PLANE), evicting the oldest event if the log is full.
+func (l *Log) Append(ev *auditv2pb.AuditEvent, typ auditv2pb.EventType) (*Entry, error) {
+	if typ != auditv2pb.EventType_CONTROL_PLANE && typ != auditv2pb.EventType_DATA_PLANE {
+		return nil, fmt.Errorf("audit: event type must be CONTROL_PLANE or DATA_PLANE, got %s", typ)
+	}
 	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(ev)
 	if err != nil {
 		return nil, fmt.Errorf("encode audit event: %w", err)
@@ -67,7 +75,7 @@ func (l *Log) Append(ev *auditv2pb.AuditEvent) (*Entry, error) {
 	if ev.GetTime() == nil {
 		return nil, errors.New("audit: event has no time")
 	}
-	e := &Entry{Time: ev.GetTime().AsTime(), Fields: FieldsOf(ev), data: data}
+	e := &Entry{Time: ev.GetTime().AsTime(), Type: typ, Fields: FieldsOf(ev), data: data}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e.Seq = l.next

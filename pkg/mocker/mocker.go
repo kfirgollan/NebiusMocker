@@ -76,6 +76,9 @@ type Deps struct {
 	// TLS is the server TLS configuration from Config.TLS (nil: plaintext).
 	// Modules that open their own listeners serve TLS with it when set.
 	TLS *tls.Config
+	// AuditRecorder stamps and appends audit events. The audit module
+	// records data-plane events (Object Storage object access) through it.
+	AuditRecorder *audit.Recorder
 }
 
 // loadTLS reads the configured certificate; it returns nil for plaintext.
@@ -115,6 +118,9 @@ type Server struct {
 	ops     *operations.Engine
 	modules []Module
 	deps    Deps
+	// states learns each service's Get as modules register, for the
+	// audit events' resource.state.
+	states *interceptors.ResourceStates
 }
 
 // New assembles a server with the enabled subset of modules.
@@ -151,7 +157,8 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	}
 	engine := authz.NewEngine(authz.DefaultCatalog())
 	rules := authz.NewRules()
-	auditLog, recorder, err := newAudit(cfg, o.clk, log, ops)
+	states := interceptors.NewResourceStates()
+	auditLog, recorder, err := newAudit(cfg, o.clk, log, ops, states)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +169,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		interceptors.Authenticate(cfg.Authn, cfg.Tokens),
 		interceptors.Audit(interceptors.AuditConfig{
 			Recorder: recorder, Hierarchy: engine, Rules: rules,
-			Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID,
+			Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID, States: states,
 		}),
 		validate,
 		interceptors.Authorize(engine, rules, cfg.Authz, log),
@@ -170,10 +177,11 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	commonpb.RegisterOperationServiceServer(srv.Registrar(), opsapi.NewServer(ops))
 	opsapi.RegisterAuthzRules(rules, ops)
 	return &Server{
-		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
+		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled, states: states,
 		deps: Deps{
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
-			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(), AuditLog: auditLog, TLS: tlsCfg,
+			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(),
+			AuditLog: auditLog, AuditRecorder: recorder, TLS: tlsCfg,
 		},
 	}, nil
 }
@@ -182,7 +190,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 // It returns the bound edge address.
 func (s *Server) Start(ctx context.Context) (net.Addr, error) {
 	for _, m := range s.modules {
-		if err := m.Register(ctx, s.edge.Registrar(), s.deps); err != nil {
+		if err := m.Register(ctx, s.states.Registrar(s.edge.Registrar()), s.deps); err != nil {
 			return nil, fmt.Errorf("register module %s: %w", m.Name(), err)
 		}
 	}
@@ -241,12 +249,12 @@ func (s *Server) stopModules(ctx context.Context) {
 
 // newAudit builds the audit event log and its recorder, and reports
 // operation completions to it (the DONE/ERROR event of async calls).
-func newAudit(cfg config.Config, clk clock.Clock, log *slog.Logger, ops *operations.Engine) (*audit.Log, *audit.Recorder, error) {
+func newAudit(cfg config.Config, clk clock.Clock, log *slog.Logger, ops *operations.Engine, states audit.StateReader) (*audit.Log, *audit.Recorder, error) {
 	auditLog, err := audit.NewLog(cfg.Audit.MaxEvents)
 	if err != nil {
 		return nil, nil, err
 	}
-	rec, err := audit.NewRecorder(auditLog, clk, log)
+	rec, err := audit.NewRecorder(auditLog, clk, log, audit.WithStateReader(states))
 	if err != nil {
 		return nil, nil, err
 	}

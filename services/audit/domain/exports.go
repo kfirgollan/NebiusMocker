@@ -250,8 +250,10 @@ func validateExportSpec(spec *auditv2pb.AuditEventExportSpec) error {
 		return errs.BadRequest(errs.Violation{Field: "spec.params.to", Message: "to must be after from"})
 	case params.GetEventType() == auditv2pb.EventType_EVENT_TYPE_UNSPECIFIED:
 		return errs.BadRequest(errs.Violation{Field: "spec.params.event_type", Message: "required"})
-	case params.GetEventType() == auditv2pb.EventType_DATA_PLANE:
-		return errs.BadRequest(errs.Violation{Field: "spec.params.event_type", Message: dataPlaneUnsupported})
+	case params.GetEventType() != auditv2pb.EventType_CONTROL_PLANE && params.GetEventType() != auditv2pb.EventType_DATA_PLANE:
+		return errs.BadRequest(errs.Violation{
+			Field: "spec.params.event_type", Message: fmt.Sprintf("unknown event type %d", params.GetEventType()),
+		})
 	}
 	if _, err := audit.ParseFilter(params.GetFilter()); err != nil {
 		return err
@@ -350,8 +352,9 @@ func (s *ExportService) write(ctx context.Context, exp Export) error {
 		keyPrefix: prefix + "/" + res.GetStatus().GetExportOperationId() + "/",
 	}
 	sc := scope{
-		parentID: res.GetMetadata().GetParentId(),
-		from:     params.GetFrom().AsTime(), to: params.GetTo().AsTime(), filter: filter,
+		parentID:  res.GetMetadata().GetParentId(),
+		eventType: params.GetEventType(),
+		from:      params.GetFrom().AsTime(), to: params.GetTo().AsTime(), filter: filter,
 	}
 	for e := range s.d.Events.Since(0) {
 		if !sc.match(e) {
