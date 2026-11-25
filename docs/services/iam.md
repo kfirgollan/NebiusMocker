@@ -7,7 +7,12 @@
 
 | Piece | Status |
 |---|---|
-| Seeded default tenant (`tenant-e00mock0000000000default`) and default project (`project-e00mock000000000default`, region `eu-north1`) | ✅ (projects are seeded only; `ProjectService` not served yet) |
+| Seeded default tenant (`tenant-e00mock0000000000default`) and default project (`project-e00mock000000000default`, region `eu-north1`), plus extra projects from `NEBIUS_MOCKER_IAM_PROJECTS` | ✅ |
+| `nebius.iam.v2.ProjectService`: Create, Get, GetByName, List (paged, filtered to what the caller may read), Update (name and labels; `spec.region` and the tenant are immutable), Delete (only an empty project; `dry_run`) | ✅ T1 |
+| `nebius.iam.v1.ProjectService` *(deprecated)*: Create, Get, GetByName, List, Update (same rules; v1 has no Delete) | ✅ T1 |
+| `nebius.iam.v1.TenantService` *(deprecated)*: Get, List; `nebius.iam.v2.TenantService`: Get, GetByName, List. List returns the tenants the caller may read | ✅ T1 (`v2 Update`: Not yet) |
+| `nebius_iam_v2_project` (+ `nebius_iam_v1_project`, `nebius_iam_v2_project`, `nebius_iam_v1_tenant`, `nebius_iam_v2_tenant` data sources), and `nebius iam [v2] project …` / `nebius iam [v2] tenant list` | ✅ e2e: `test/terraform/iam/project_test.go`, `tenant_test.go`, `test/cli/iam/project_e2e_test.go` |
+| `nebius.iam.v2.TenantService.Update`; a default VPC network in newly created projects; quotas (`iam.project.count`) | Not yet |
 | `nebius.iam.v1.GroupService`: Create, Get, GetByName, List (paged), Update (reset mask, `resource_version`), Delete | ✅ T1 |
 | `nebius.iam.v1.GroupMembershipService`: Create, Get, Delete, ListMembers, ListMemberOf (`*WithAttributes` not yet) | ✅ T1 |
 | `nebius.iam.v1.AccessPermitService`: Create, Get, Delete, List | ✅ T1 |
@@ -52,7 +57,8 @@ MYSTERY_BOX details:
 Only `ACTIVE` keys of existing, active service accounts authenticate S3 requests. `account`, `expires_at` and
 `secret_delivery_mode` are immutable.
 
-Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (re-verified for
+`ProjectService`/`TenantService` v1+v2 on 2026-11-25; `nebius` CLI 0.12.312).
 
 Covered by unit tests (`services/iam/domain`, `services/iam/dal`), gosdk contract tests (`test/contract`) and the
 Terraform e2e suite (`make e2e`). The suite runs create → add → remove → destroy, plus in-place label and name updates.
@@ -88,12 +94,43 @@ Confirm them during parity recording.
 ## Emulation design
 
 ### Hierarchy and bootstrap
-- At boot the module seeds the default tenant and project, the `admins/editors/viewers` groups with tenant-level permits,
-  and a dev user (architecture/06 § Default bootstrap). The tenant list and project regions come from seed files.
-- `ProjectService.Create` (v1 is deprecated, v2 is current) validates the region against `NEBIUS_MOCKER_REGIONS` and
-  stamps the routing code used for every NID under it.
-- **Project deletion** (v2) is refused while the project contains any resource from any module. The check uses the
-  reverse-reference index, plus `peer` queries to remote modules in split mode.
+- At boot the module seeds the default tenant (`default`) and its projects: `default` (`NEBIUS_MOCKER_PROJECT_ID`, in
+  the first region), then each `NEBIUS_MOCKER_IAM_PROJECTS` entry. A seeded project's ID is derived from the tenant and
+  its name (`config.Config.SeededProjects`), with the routing code of its region, so it stays the same across restarts.
+  It also seeds the `admins/editors/viewers` groups with tenant-level permits and the dev principals
+  (architecture/06 § Default bootstrap).
+- Both API versions serve the same stored project (`iam.v1.Container`). The v2 view maps `container_state ACTIVE` to
+  `status.project_state ACTIVE`; tenants map to `iam.v2.Tenant` with `status.tenant_state ACTIVE`.
+- Projects follow docs.nebius.com/iam/manage-projects: the parent must be a tenant, the name is required and unique in
+  the tenant, and the region and tenant are fixed at creation ("for an existing project, you can only edit the name";
+  labels can change too). `spec.region` must be one of `NEBIUS_MOCKER_REGIONS`. v2 Create requires it, because
+  `ProjectSpec.region` has no default and `nebius_iam_v2_project` declares `region` Optional, not Computed. A
+  server-chosen region would fail the apply with "inconsistent result", so omitting it gets a clear
+  `spec.region is required` instead. v1 Create defaults it to the first region, since v1 `ContainerSpec.region` is
+  `NON_EMPTY_DEFAULT`. An Update that changes the region fails with `INVALID_ARGUMENT` ("spec.region is immutable");
+  an empty region in an Update keeps the stored one. The provider plans a region change as an in-place update, so in
+  Terraform it fails at apply time; use `terraform apply -replace=…` to move a project. New project IDs use
+  `NEBIUS_MOCKER_ROUTING_CODE`.
+- `TenantService.GetByName` (v2): upstream allows only an empty `parent_id`, but the `nebius_iam_v2_tenant` data source
+  will not read by name without one. The mock therefore also accepts the tenant's own ID
+  (`parent_id = <tenant>`), and rejects any other value.
+- **Listing is filtered per caller.** `ProjectService.List(parent_id=tenant)` and `TenantService.List` are open to
+  every authenticated caller, and return only the items the caller holds `iam.projects.get` / `iam.tenants.get` on
+  (directly or through an ancestor), via `authz.Visibility`. So a tenant viewer sees every project, an outsider sees
+  an empty list, and a principal granted on one project sees only that one. A page is filled from as many stored pages
+  as needed, and its token resumes right after its last item. A token is only returned when another visible item
+  follows, so paging never ends on an empty page. Under `NEBIUS_MOCKER_AUTHZ=audit|off` nothing is hidden. `filter`
+  is not supported and is rejected with `INVALID_ARGUMENT`, not ignored.
+- `GetByName` is authorized on the project (or tenant) it names, so a single-project grantee can also look its project
+  up by name.
+- **Project deletion** (v2 `Delete`) is immediate. Nebius documents "you can only delete an empty project", and the v2
+  API has no scheduled-deletion states, so nothing is soft-deleted. Delete fails with `FAILED_PRECONDITION`, naming up
+  to five resources, while any record of a registered resource kind (`authz.Engine.HasKind`: VPC networks and pools,
+  buckets, service accounts, secrets, …) has the project as its parent. The check and the delete run in one store
+  transaction (`store.ListQuery{AnyKind: true}`), without importing other areas. Internal records such as operation
+  indexes do not count. `dry_run` runs the check only. Access permits on a deleted project are not removed.
+- A new project is immediately a valid parent for every module: they check parents through `deps.Authz.Parent`.
+  Unlike the seeded default project, it has no default VPC network or pools, so create pools before networks.
 
 ### Token exchange (`TokenExchangeService/Exchange`, HTTP `/oauth2/token/exchange`)
 | `subject_token_type` | Validation | Principal |
@@ -165,13 +202,15 @@ upstream README example shows. `nebius iam whoami` relies on it.
 | Ephemeral | `nebius_iam_v2_access_key_secret` | `nebius.iam.v2.AccessKeyService` | GetSecret | T2 |
 
 `nebius_iam_v1_project`, `nebius_iam_v1_tenant`, `nebius_iam_v1_tenant_user_account` and `nebius_iam_v2_tenant` are data
-sources only. They read seeded data. The `iam_token` ephemeral resource returns the provider's current bearer token,
+sources only. The project data sources read seeded and created projects. The tenant ones read the seeded tenant;
+`nebius_iam_v2_tenant` by name needs `parent_id = <tenant ID>`. The `iam_token` ephemeral resource returns the provider's current bearer token,
 and calls `TokenExchangeService` when the provider uses SA or impersonation credentials.
 
 ## Configuration
 
 | Env | Default | Description |
 |---|---|---|
+| `NEBIUS_MOCKER_IAM_PROJECTS` | — (only `default`) | **Implemented.** `name[:region],…`, e.g. `dev,ml:eu-west1`: extra projects seeded in the default tenant after `default`. The region defaults to the first `NEBIUS_MOCKER_REGIONS` entry. Unknown regions, duplicate names and `default` are rejected at startup. Tests use `testkit.WithProjects` |
 | `NEBIUS_MOCKER_IAM_DEV_USER` | `dev@nebius-mocker.local` | Seeded admin user |
 | `NEBIUS_MOCKER_IAM_ROLES_FILE` | built-in | Role → permission catalog override |
 | `NEBIUS_MOCKER_IAM_FAKE_OIDC` | `1` | Serve a fake OIDC issuer at `/_mocker/oidc/<name>` for federated-credential tests |

@@ -117,6 +117,42 @@ func TestMemoryReadOnlyView(t *testing.T) {
 	}
 }
 
+func TestMemoryListAnyKind(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	put(t, m, Record{Kind: "vpcnetwork", ID: "n1", ParentID: "p1"})
+	put(t, m, Record{Kind: "bucket", ID: "b1", ParentID: "p1"})
+	put(t, m, Record{Kind: "bucket", ID: "b2", ParentID: "p2"})
+	var got []string
+	err := m.Update(t.Context(), func(tx Tx) error {
+		// Staged writes and deletes of the same transaction are visible.
+		if _, err := tx.Put(Record{Kind: "secret", ID: "s1", ParentID: "p1"}); err != nil {
+			return err
+		}
+		if err := tx.Delete("vpcnetwork", "n1"); err != nil {
+			return err
+		}
+		recs, err := tx.List(ListQuery{ParentID: "p1", AnyKind: true})
+		for _, r := range recs {
+			got = append(got, r.Kind+"/"+r.ID)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if want := []string{"bucket/b1", "secret/s1"}; !equal(got, want) {
+		t.Fatalf("AnyKind list = %v, want %v", got, want)
+	}
+	err = m.View(t.Context(), func(tx Tx) error {
+		_, err := tx.List(ListQuery{AnyKind: true, AnyParent: true})
+		return err
+	})
+	if err == nil {
+		t.Fatal("AnyKind with AnyParent: want an error")
+	}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

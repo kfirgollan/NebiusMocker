@@ -83,6 +83,8 @@ type Config struct {
 	AI AIConfig
 	// Audit configures the audit event log (NEBIUS_MOCKER_AUDIT_*).
 	Audit AuditConfig
+	// IAM configures the IAM module's seed (NEBIUS_MOCKER_IAM_*).
+	IAM IAMConfig
 }
 
 // Region is one emulated Nebius region.
@@ -263,6 +265,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	parsers = append(parsers, vpcParsers(&c.VPC)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
+	parsers = append(parsers, iamParsers(&c.IAM)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {
@@ -271,6 +274,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		if err := p.apply(strings.TrimSpace(v)); err != nil {
 			return Config{}, fmt.Errorf("NEBIUS_MOCKER_%s: %w", p.name, err)
 		}
+	}
+	if _, err := c.SeededProjects(); err != nil {
+		return Config{}, fmt.Errorf("NEBIUS_MOCKER_IAM_PROJECTS: %w", err)
 	}
 	return c, nil
 }

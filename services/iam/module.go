@@ -15,6 +15,7 @@ import (
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
@@ -87,8 +88,40 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))
 	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID))
 	api.RegisterProfileAuthzRule(deps.Rules, deps.Config.TenantID)
-	iampb.RegisterProjectServiceServer(reg, api.NewProjectHandler(r.projects)) //nolint:staticcheck // SA1019: "nebius iam project get" (CLI 0.12) still calls the v1 ProjectService
-	api.RegisterProjectAuthzRules(deps.Rules)
+	return registerContainers(reg, r, deps)
+}
+
+// registerContainers serves tenants and projects (v1 and v2). Listings are
+// filtered to what the caller may read.
+func registerContainers(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) error {
+	vis := authz.NewVisibility(deps.Authz, deps.Config.Authz)
+	regions := make([]string, 0, len(deps.Config.Regions))
+	for _, rg := range deps.Config.Regions {
+		regions = append(regions, rg.Name)
+	}
+	projects, err := domain.NewProjectService(domain.ProjectDeps{
+		Projects: r.projects, Tenants: r.tenants, Visibility: vis, Kinds: deps.Authz,
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Regions: regions,
+	})
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	tenants, err := domain.NewTenantService(r.tenants, vis)
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	iampb.RegisterProjectServiceServer(reg, api.NewProjectHandler(projects)) //nolint:staticcheck // SA1019: the v1 data source and `nebius iam project` still call the v1 ProjectService
+	iamv2pb.RegisterProjectServiceServer(reg, api.NewProjectV2Handler(projects))
+	iampb.RegisterTenantServiceServer(reg, api.NewTenantHandler(tenants)) //nolint:staticcheck // SA1019: the v1 data source and `nebius iam tenant` still call the v1 TenantService
+	iamv2pb.RegisterTenantServiceServer(reg, api.NewTenantV2Handler(tenants))
+	api.RegisterProjectAuthzRules(deps.Rules, func(ctx context.Context, tenantID, name string) (string, error) {
+		p, err := projects.GetByName(ctx, tenantID, name)
+		return p.GetMetadata().GetId(), err
+	})
+	api.RegisterTenantAuthzRules(deps.Rules, func(ctx context.Context, parentID, name string) (string, error) {
+		t, err := tenants.GetByName(ctx, parentID, name)
+		return t.GetMetadata().GetId(), err
+	})
 	return nil
 }
 
@@ -128,8 +161,14 @@ func seed(ctx context.Context, r repos, deps mocker.Deps) error {
 	if err := domain.SeedTenant(ctx, r.tenants, deps.Clock, tenantID, "default"); err != nil {
 		return err
 	}
-	if err := domain.SeedProject(ctx, r.projects, deps.Clock, deps.Config.ProjectID, tenantID, "default"); err != nil {
-		return err
+	projects, err := deps.Config.SeededProjects()
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	for _, p := range projects {
+		if err := domain.SeedProject(ctx, r.projects, deps.Clock, p.ID, tenantID, p.Name, p.Region); err != nil {
+			return err
+		}
 	}
 	return domain.SeedAuthz(ctx, domain.AuthzRepos{Groups: r.groups, Memberships: r.memberships, Permits: r.permits},
 		deps.IDs, deps.Clock, domain.AuthzSeed{

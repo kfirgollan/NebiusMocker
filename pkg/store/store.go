@@ -42,11 +42,13 @@ type Record struct {
 }
 
 // ListQuery selects records of one kind under one parent (or under any parent
-// when AnyParent is set), after a cursor.
+// when AnyParent is set), after a cursor. AnyKind ignores Kind and selects the
+// records of every kind under ParentID (e.g. "is this project empty?").
 type ListQuery struct {
 	Kind      string
 	ParentID  string
 	AnyParent bool
+	AnyKind   bool
 	AfterSeq  uint64 // exclusive; 0 starts from the beginning
 	Limit     int    // 0 means no limit
 }

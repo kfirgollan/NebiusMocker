@@ -8,6 +8,7 @@ import (
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 )
 
@@ -29,6 +30,51 @@ type ContainerRepository interface {
 	Get(ctx context.Context, id string) (*iampb.Container, error)
 	// Ensure inserts the container if none with its ID exists.
 	Ensure(ctx context.Context, c *iampb.Container) error
+}
+
+// ContainerPage is one page of a tenant or project listing.
+type ContainerPage struct {
+	Items         []*iampb.Container
+	NextPageToken string
+}
+
+// TenantRepository stores tenants (roots: they have no parent).
+type TenantRepository interface {
+	ContainerRepository
+	GetByName(ctx context.Context, name string) (*iampb.Container, error)
+	// List returns one page of every tenant in creation order (unfiltered).
+	List(ctx context.Context, pageSize int, pageToken string) (ContainerPage, error)
+}
+
+// ProjectRepository stores projects (children of their tenant; names are
+// unique per tenant).
+type ProjectRepository interface {
+	ContainerRepository
+	GetByName(ctx context.Context, tenantID, name string) (*iampb.Container, error)
+	// List returns one page of a tenant's projects in creation order (unfiltered).
+	List(ctx context.Context, tenantID string, pageSize int, pageToken string) (ContainerPage, error)
+	// Create fails with errs.AlreadyExists if the name is taken in the tenant.
+	Create(ctx context.Context, p *iampb.Container) error
+	// Update fails with errs.NotFound if the project does not exist.
+	Update(ctx context.Context, p *iampb.Container) error
+	// CheckEmpty fails with errs.BadState naming the records of a resource kind
+	// (isResource) that still have the project as their parent.
+	CheckEmpty(ctx context.Context, id string, isResource func(kind string) bool) error
+	// DeleteIfEmpty runs CheckEmpty and removes the project in one transaction.
+	DeleteIfEmpty(ctx context.Context, id string, isResource func(kind string) bool) error
+}
+
+// Visibility decides whether the caller may see one listed item (satisfied
+// by *authz.Visibility).
+type Visibility interface {
+	CanSee(ctx context.Context, perm authz.Permission, id string) (bool, error)
+}
+
+// KindRegistry knows which NID type prefixes are resource kinds (satisfied
+// by *authz.Engine). Records of other kinds are internal (indexes, key
+// material) and never keep a project alive.
+type KindRegistry interface {
+	HasKind(kind string) bool
 }
 
 // GroupPage is one page of a group listing.

@@ -33,6 +33,9 @@ type Instance struct {
 	TenantID string
 	// ProjectID is the seeded default project (child of TenantID).
 	ProjectID string
+	// Projects are every seeded project of TenantID, the default one first
+	// (more with WithProjects).
+	Projects []config.SeededProject
 }
 
 type settings struct {
@@ -99,6 +102,13 @@ func WithConfig(fn func(*config.Config)) Option {
 	return func(s *settings) { fn(&s.cfg) }
 }
 
+// WithProjects seeds extra projects in the default tenant after the default
+// project, like NEBIUS_MOCKER_IAM_PROJECTS. Their IDs come from
+// Config.SeededProjects (see Instance.Projects).
+func WithProjects(seeds ...config.ProjectSeed) Option {
+	return func(s *settings) { s.cfg.IAM.Projects = append(s.cfg.IAM.Projects, seeds...) }
+}
+
 // WithLogs writes the mocker's request log to the test output.
 func WithLogs() Option {
 	return func(s *settings) { s.logs = true }
@@ -143,7 +153,14 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 			tb.Errorf("testkit: stop mocker: %v", err)
 		}
 	})
-	return &Instance{Addr: addr.String(), Token: config.DefaultDevToken, TenantID: cfg.TenantID, ProjectID: cfg.ProjectID}
+	projects, err := cfg.SeededProjects()
+	if err != nil {
+		tb.Fatalf("testkit: seeded projects: %v", err)
+	}
+	return &Instance{
+		Addr: addr.String(), Token: config.DefaultDevToken, TenantID: cfg.TenantID, ProjectID: cfg.ProjectID,
+		Projects: projects,
+	}
 }
 
 // SDK returns an official gosdk client routed to the instance, the same way the
