@@ -548,6 +548,35 @@ func TestCreateSystemSecret(t *testing.T) {
 	}
 }
 
+// TestDiscardSystemSecret: a discarded secret is gone for good (no soft
+// delete, name released), and discarding again is not an error.
+func TestDiscardSystemSecret(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := t.Context()
+	cmd := domain.SystemSecretCmd{ParentID: projectID, Name: "access-key", Payload: []*mysteryboxpb.Payload{strEntry("secret", "s")}}
+	sec, err := e.svc.CreateSystemSecret(ctx, cmd)
+	if err != nil {
+		t.Fatalf("CreateSystemSecret: %v", err)
+	}
+	id := sec.GetMetadata().GetId()
+	if err := e.svc.DiscardSystemSecret(ctx, id); err != nil {
+		t.Fatalf("DiscardSystemSecret: %v", err)
+	}
+	if _, err := e.svc.GetSecret(ctx, id, true); errs.KindOf(err) != errs.KindNotFound {
+		t.Errorf("GetSecret(showDeleted) after discard kind = %v, want NotFound", errs.KindOf(err))
+	}
+	if _, err := e.svc.ResolvePayload(ctx, domain.PayloadRef{VersionID: sec.GetSpec().GetPrimaryVersionId()}); errs.KindOf(err) != errs.KindNotFound {
+		t.Errorf("ResolvePayload(version) after discard kind = %v, want NotFound", errs.KindOf(err))
+	}
+	if err := e.svc.DiscardSystemSecret(ctx, id); err != nil {
+		t.Errorf("second DiscardSystemSecret: %v", err)
+	}
+	if _, err := e.svc.CreateSystemSecret(ctx, cmd); err != nil {
+		t.Errorf("CreateSystemSecret with the released name: %v", err)
+	}
+}
+
 // TestUpdateSecretInlineVersionImmutable: spec.secret_version may be resent
 // unchanged, but never changed, added, or changed after its version is purged.
 func TestUpdateSecretInlineVersionImmutable(t *testing.T) {

@@ -77,6 +77,9 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := peer.Provide[peer.SecretPayloads](deps.Peers, peer.SecretPayloadsKey, payloadPeer{svc: svc}); err != nil {
 		return fmt.Errorf("mysterybox: %w", err)
 	}
+	if err := peer.Provide[peer.SystemSecrets](deps.Peers, peer.SystemSecretsKey, systemSecretsPeer{svc: svc}); err != nil {
+		return fmt.Errorf("mysterybox: %w", err)
+	}
 
 	mysteryboxpb.RegisterSecretServiceServer(reg, api.NewSecretHandler(svc))
 	mysteryboxpb.RegisterSecretVersionServiceServer(reg, api.NewVersionHandler(svc))

@@ -31,3 +31,15 @@ func TestToPeerEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestFromPeerEntryRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, e := range []peer.PayloadEntry{
+		{Key: "s", StringValue: "v"},
+		{Key: "b", BinaryValue: []byte{0, 0xff}, Binary: true},
+	} {
+		if diff := cmp.Diff(e, toPeerEntry(fromPeerEntry(e))); diff != "" {
+			t.Errorf("round trip of %s (-want +got):\n%s", e.Key, diff)
+		}
+	}
+}

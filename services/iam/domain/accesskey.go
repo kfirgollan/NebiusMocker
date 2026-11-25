@@ -37,12 +37,16 @@ type AccessKeyService struct {
 	ids      IDGenerator
 	clk      clock.Clock
 	material KeyMaterial
+	peers    *peer.Directory
 }
 
 var _ peer.AccessKeys = (*AccessKeyService)(nil)
 
 // AccessKeyDeps are the dependencies of an AccessKeyService. Material is
-// optional (default: GenerateKeyMaterial); the rest are required.
+// optional (default: GenerateKeyMaterial). Peers is optional: MYSTERY_BOX
+// delivery needs the peer.SystemSecrets capability (the mysterybox module),
+// looked up at call time; without it such creates fail with BadState. The
+// rest are required.
 type AccessKeyDeps struct {
 	AccessKeys      AccessKeyRepository
 	ServiceAccounts ServiceAccountRepository
@@ -51,6 +55,7 @@ type AccessKeyDeps struct {
 	IDs             IDGenerator
 	Clock           clock.Clock
 	Material        KeyMaterial
+	Peers           *peer.Directory
 }
 
 // NewAccessKeyService wires an AccessKeyService.
@@ -63,7 +68,7 @@ func NewAccessKeyService(d AccessKeyDeps) (*AccessKeyService, error) {
 	}
 	return &AccessKeyService{
 		keys: d.AccessKeys, sas: d.ServiceAccounts, projects: d.Projects,
-		ops: d.Ops, ids: d.IDs, clk: d.Clock, material: d.Material,
+		ops: d.Ops, ids: d.IDs, clk: d.Clock, material: d.Material, peers: d.Peers,
 	}, nil
 }
 
@@ -172,8 +177,19 @@ func (s *AccessKeyService) ListByAccount(ctx context.Context, account *iampb.Acc
 	return keys, nil
 }
 
-// Create issues a new active key for a service account.
+// Create issues a new active key for a service account. With MYSTERY_BOX
+// delivery the secret is also stored in a new MysteryBox secret in the key's
+// project, named after the key, whose ID is reported in
+// status.secret_reference_id; the secret is then never returned inline.
 func (s *AccessKeyService) Create(ctx context.Context, cmd CreateAccessKeyCmd) (*operations.Operation, error) {
+	var secrets peer.SystemSecrets
+	if cmd.Spec.GetSecretDeliveryMode() == iamv2pb.SecretDeliveryMode_MYSTERY_BOX {
+		var ok bool
+		if secrets, ok = peer.Lookup(s.peers, peer.SystemSecretsKey); !ok {
+			return nil, errs.BadState("", "secret_delivery_mode MYSTERY_BOX needs MysteryBox, which is not enabled in this NebiusMocker; "+
+				"enable the mysterybox service or use INLINE or EXPLICIT delivery")
+		}
+	}
 	k, err := s.newKey(ctx, cmd)
 	if err != nil {
 		return nil, err
@@ -183,8 +199,41 @@ func (s *AccessKeyService) Create(ctx context.Context, cmd CreateAccessKeyCmd) (
 		Description: "Create access key",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.keys.Create(ctx, k) },
+		Prepare: func(ctx context.Context) error {
+			if secrets == nil {
+				return s.keys.Create(ctx, k)
+			}
+			return s.createDeliveredToMysteryBox(ctx, secrets, k)
+		},
 	})
+}
+
+// MysteryBoxSecretKey is the payload key under which a MYSTERY_BOX-delivered
+// access key secret is stored; it is the secret's only entry.
+const MysteryBoxSecretKey = "secret"
+
+// createDeliveredToMysteryBox stores k's secret in a new MysteryBox secret,
+// then the key with status.secret_reference_id pointing at it. If the key
+// cannot be stored, the MysteryBox secret is discarded again.
+func (s *AccessKeyService) createDeliveredToMysteryBox(ctx context.Context, secrets peer.SystemSecrets, k *iamv2pb.AccessKey) error {
+	id := k.GetMetadata().GetId()
+	ref, err := secrets.CreateSystemSecret(ctx, peer.SystemSecretSpec{
+		ParentID:    k.GetMetadata().GetParentId(),
+		Name:        id,
+		Description: fmt.Sprintf("Secret of IAM access key %s (%s)", id, k.GetStatus().GetAwsAccessKeyId()),
+		Entries:     []peer.PayloadEntry{{Key: MysteryBoxSecretKey, StringValue: k.GetStatus().GetSecret()}},
+	})
+	if err != nil {
+		return fmt.Errorf("deliver access key %s secret to MysteryBox: %w", id, err)
+	}
+	k.Status.SecretReferenceId = ref.SecretID
+	if err := s.keys.Create(ctx, k); err != nil {
+		if derr := secrets.DiscardSystemSecret(ctx, ref.SecretID); derr != nil {
+			return errors.Join(err, fmt.Errorf("discard MysteryBox secret %s: %w", ref.SecretID, derr))
+		}
+		return err
+	}
+	return nil
 }
 
 // Update changes name, labels and description; the account, expiry and
@@ -332,11 +381,6 @@ func (s *AccessKeyService) checkSpec(ctx context.Context, spec *iamv2pb.AccessKe
 		if _, err := s.sas.Get(ctx, saID); err != nil {
 			return fmt.Errorf("access key account %s: %w", accountID, err)
 		}
-	}
-	if spec.GetSecretDeliveryMode() == iamv2pb.SecretDeliveryMode_MYSTERY_BOX {
-		return errs.BadRequest(errs.Violation{
-			Field: "spec.secret_delivery_mode", Message: "MYSTERY_BOX delivery is not supported by NebiusMocker yet; use INLINE or EXPLICIT",
-		})
 	}
 	if exp := spec.GetExpiresAt(); exp != nil && !exp.AsTime().After(s.clk.Now()) {
 		return errs.BadRequest(errs.Violation{Field: "spec.expires_at", Message: "must be in the future"})

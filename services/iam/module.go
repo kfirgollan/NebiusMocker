@@ -101,6 +101,7 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	}
 	keys, err := domain.NewAccessKeyService(domain.AccessKeyDeps{
 		AccessKeys: r.keys, ServiceAccounts: r.sas, Projects: r.projects, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Peers: deps.Peers,
 	})
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)

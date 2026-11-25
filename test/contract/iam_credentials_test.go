@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -227,8 +228,9 @@ func TestAccessKeyLifecycle(t *testing.T) {
 	if _, err := keys.Create(ctx, &iamv2pb.CreateAccessKeyRequest{
 		Metadata: &commonpb.ResourceMetadata{ParentId: inst.ProjectID},
 		Spec:     &iamv2pb.AccessKeySpec{Account: explicit.GetSpec().GetAccount(), SecretDeliveryMode: iamv2pb.SecretDeliveryMode_MYSTERY_BOX},
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("MYSTERY_BOX: code %v, want InvalidArgument", status.Code(err))
+	}); status.Code(err) != codes.FailedPrecondition || !strings.Contains(status.Convert(err).Message(), "MysteryBox") {
+		// This instance runs iam only: MYSTERY_BOX delivery needs the mysterybox module.
+		t.Fatalf("MYSTERY_BOX without MysteryBox: %v, want FailedPrecondition naming MysteryBox", err)
 	}
 }
 

@@ -158,6 +158,15 @@ func (s *Service) CreateSystemSecret(ctx context.Context, cmd SystemSecretCmd) (
 	return s.secret(ctx, id, activeOnly)
 }
 
+// DiscardSystemSecret removes a secret and all its versions and payloads for
+// good, without a soft-delete period. It rolls back a CreateSystemSecret whose
+// caller could not store its own resource; a missing secret is not an error.
+func (s *Service) DiscardSystemSecret(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.purgeSecret(ctx, id)
+}
+
 // UpdateSecret changes name, labels, description or the primary version.
 // spec.secret_version is input-only and immutable: an unchanged copy (clients
 // such as Terraform resend it on every update) is accepted, a changed one is

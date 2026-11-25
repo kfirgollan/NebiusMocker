@@ -35,3 +35,38 @@ func toPeerEntry(e *mysteryboxpb.Payload) peer.PayloadEntry {
 	}
 	return peer.PayloadEntry{Key: e.GetKey(), StringValue: e.GetStringValue()}
 }
+
+// systemSecretsPeer provides peer.SystemSecrets to other modules: secrets
+// created on a caller's behalf (e.g. IAM access keys delivered to MysteryBox).
+// The consumer authorizes its own request; reading the payload later goes
+// through PayloadService and its usual permissions.
+type systemSecretsPeer struct{ svc *domain.Service }
+
+var _ peer.SystemSecrets = systemSecretsPeer{}
+
+// CreateSystemSecret implements peer.SystemSecrets.
+func (p systemSecretsPeer) CreateSystemSecret(ctx context.Context, spec peer.SystemSecretSpec) (peer.SystemSecret, error) {
+	entries := make([]*mysteryboxpb.Payload, 0, len(spec.Entries))
+	for _, e := range spec.Entries {
+		entries = append(entries, fromPeerEntry(e))
+	}
+	sec, err := p.svc.CreateSystemSecret(ctx, domain.SystemSecretCmd{
+		ParentID: spec.ParentID, Name: spec.Name, Description: spec.Description, Labels: spec.Labels, Payload: entries,
+	})
+	if err != nil {
+		return peer.SystemSecret{}, err
+	}
+	return peer.SystemSecret{SecretID: sec.GetMetadata().GetId(), VersionID: sec.GetSpec().GetPrimaryVersionId()}, nil
+}
+
+// DiscardSystemSecret implements peer.SystemSecrets.
+func (p systemSecretsPeer) DiscardSystemSecret(ctx context.Context, secretID string) error {
+	return p.svc.DiscardSystemSecret(ctx, secretID)
+}
+
+func fromPeerEntry(e peer.PayloadEntry) *mysteryboxpb.Payload {
+	if e.Binary {
+		return &mysteryboxpb.Payload{Key: e.Key, Payload: &mysteryboxpb.Payload_BinaryValue{BinaryValue: e.BinaryValue}}
+	}
+	return &mysteryboxpb.Payload{Key: e.Key, Payload: &mysteryboxpb.Payload_StringValue{StringValue: e.StringValue}}
+}

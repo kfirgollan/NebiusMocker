@@ -19,6 +19,7 @@
 | In-process payload reads for other modules: `peer.SecretPayloadsKey` (`domain.Service.ResolvePayload`); system-owned secrets: `domain.Service.CreateSystemSecret` | ✅ |
 | Terraform: `nebius_mysterybox_v1_secret`, `_secret_version` (resources and data sources), `_secret_payload_entry` (data source), `_secret_payload` and `_secret_payload_entry` (ephemeral) | ✅ e2e: `test/terraform/mysterybox` |
 | CLI: `nebius mysterybox secret` / `secret-version` / `payload` flows from the docs | ✅ e2e: `test/cli/mysterybox` |
+| Delivery target for IAM access keys with `secret_delivery_mode = MYSTERY_BOX` (`peer.SystemSecrets`) | ✅ contract: `test/contract/iam_accesskey_mysterybox_test.go`; e2e: `test/terraform/iam`, `test/cli/iam` (see `docs/services/iam.md`) |
 | KMS encryption with a customer key, quota `mysterybox.secret.count` | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
@@ -88,7 +89,10 @@ the data plane (`PayloadService`) reads payloads.
   through a `PayloadSealer` (KMS permissions and key state would then matter). `status.effective_kms_key_id` is filled in.
 - Soft delete with `deleted_at`/`purge_at` and `Undelete`, for both secrets and versions, on the mock clock.
 - Limits: entries per version, value size, and versions per secret, configurable with upstream-like defaults.
-- It is also the delivery target for `iam.v2.AccessKey` secrets (`secret_delivery_mode=MYSTERYBOX`).
+- It is also the delivery target for `iam.v2.AccessKey` secrets (`secret_delivery_mode=MYSTERY_BOX`). IAM creates
+  the secret through the `peer.SystemSecrets` capability, which this module provides (`pkg/peer/systemsecrets.go`).
+  The secret is ordinary: it is named after the access key ID, holds one entry `secret`, needs
+  `mysterybox.payload.read` to read, and outlives the key (see `docs/services/iam.md`).
 - Permissions: `mysterybox.secrets.*`, `mysterybox.secretVersions.*`, `mysterybox.payload.read`. Quotas: `mysterybox.secret.count` (project).
 
 ## Terraform

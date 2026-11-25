@@ -16,6 +16,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
 
@@ -81,7 +82,10 @@ func (f *fakeSAs) Delete(_ context.Context, id string) error {
 }
 
 // fakeKeys is a slice-backed domain.AccessKeyRepository.
-type fakeKeys struct{ items []*iamv2pb.AccessKey }
+type fakeKeys struct {
+	items      []*iamv2pb.AccessKey
+	failCreate error // returned by Create when set
+}
 
 func (f *fakeKeys) find(pred func(*iamv2pb.AccessKey) bool, key string) (*iamv2pb.AccessKey, error) {
 	for _, k := range f.items {
@@ -105,7 +109,11 @@ func (f *fakeKeys) GetByAwsID(_ context.Context, aws string) (*iamv2pb.AccessKey
 }
 
 func (f *fakeKeys) List(context.Context, string, int, string) (domain.AccessKeyPage, error) {
-	return domain.AccessKeyPage{Items: f.items}, nil
+	items := make([]*iamv2pb.AccessKey, 0, len(f.items)) // copies, like the store: callers may modify the page
+	for _, k := range f.items {
+		items = append(items, proto.CloneOf(k))
+	}
+	return domain.AccessKeyPage{Items: items}, nil
 }
 
 func (f *fakeKeys) ListByAccount(_ context.Context, id string) ([]*iamv2pb.AccessKey, error) {
@@ -119,6 +127,9 @@ func (f *fakeKeys) ListByAccount(_ context.Context, id string) ([]*iamv2pb.Acces
 }
 
 func (f *fakeKeys) Create(_ context.Context, k *iamv2pb.AccessKey) error {
+	if f.failCreate != nil {
+		return f.failCreate
+	}
 	f.items = append(f.items, proto.CloneOf(k))
 	return nil
 }
@@ -148,6 +159,13 @@ type credFixture struct {
 
 func newCredFixture(t *testing.T) *credFixture {
 	t.Helper()
+	return newCredFixtureWithPeers(t, nil)
+}
+
+// newCredFixtureWithPeers is newCredFixture with peer capabilities (e.g.
+// peer.SystemSecrets for MYSTERY_BOX delivery).
+func newCredFixtureWithPeers(t *testing.T, peers *peer.Directory) *credFixture {
+	t.Helper()
 	f := &credFixture{sar: &fakeSAs{}, kr: &fakeKeys{}, clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))}
 	ids := &seqIDs{}
 	var err error
@@ -160,6 +178,7 @@ func newCredFixture(t *testing.T) *credFixture {
 	n := 0
 	f.keys, err = domain.NewAccessKeyService(domain.AccessKeyDeps{
 		AccessKeys: f.kr, ServiceAccounts: f.sar, Projects: fakeProjects{}, Ops: inlineOps{}, IDs: ids, Clock: f.clk,
+		Peers: peers,
 		Material: func() (string, string, error) {
 			n++
 			return "NMKTEST" + string(rune('A'+n)), "secret-" + string(rune('a'+n)), nil
@@ -225,7 +244,7 @@ func TestAccessKeyCreateValidation(t *testing.T) {
 		"no account":      {projectID, &iamv2pb.AccessKeySpec{}, errs.KindBadRequest},
 		"unknown account": {projectID, &iamv2pb.AccessKeySpec{Account: saAccount("serviceaccount-e00nope")}, errs.KindNotFound},
 		"unknown parent":  {"project-e00nope", &iamv2pb.AccessKeySpec{Account: saAccount(sa)}, errs.KindNotFound},
-		"mysterybox":      {projectID, &iamv2pb.AccessKeySpec{Account: saAccount(sa), SecretDeliveryMode: iamv2pb.SecretDeliveryMode_MYSTERY_BOX}, errs.KindBadRequest},
+		"mysterybox off":  {projectID, &iamv2pb.AccessKeySpec{Account: saAccount(sa), SecretDeliveryMode: iamv2pb.SecretDeliveryMode_MYSTERY_BOX}, errs.KindBadState},
 		"expired":         {projectID, &iamv2pb.AccessKeySpec{Account: saAccount(sa), ExpiresAt: past}, errs.KindBadRequest},
 	} {
 		_, err := f.keys.Create(t.Context(), domain.CreateAccessKeyCmd{Metadata: &commonpb.ResourceMetadata{ParentId: tt.parent}, Spec: tt.spec})
@@ -290,6 +309,108 @@ func TestAccessKeySecretDeliveryAndResolve(t *testing.T) {
 	}
 	if len(f.kr.items) != 0 {
 		t.Fatalf("keys after SA delete = %d, want 0", len(f.kr.items))
+	}
+}
+
+// fakeSystemSecrets records peer.SystemSecrets calls.
+type fakeSystemSecrets struct {
+	created   []peer.SystemSecretSpec
+	discarded []string
+	failWith  error
+}
+
+func (f *fakeSystemSecrets) CreateSystemSecret(_ context.Context, spec peer.SystemSecretSpec) (peer.SystemSecret, error) {
+	if f.failWith != nil {
+		return peer.SystemSecret{}, f.failWith
+	}
+	f.created = append(f.created, spec)
+	return peer.SystemSecret{SecretID: "mbsec-e00test" + string(rune('0'+len(f.created))), VersionID: "mbsecver-e00test"}, nil
+}
+
+func (f *fakeSystemSecrets) DiscardSystemSecret(_ context.Context, id string) error {
+	f.discarded = append(f.discarded, id)
+	return nil
+}
+
+func mysteryBoxFixture(t *testing.T) (*credFixture, *fakeSystemSecrets) {
+	t.Helper()
+	d := peer.NewDirectory()
+	mb := &fakeSystemSecrets{}
+	if err := peer.Provide[peer.SystemSecrets](d, peer.SystemSecretsKey, mb); err != nil {
+		t.Fatal(err)
+	}
+	return newCredFixtureWithPeers(t, d), mb
+}
+
+// TestAccessKeyMysteryBoxDelivery: the secret goes to a MysteryBox secret in
+// the key's project, status.secret_reference_id names it, and the secret is
+// never returned inline; the key itself works as usual.
+func TestAccessKeyMysteryBoxDelivery(t *testing.T) {
+	t.Parallel()
+	f, mb := mysteryBoxFixture(t)
+	sa := f.newSA(t, "app")
+	k := f.newKey(t, &iamv2pb.AccessKeySpec{Account: saAccount(sa), SecretDeliveryMode: iamv2pb.SecretDeliveryMode_MYSTERY_BOX})
+	if len(mb.created) != 1 {
+		t.Fatalf("system secrets created = %d, want 1", len(mb.created))
+	}
+	spec := mb.created[0]
+	stored, _ := f.kr.Get(t.Context(), k.GetMetadata().GetId())
+	secret := stored.GetStatus().GetSecret()
+	if spec.ParentID != projectID || spec.Name != k.GetMetadata().GetId() || len(spec.Entries) != 1 || secret == "" ||
+		spec.Entries[0].Key != domain.MysteryBoxSecretKey || spec.Entries[0].StringValue != secret || spec.Entries[0].Binary {
+		t.Fatalf("system secret spec = %+v, want one %q entry with the key secret in %s", spec, domain.MysteryBoxSecretKey, projectID)
+	}
+	if got := k.GetStatus().GetSecretReferenceId(); got != "mbsec-e00test1" {
+		t.Fatalf("status.secret_reference_id = %q, want mbsec-e00test1", got)
+	}
+	if k.GetStatus().GetSecret() != "" {
+		t.Fatal("MYSTERY_BOX key returned its secret inline")
+	}
+	listed, err := f.keys.List(t.Context(), projectID, 0, "")
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].GetStatus().GetSecret() != "" {
+		t.Fatalf("List = %v, %v; want the key without its secret", listed.Items, err)
+	}
+	if r, err := f.keys.ResolveAccessKey(t.Context(), k.GetStatus().GetAwsAccessKeyId()); err != nil || r.Secret != secret {
+		t.Fatalf("ResolveAccessKey = %+v, %v", r, err)
+	}
+
+	// Deleting the key leaves the MysteryBox secret alone (Nebius documents
+	// no effect on it).
+	if _, err := f.keys.Delete(t.Context(), k.GetMetadata().GetId(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(mb.discarded) != 0 {
+		t.Fatalf("delete discarded %v, want no MysteryBox change", mb.discarded)
+	}
+}
+
+// TestAccessKeyMysteryBoxRollback: a key that cannot be stored leaves no
+// MysteryBox secret behind, and MysteryBox errors fail the create.
+func TestAccessKeyMysteryBoxRollback(t *testing.T) {
+	t.Parallel()
+	f, mb := mysteryBoxFixture(t)
+	sa := f.newSA(t, "app")
+	spec := &iamv2pb.AccessKeySpec{Account: saAccount(sa), SecretDeliveryMode: iamv2pb.SecretDeliveryMode_MYSTERY_BOX}
+	create := func() error {
+		_, err := f.keys.Create(t.Context(), domain.CreateAccessKeyCmd{Metadata: &commonpb.ResourceMetadata{ParentId: projectID}, Spec: spec})
+		return err
+	}
+
+	f.kr.failCreate = errs.AlreadyExists("accesskey-e00other", "name taken")
+	if err := create(); !errs.IsKind(err, errs.KindAlreadyExists) {
+		t.Fatalf("create with failing store: %v, want AlreadyExists", err)
+	}
+	if len(mb.created) != 1 || len(mb.discarded) != 1 || mb.discarded[0] != "mbsec-e00test1" {
+		t.Fatalf("created %d, discarded %v; want the one created secret discarded", len(mb.created), mb.discarded)
+	}
+
+	f.kr.failCreate = nil
+	mb.failWith = errs.NotFound(projectID)
+	if err := create(); !errs.IsKind(err, errs.KindNotFound) {
+		t.Fatalf("create with failing MysteryBox: %v, want NotFound", err)
+	}
+	if len(f.kr.items) != 0 {
+		t.Fatalf("stored keys = %d, want 0", len(f.kr.items))
 	}
 }
 

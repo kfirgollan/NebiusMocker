@@ -20,6 +20,7 @@
 | `nebius.iam.v2.AccessKeyService`: Create, Get, GetByName, GetSecret, List, ListByAccount, GetByAwsId, Update, Delete, Activate, Deactivate (`*ByAwsId` mutations not yet) | ✅ T1 |
 | Access keys as S3 credentials: Object Storage's S3 front verifies SigV4 with them (`peer.AccessKeys` capability in `pkg/peer`, provided by IAM) | ✅ |
 | `nebius_iam_v1_service_account`, `nebius_iam_v2_access_key` (+ data sources) and the `nebius_iam_v2_access_key_secret` ephemeral resource | ✅ e2e: `test/terraform/storage` |
+| `secret_delivery_mode = MYSTERY_BOX`: the secret is delivered to a MysteryBox secret (`status.secret_reference_id`), read with `nebius_mysterybox_v1_secret_payload_entry` / `nebius mysterybox payload get` and used against the S3 front | ✅ e2e: `test/terraform/iam` (lifecycle in `make e2e`; the S3 use with RustFS in `make e2e-storage`), `test/cli/iam` (`make e2e-storage`) |
 | Everything else in this document | Planned |
 
 Access keys: the secret is generated in `services/iam/domain` (`GenerateKeyMaterial`: a 20-character `NMK…` AWS key ID and
@@ -30,7 +31,21 @@ AWS-key-ID → key index). Delivery modes:
 |---|---|
 | `UNSPECIFIED`, `INLINE` | `status.secret` is returned by `Get`/`List` (upstream: "returned directly in the API response"), and by `GetSecret` |
 | `EXPLICIT` | `status.secret` is empty; only `GetSecret` reveals it |
-| `MYSTERY_BOX` | Rejected with `INVALID_ARGUMENT` (not supported yet; follow-up once MysteryBox ships) |
+| `MYSTERY_BOX` | `status.secret` is empty. The secret is stored in a new MysteryBox secret in the key's project, and `status.secret_reference_id` holds its ID (`mbsec-…`). Read it with `PayloadService` (`nebius mysterybox payload get --secret-id …`, Terraform `nebius_mysterybox_v1_secret_payload_entry`). `GetSecret` still works, as for the other modes |
+
+MYSTERY_BOX details:
+- The MysteryBox secret is named after the access key ID, and has one primary version with one string entry, key
+  `secret`. Upstream documents only that the secret is the first entry (`.data[0].string_value` in the LanceDB
+  tutorial), not the entry's key, so the key name `secret` is the mock's choice (after `status.secret`).
+- It is created through the `peer.SystemSecrets` capability (`pkg/peer/systemsecrets.go`, provided by MysteryBox)
+  without MysteryBox permission checks: the caller was already authorized for `iam.accessKeys.create`. Reading the
+  payload back needs the usual `mysterybox.payload.read` (`admin`, `mysterybox.payload-viewer`). Like any secret
+  created by a user, the access key's creator does not get payload access automatically.
+- Deleting the access key (or its service account) leaves the MysteryBox secret as it is. Nebius documents no effect
+  on it, so delete it through MysteryBox when you no longer need it. If storing the key fails after the secret was
+  created, the secret is discarded again.
+- If the `mysterybox` service is not enabled (`NEBIUS_MOCKER_SERVICES`), MYSTERY_BOX creates fail with
+  `FAILED_PRECONDITION` ("MysteryBox … is not enabled"). They never fall back to another mode.
 
 `GetSecret` needs `iam.accessKeys.getSecret`, which only the `admin` role grants (viewer's `get` does not match it).
 `status.state` is computed on read: `EXPIRED` once `spec.expires_at` passes; `Deactivate`/`Activate` toggle `INACTIVE`.
@@ -96,8 +111,8 @@ OAuth conventions in the HTTP form (`invalid_grant`, `invalid_request`) and `UNA
 - `StaticKeyService.Issue` returns the secret **once**. `Find` looks up by token. `Revoke` invalidates it immediately.
 - `iam.v2.AccessKey`: on create the module generates an AWS-style `aws_access_key_id` (`NMK…`, 20 chars) and secret.
   `GetSecret` reveals the secret, and only to principals with `iam.accessKeys.getSecret`. With
-  `secret_delivery_mode=MYSTERYBOX`, the module creates a MysteryBox secret through `peer`, puts the secret there, and sets
-  `status.secret_reference_id`. These keys are the S3 credentials for the storage data plane (M3).
+  `secret_delivery_mode=MYSTERY_BOX`, the module creates a MysteryBox secret through `peer.SystemSecrets`, puts the secret
+  there, and sets `status.secret_reference_id` (see the delivery modes above). These keys are the S3 credentials for the storage data plane (M3).
 
 ### Groups and permits
 - `GroupMembership.Create` validates that `member_id` exists in the same tenant. A missing member → `NOT_FOUND`.
