@@ -43,6 +43,7 @@ type repos struct {
 	permits     *dal.PermitRepo
 	sas         *dal.ServiceAccountRepo
 	keys        *dal.AccessKeyRepo
+	authKeys    *dal.AuthPublicKeyRepo
 }
 
 // Register seeds IAM data, installs authorization bindings and registers the
@@ -56,6 +57,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		permits:     dal.NewPermitRepo(deps.Store),
 		sas:         dal.NewServiceAccountRepo(deps.Store),
 		keys:        dal.NewAccessKeyRepo(deps.Store),
+		authKeys:    dal.NewAuthPublicKeyRepo(deps.Store),
 	}
 	if err := seed(ctx, r, deps); err != nil {
 		return err
@@ -86,7 +88,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	iampb.RegisterGroupServiceServer(reg, api.NewGroupHandler(groups))
 	iampb.RegisterGroupMembershipServiceServer(reg, api.NewMembershipHandler(memberships))
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))
-	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID))
+	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID, r.sas))
 	api.RegisterProfileAuthzRule(deps.Rules, deps.Config.TenantID)
 	return registerContainers(reg, r, deps)
 }
@@ -129,7 +131,8 @@ func registerContainers(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) er
 // the access-key resolver S3 data planes authenticate with.
 func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) error {
 	sas, err := domain.NewServiceAccountService(domain.ServiceAccountDeps{
-		ServiceAccounts: r.sas, Projects: r.projects, AccessKeys: r.keys, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		ServiceAccounts: r.sas, Projects: r.projects, AccessKeys: r.keys, PublicKeys: r.authKeys, Revoker: deps.Tokens,
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 	})
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
@@ -137,6 +140,13 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	keys, err := domain.NewAccessKeyService(domain.AccessKeyDeps{
 		AccessKeys: r.keys, ServiceAccounts: r.sas, Projects: r.projects, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		Peers: deps.Peers,
+	})
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	authKeys, err := domain.NewAuthPublicKeyService(domain.AuthPublicKeyDeps{
+		Keys: r.authKeys, ServiceAccounts: r.sas, Projects: r.projects, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Revoker: deps.Tokens,
 	})
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
@@ -153,6 +163,28 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	})
 	iampb.RegisterServiceAccountServiceServer(reg, api.NewServiceAccountHandler(sas))
 	iamv2pb.RegisterAccessKeyServiceServer(reg, api.NewAccessKeyHandler(keys))
+	iampb.RegisterAuthPublicKeyServiceServer(reg, api.NewAuthPublicKeyHandler(authKeys))
+	api.RegisterAuthPublicKeyRules(deps.Rules)
+	return registerTokenExchange(reg, r, authKeys, deps)
+}
+
+// registerTokenExchange serves TokenExchangeService over gRPC and the same
+// exchange as POST /oauth2/token/exchange on the edge port. Both are exempt
+// from authentication (the request carries its own credentials).
+func registerTokenExchange(reg grpc.ServiceRegistrar, r repos, keys *domain.AuthPublicKeyService, deps mocker.Deps) error {
+	svc, err := domain.NewTokenExchangeService(domain.TokenExchangeDeps{
+		Keys: keys, ServiceAccounts: r.sas, Projects: r.projects, Minter: deps.Tokens, Actors: deps.Authenticator,
+		Permissions: deps.Authz, Mode: deps.Config.Authz, Clock: deps.Clock,
+		MaxAssertionTTL: deps.Config.Auth.JWTMaxTTL, Log: deps.Log,
+	})
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	h := api.NewTokenExchangeHandler(svc, deps.Log)
+	iampb.RegisterTokenExchangeServiceServer(reg, h)
+	if deps.HTTP != nil {
+		deps.HTTP.HandleHTTP("POST "+api.TokenExchangePath, h)
+	}
 	return nil
 }
 
@@ -210,6 +242,10 @@ func registerAuthz(r repos, deps mocker.Deps) {
 	})
 	e.RegisterKind(domain.KindAccessKey, func(ctx context.Context, id string) (string, error) {
 		k, err := r.keys.Get(ctx, id)
+		return k.GetMetadata().GetParentId(), err
+	})
+	e.RegisterKind(domain.KindAuthPublicKey, func(ctx context.Context, id string) (string, error) {
+		k, err := r.authKeys.Get(ctx, id)
 		return k.GetMetadata().GetParentId(), err
 	})
 	e.SetBindings(domain.NewBindings(r.memberships, r.permits, deps.Clock))

@@ -17,6 +17,8 @@ const (
 	permitService     = "nebius.iam.v1.AccessPermitService"
 	saService         = "nebius.iam.v1.ServiceAccountService"
 	accessKeyService  = "nebius.iam.v2.AccessKeyService"
+
+	authPublicKeyService = "nebius.iam.v1.AuthPublicKeyService"
 )
 
 // VerbGetSecret is the access-key verb that reveals secrets. Only roles that
@@ -54,6 +56,25 @@ func RegisterCredentialRules(r *authz.Rules, keyIDOf AccessKeyIDLookup) {
 		Target: func(ctx context.Context, req any) (string, error) {
 			gr, _ := req.(*iamv2pb.GetAccessKeyByAwsIdRequest)
 			return keyIDOf(ctx, gr.GetAwsAccessKeyId())
+		},
+	})
+}
+
+// RegisterAuthPublicKeyRules declares the permissions of the auth public key RPCs.
+func RegisterAuthPublicKeyRules(r *authz.Rules) {
+	k := func(method string) string { return "/" + authPublicKeyService + "/" + method }
+	perm := func(verb string) authz.Permission { return authz.Perm("iam", "authPublicKeys", verb) }
+	r.CRUD(authPublicKeyService, "iam", "authPublicKeys")
+	r.Add(k("Activate"), authz.OnID(perm(authz.VerbUpdate)))
+	r.Add(k("Deactivate"), authz.OnID(perm(authz.VerbUpdate)))
+	r.Add(k("ListByAccount"), authz.Rule{
+		Permission: perm(authz.VerbList),
+		Target: func(_ context.Context, req any) (string, error) {
+			lr, _ := req.(*iampb.ListAuthPublicKeyByAccountRequest)
+			if id := lr.GetAccount().GetServiceAccount().GetId(); id != "" {
+				return id, nil
+			}
+			return "", errs.BadRequest(errs.Violation{Field: "account.service_account.id", Message: "required"})
 		},
 	})
 }

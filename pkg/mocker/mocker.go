@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"slices"
 
 	"google.golang.org/genproto/googleapis/rpc/code"
@@ -17,6 +18,7 @@ import (
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/audit"
+	"github.com/kfirgollan/NebiusMocker/pkg/auth"
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
@@ -79,6 +81,20 @@ type Deps struct {
 	// AuditRecorder stamps and appends audit events. The audit module
 	// records data-plane events (Object Storage object access) through it.
 	AuditRecorder *audit.Recorder
+	// Tokens mints, verifies and revokes the access tokens the mocker issues
+	// (the IAM module's token exchange; key and service-account lifecycles).
+	Tokens *auth.Issuer
+	// Authenticator resolves bearer tokens (static dev tokens and issued
+	// tokens) to principals, for fronts other than the gRPC edge.
+	Authenticator *auth.Authenticator
+	// HTTP serves plain HTTP endpoints on the edge port (e.g. the IAM
+	// module's POST /oauth2/token/exchange).
+	HTTP HTTPRegistrar
+}
+
+// HTTPRegistrar registers plain HTTP handlers on the edge port.
+type HTTPRegistrar interface {
+	HandleHTTP(pattern string, h http.Handler)
 }
 
 // loadTLS reads the configured certificate; it returns nil for plaintext.
@@ -162,11 +178,16 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	if err != nil {
 		return nil, err
 	}
+	issuer, err := newIssuer(cfg.Auth, o.clk)
+	if err != nil {
+		return nil, err
+	}
+	authn := auth.NewAuthenticator(cfg.Tokens, issuer)
 	srv := edge.NewTLS(log, tlsCfg,
 		interceptors.RequestID(),
 		interceptors.Recover(log),
 		interceptors.Log(log, o.clk),
-		interceptors.Authenticate(cfg.Authn, cfg.Tokens),
+		interceptors.Authenticate(cfg.Authn, authn),
 		interceptors.Audit(interceptors.AuditConfig{
 			Recorder: recorder, Hierarchy: engine, Rules: rules,
 			Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID, States: states,
@@ -182,6 +203,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
 			Authz: engine, Rules: rules, ObjStore: objs, Peers: peer.NewDirectory(),
 			AuditLog: auditLog, AuditRecorder: recorder, TLS: tlsCfg,
+			Tokens: issuer, Authenticator: authn, HTTP: srv,
 		},
 	}, nil
 }
@@ -267,6 +289,19 @@ func newAudit(cfg config.Config, clk clock.Clock, log *slog.Logger, ops *operati
 		rec.OperationFinished(ctx, op.ID, code.Code(st.GetCode()), st.GetMessage())
 	})
 	return auditLog, rec, nil
+}
+
+// newIssuer builds the access-token issuer; an empty secret means a random
+// one per process.
+func newIssuer(cfg config.AuthConfig, clk clock.Clock) (*auth.Issuer, error) {
+	secret := []byte(cfg.TokenSecret)
+	if len(secret) == 0 {
+		var err error
+		if secret, err = auth.NewSecret(); err != nil {
+			return nil, err
+		}
+	}
+	return auth.NewIssuer(secret, cfg.TokenTTL, clk)
 }
 
 // seededName is the name of the seeded default tenant and project.

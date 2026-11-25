@@ -154,6 +154,8 @@ type credFixture struct {
 	keys *domain.AccessKeyService
 	sar  *fakeSAs
 	kr   *fakeKeys
+	pkr  *fakePubKeys
+	rev  *fakeRevoker
 	clk  *clock.Manual
 }
 
@@ -166,11 +168,11 @@ func newCredFixture(t *testing.T) *credFixture {
 // peer.SystemSecrets for MYSTERY_BOX delivery).
 func newCredFixtureWithPeers(t *testing.T, peers *peer.Directory) *credFixture {
 	t.Helper()
-	f := &credFixture{sar: &fakeSAs{}, kr: &fakeKeys{}, clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))}
+	f := &credFixture{sar: &fakeSAs{}, kr: &fakeKeys{}, pkr: &fakePubKeys{}, rev: &fakeRevoker{}, clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))}
 	ids := &seqIDs{}
 	var err error
 	f.sas, err = domain.NewServiceAccountService(domain.ServiceAccountDeps{
-		ServiceAccounts: f.sar, Projects: fakeProjects{}, AccessKeys: f.kr, Ops: inlineOps{}, IDs: ids, Clock: f.clk,
+		ServiceAccounts: f.sar, Projects: fakeProjects{}, AccessKeys: f.kr, PublicKeys: f.pkr, Revoker: f.rev, Ops: inlineOps{}, IDs: ids, Clock: f.clk,
 	})
 	if err != nil {
 		t.Fatal(err)

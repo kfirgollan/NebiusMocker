@@ -174,8 +174,15 @@ type tfRun struct {
 	addr     string
 	token    string
 	tenantID string
-	out      bytes.Buffer
+	// auth, when set, replaces the provider's `token = ...` line (for example a
+	// service_account block); the NEBIUS_IAM_TOKEN env stays empty either way.
+	auth string
+	out  bytes.Buffer
 }
+
+// setAuth makes the provider authenticate with the given HCL attribute line
+// instead of token, e.g. `service_account = { credentials_file = "..." }`.
+func (r *tfRun) setAuth(hcl string) { r.auth = hcl }
 
 func newTerraform(t *testing.T, inst *testkit.Instance) *tfRun {
 	t.Helper()
@@ -246,12 +253,19 @@ func (r *tfRun) writeConfig(t *testing.T, resources string) {
 provider "nebius" {
   resolvers       = { "*" = %q }
   address_options = { "*" = { insecure = true } }
-  token           = %q
+  %s
 }
-`, providerVersion, r.addr, r.token) + resources
+`, providerVersion, r.addr, r.authLine()) + resources
 	if err := os.WriteFile(filepath.Join(r.dir, "main.tf"), []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write main.tf: %v", err)
 	}
+}
+
+func (r *tfRun) authLine() string {
+	if r.auth != "" {
+		return r.auth
+	}
+	return fmt.Sprintf("token           = %q", r.token)
 }
 
 func (r *tfRun) init(t *testing.T) {

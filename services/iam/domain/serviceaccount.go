@@ -22,6 +22,8 @@ type ServiceAccountService struct {
 	sas      ServiceAccountRepository
 	projects ContainerRepository
 	keys     AccessKeyRepository
+	pubKeys  AuthPublicKeyRepository
+	revoker  TokenRevoker
 	ops      Operations
 	ids      IDGenerator
 	clk      clock.Clock
@@ -32,6 +34,8 @@ type ServiceAccountDeps struct {
 	ServiceAccounts ServiceAccountRepository
 	Projects        ContainerRepository
 	AccessKeys      AccessKeyRepository
+	PublicKeys      AuthPublicKeyRepository
+	Revoker         TokenRevoker
 	Ops             Operations
 	IDs             IDGenerator
 	Clock           clock.Clock
@@ -39,11 +43,11 @@ type ServiceAccountDeps struct {
 
 // NewServiceAccountService wires a ServiceAccountService.
 func NewServiceAccountService(d ServiceAccountDeps) (*ServiceAccountService, error) {
-	if d.ServiceAccounts == nil || d.Projects == nil || d.AccessKeys == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.ServiceAccounts == nil || d.Projects == nil || d.AccessKeys == nil || d.PublicKeys == nil || d.Revoker == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("iam: service account service dependencies must not be nil")
 	}
 	return &ServiceAccountService{
-		sas: d.ServiceAccounts, projects: d.Projects, keys: d.AccessKeys, ops: d.Ops, ids: d.IDs, clk: d.Clock,
+		sas: d.ServiceAccounts, projects: d.Projects, keys: d.AccessKeys, pubKeys: d.PublicKeys, revoker: d.Revoker, ops: d.Ops, ids: d.IDs, clk: d.Clock,
 	}, nil
 }
 
@@ -126,8 +130,9 @@ func (s *ServiceAccountService) Delete(ctx context.Context, id string, request p
 	})
 }
 
-// deleteCascade removes the account's access keys first: a key must never
-// outlive the principal it authenticates.
+// deleteCascade removes the account's access keys and auth public keys first:
+// a key must never outlive the principal it authenticates. Tokens already
+// issued for the account are revoked at the end.
 func (s *ServiceAccountService) deleteCascade(ctx context.Context, id string) error {
 	keys, err := s.keys.ListByAccount(ctx, id)
 	if err != nil {
@@ -138,7 +143,20 @@ func (s *ServiceAccountService) deleteCascade(ctx context.Context, id string) er
 			return fmt.Errorf("delete access key %s: %w", k.GetMetadata().GetId(), err)
 		}
 	}
-	return s.sas.Delete(ctx, id)
+	pubKeys, err := s.pubKeys.ListByAccount(ctx, id)
+	if err != nil {
+		return fmt.Errorf("auth public keys of %s: %w", id, err)
+	}
+	for _, k := range pubKeys {
+		if err := s.pubKeys.Delete(ctx, k.GetMetadata().GetId()); err != nil && !errs.IsKind(err, errs.KindNotFound) {
+			return fmt.Errorf("delete auth public key %s: %w", k.GetMetadata().GetId(), err)
+		}
+	}
+	if err := s.sas.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.revoker.RevokePrincipal(id)
+	return nil
 }
 
 func (s *ServiceAccountService) newServiceAccount(ctx context.Context, cmd CreateServiceAccountCmd) (*iampb.ServiceAccount, error) {

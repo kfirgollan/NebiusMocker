@@ -48,23 +48,35 @@ All of it can be overridden through a seed file ([11](11-configuration.md#seed-d
 
 | Principal | How it authenticates against the mocker |
 |---|---|
-| **User account** | Static dev tokens from config, or tokens minted via the admin API (`POST /_mocker/iam/tokens {"subject": "tenantuseraccount-…"}`) |
+| **User account** | Static dev tokens from config (`NEBIUS_MOCKER_DEV_TOKENS`). *Planned:* tokens minted via an admin API (`POST /_mocker/iam/tokens {"subject": "tenantuseraccount-…"}`) |
 | **Service account (JWT exchange)** | The real flow: the client signs an RS256 JWT with `kid=<authpublickey id>`, `iss=sub=<serviceaccount id>` and calls `TokenExchangeService/Exchange` (gRPC) or `POST /oauth2/token/exchange` (HTTP form). The mocker verifies the signature against the **public key uploaded via `AuthPublicKeyService`**, checks `exp` and key state, and returns `CreateTokenResponse{access_token, expires_in, token_type=Bearer}` |
 | **Service account (credentials file)** | The same flow. The provider's `service_account.credentials_file` is parsed client-side by gosdk, which then does the JWT exchange |
-| **Federated credentials** | `subject_token_type=…:jwt` from an external OIDC issuer configured in `FederatedCredentialsService`. The mocker verifies against the issuer's JWKS. For tests, the mocker can act as a fake OIDC issuer at `/_mocker/oidc/<name>` |
-| **Impersonation** | `actor_token` + target SA in the exchange request (the provider's `impersonate_service_account_id`). Requires that the actor holds the impersonation permission on the SA |
-| **Static keys** | `StaticKeyService` issues long-lived keys. Use them as bearer tokens with the prefix the real API documents |
+| **Federated credentials** | *Not yet.* JWTs from external issuers are refused by name in the exchange. Planned: `subject_token_type=…:jwt` from an external OIDC issuer configured in `FederatedCredentialsService`, verified against the issuer's JWKS, with a fake OIDC issuer at `/_mocker/oidc/<name>` for tests |
+| **Impersonation** | `subject_token` = the target SA ID with `subject_token_type=urn:nebius:params:oauth:token-type:subject_identifier`, plus the caller's `actor_token` (the provider's `impersonate_service_account_id`). The actor needs `iam.serviceAccounts.impersonate` on the SA (granted by `admin`) |
+| **Static keys** | *Planned:* `StaticKeyService` issues long-lived keys. Use them as bearer tokens with the prefix the real API documents |
 | **Anonymous** | No `authorization` header. Allowed only when `NEBIUS_MOCKER_AUTHN=optional` (the default in `dev` profile, below) |
 
 ### Token format
 
-Mocker-issued access tokens are opaque strings of the form `nmock.v1.<base64url(claims)>.<hmac>`. Claims carry the
-principal ID, tenant, expiry and token ID. HMAC with an instance key makes them verifiable statelessly, even across
-split containers that share `NEBIUS_MOCKER_TOKEN_SECRET`. Tokens can be revoked via `SessionManagementService` and the
-admin API, which records a deny-list in state.
+Mocker-issued access tokens are opaque strings of the form `nmock.v1.<base64url(claims JSON)>.<base64url(HMAC-SHA256)>`.
+The claims carry the token ID (`jti`), the principal (`sub`), the tenant (`tid`), the auth public key the token was
+exchanged with (`kid`), the impersonating actor (`act`), and `iat`/`exp`. The HMAC with `NEBIUS_MOCKER_TOKEN_SECRET`
+makes them verifiable statelessly, even across split containers that share the secret. By default the secret is
+random per process.
 
-Expiry defaults to 12h (`expires_in` is returned), measured on the mock clock. Advancing the clock through the admin API
-tests client token refresh.
+The pieces live in `pkg/auth` (transport-free):
+- `auth.Issuer` mints and verifies tokens and keeps the revocation deny-list.
+- `auth.Authenticator` resolves a bearer token to a principal: a static dev token, or an issued token that verifies.
+  `interceptors.Authenticate` and the registry's docker front use it.
+- `auth.ParseAssertion`/`VerifyAssertion` check service-account JWTs.
+- `auth.ParsePublicKey` reads uploaded keys and computes their fingerprint.
+
+Revocation uses a deny-list in process memory. Deactivating or deleting an auth public key revokes the tokens
+exchanged with it, and deleting a service account revokes all of its tokens. *Planned:* revocation through
+`SessionManagementService` and an admin API.
+
+Expiry defaults to 12h (`NEBIUS_MOCKER_TOKEN_TTL`; `expires_in` is returned) and is measured on the mock clock.
+Advancing the clock tests client token refresh. Expired, revoked and forged tokens fail with `UNAUTHENTICATED`.
 
 ## Authorization
 

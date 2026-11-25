@@ -180,6 +180,31 @@ func New(tb testing.TB, p Profile) *CLI {
 	return c
 }
 
+// AddServiceAccountProfile creates an extra profile in the sandbox HOME that
+// authenticates as a service account from a credentials file (the output of
+// "nebius iam auth-public-key generate"), as the Nebius docs show:
+//
+//	nebius profile create <name> --endpoint … --service-account-file <file> --parent-id …
+//
+// Select it per command with "--profile <name>".
+func (c *CLI) AddServiceAccountProfile(tb testing.TB, name, addr, credentialsFile, parentID string) {
+	tb.Helper()
+	args := []string{"profile", "create", name, "--endpoint", Endpoint(tb, addr), "--service-account-file", credentialsFile}
+	if parentID != "" {
+		args = append(args, "--parent-id", parentID)
+	}
+	// Creating a service account profile exchanges a token right away, so the
+	// plaintext --insecure flag is needed here too.
+	if res, err := c.exec(tb.Context(), nil, withGlobalFlags(args)); err != nil {
+		tb.Fatalf("nebiuscli: %s: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, res.Stdout, res.Stderr)
+	}
+	// "profile create" activates the new profile; keep the default one active
+	// so plain commands keep running as the profile New created.
+	if res, err := c.exec(tb.Context(), nil, []string{"profile", "activate", ProfileName}); err != nil {
+		tb.Fatalf("nebiuscli: profile activate %s: %v\nstdout:\n%s\nstderr:\n%s", ProfileName, err, res.Stdout, res.Stderr)
+	}
+}
+
 // Endpoint converts a "host:port" listen address into the CLI endpoint
 // "localhost:port" (see the package comment for why).
 func Endpoint(tb testing.TB, addr string) string {

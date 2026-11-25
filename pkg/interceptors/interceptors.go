@@ -84,9 +84,16 @@ func Log(log *slog.Logger, clk clock.Clock) grpc.UnaryServerInterceptor {
 	}
 }
 
-// Authenticate resolves the bearer token to a principal. Unknown tokens are
-// always rejected; missing tokens are rejected only in AuthnRequired mode.
-func Authenticate(mode config.AuthnMode, tokens map[string]string) grpc.UnaryServerInterceptor {
+// TokenAuthenticator resolves a bearer token to a principal ID (satisfied by
+// *auth.Authenticator: static dev tokens and mocker-issued access tokens).
+type TokenAuthenticator interface {
+	Authenticate(token string) (string, error)
+}
+
+// Authenticate resolves the bearer token to a principal. Unknown, expired and
+// revoked tokens are always rejected; missing tokens are rejected only in
+// AuthnRequired mode.
+func Authenticate(mode config.AuthnMode, tokens TokenAuthenticator) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 		if isExempt(info.FullMethod) {
 			return next(ctx, req)
@@ -98,9 +105,9 @@ func Authenticate(mode config.AuthnMode, tokens map[string]string) grpc.UnarySer
 			}
 			return next(ctx, req) // anonymous
 		}
-		principal, ok := tokens[token]
-		if !ok {
-			return nil, serviceerror.FromDomain(ctx, errs.Unauthenticated("invalid bearer token"))
+		principal, err := tokens.Authenticate(token)
+		if err != nil {
+			return nil, serviceerror.FromDomain(ctx, errs.Unauthenticated("invalid bearer token: "+err.Error()))
 		}
 		rinfo := reqctx.InfoFrom(ctx)
 		if rinfo == nil {

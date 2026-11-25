@@ -22,6 +22,9 @@ const (
 	KindTenantUserAccount = "tenantuseraccount"
 	KindServiceAccount    = "serviceaccount"
 	KindAccessKey         = "accesskey"
+	// KindAuthPublicKey is the NID type of auth public keys ("publickey-e00…"
+	// in the nebius/api README).
+	KindAuthPublicKey = "publickey"
 )
 
 // ContainerRepository stores tenants or projects (both iam.v1.Container; a
@@ -189,3 +192,31 @@ type AccessKeyRepository interface {
 
 // KeyMaterial generates an AWS-style access key ID and secret.
 type KeyMaterial func() (awsAccessKeyID, secret string, err error)
+
+// TokenRevoker denies already-issued access tokens (satisfied by
+// *auth.Issuer). Deactivating or deleting an auth public key revokes the
+// tokens exchanged with it; deleting a service account revokes all of its
+// tokens.
+type TokenRevoker interface {
+	RevokeKey(keyID string)
+	RevokePrincipal(principalID string)
+}
+
+// AuthPublicKeyPage is one page of an auth public key listing.
+type AuthPublicKeyPage struct {
+	Items         []*iampb.AuthPublicKey
+	NextPageToken string
+}
+
+// AuthPublicKeyRepository stores auth public keys. Names are optional and
+// unique per parent only when non-empty.
+type AuthPublicKeyRepository interface {
+	Get(ctx context.Context, id string) (*iampb.AuthPublicKey, error)
+	GetByName(ctx context.Context, parentID, name string) (*iampb.AuthPublicKey, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (AuthPublicKeyPage, error)
+	// ListByAccount returns every key of a service account.
+	ListByAccount(ctx context.Context, accountID string) ([]*iampb.AuthPublicKey, error)
+	Create(ctx context.Context, k *iampb.AuthPublicKey) error
+	Update(ctx context.Context, k *iampb.AuthPublicKey) error
+	Delete(ctx context.Context, id string) error
+}

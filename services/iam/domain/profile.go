@@ -37,3 +37,11 @@ func Profile(principalID, tenantID, projectID string) *iampb.GetProfileResponse 
 		}}}
 	}
 }
+
+// ServiceAccountProfile is the profile of a caller authenticated as sa (for
+// example with a token exchanged from the service account's JWT).
+func ServiceAccountProfile(sa *iampb.ServiceAccount) *iampb.GetProfileResponse {
+	return &iampb.GetProfileResponse{Profile: &iampb.GetProfileResponse_ServiceAccountProfile{
+		ServiceAccountProfile: &iampb.ServiceAccountProfile{Info: sa},
+	}}
+}

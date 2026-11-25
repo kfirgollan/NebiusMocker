@@ -85,6 +85,9 @@ type Config struct {
 	Audit AuditConfig
 	// IAM configures the IAM module's seed (NEBIUS_MOCKER_IAM_*).
 	IAM IAMConfig
+	// Auth configures issued access tokens and the service-account token
+	// exchange (NEBIUS_MOCKER_TOKEN_*, NEBIUS_MOCKER_IAM_JWT_MAX_TTL).
+	Auth AuthConfig
 }
 
 // Region is one emulated Nebius region.
@@ -201,7 +204,8 @@ func Default() Config {
 			Region:     "eu-north1",
 			PurgeGrace: 7 * 24 * time.Hour,
 		},
-		AI: defaultAI(),
+		AI:   defaultAI(),
+		Auth: defaultAuth(),
 	}
 }
 
@@ -266,6 +270,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, vpcParsers(&c.VPC)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
+	parsers = append(parsers, authParsers(&c.Auth)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {

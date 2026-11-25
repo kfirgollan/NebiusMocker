@@ -20,12 +20,17 @@
 | Authorization (`NEBIUS_MOCKER_AUTHZ=off\|audit\|enforce`) from memberships + permits, inherited down the hierarchy | ✅ |
 | `nebius_iam_v1_group`, `_group_membership`, `_access_permit` with the official Terraform provider | ✅ e2e: `test/terraform/iam` |
 | Static dev tokens: `nmock-dev-admin`, `nmock-dev-editor`, `nmock-dev-viewer` (members of the seeded groups) | ✅ |
-| `nebius.iam.v1.ProfileService.Get` (whoami; the `nebius` CLI calls it before `iam get-access-token`), derived from the token's principal | ✅ |
+| `nebius.iam.v1.ProfileService.Get` (whoami; the `nebius` CLI calls it before `iam get-access-token`), derived from the token's principal; service-account callers get the stored `ServiceAccount` | ✅ |
 | `nebius.iam.v1.ServiceAccountService`: Create, Get, GetByName, List, Update (reset mask), Delete (cascades to the account's access keys). Parent must be a project | ✅ T1 |
 | `nebius.iam.v2.AccessKeyService`: Create, Get, GetByName, GetSecret, List, ListByAccount, GetByAwsId, Update, Delete, Activate, Deactivate (`*ByAwsId` mutations not yet) | ✅ T1 |
 | Access keys as S3 credentials: Object Storage's S3 front verifies SigV4 with them (`peer.AccessKeys` capability in `pkg/peer`, provided by IAM) | ✅ |
 | `nebius_iam_v1_service_account`, `nebius_iam_v2_access_key` (+ data sources) and the `nebius_iam_v2_access_key_secret` ephemeral resource | ✅ e2e: `test/terraform/storage` |
 | `secret_delivery_mode = MYSTERY_BOX`: the secret is delivered to a MysteryBox secret (`status.secret_reference_id`), read with `nebius_mysterybox_v1_secret_payload_entry` / `nebius mysterybox payload get` and used against the S3 front | ✅ e2e: `test/terraform/iam` (lifecycle in `make e2e`; the S3 use with RustFS in `make e2e-storage`), `test/cli/iam` (`make e2e-storage`) |
+| `nebius.iam.v1.AuthPublicKeyService`: Create, Get, GetByName, List, ListByAccount, Update (reset mask), Activate, Deactivate, Delete. Status `state`/`fingerprint`/`algorithm`/`key_size` computed from `spec.data` | ✅ T1 (see [Service-account keys and token exchange](#service-account-keys-and-token-exchange)) |
+| `nebius.iam.v1.TokenExchangeService.Exchange` (gRPC, `tokens.iam`) and `POST /oauth2/token/exchange` (HTTP form, RFC 8693) on the edge port: service-account JWT exchange and impersonation | ✅ |
+| Issued access tokens (`nmock.v1.…`, HMAC-signed, 12h, revocable) accepted by every gRPC service and the registry's docker front, next to the static dev tokens | ✅ |
+| Service-account credentials in the official tools: gosdk `ServiceAccountReader` (credentials file, private key file), Terraform provider `service_account` block, `nebius profile create --service-account-file`, `nebius iam auth-public-key create/generate` | ✅ contract: `test/contract/iam_token*_test.go`, `iam_authkey*_test.go`; e2e: `test/terraform/iam/sa_auth_test.go`, `test/cli/iam/sa_auth_e2e_test.go` |
+| `nebius_iam_v1_auth_public_key` resource and data source | ✅ e2e: `test/terraform/iam/sa_auth_test.go` |
 | Everything else in this document | Planned |
 
 Access keys: the secret is generated in `services/iam/domain` (`GenerateKeyMaterial`: a 20-character `NMK…` AWS key ID and
@@ -57,8 +62,106 @@ MYSTERY_BOX details:
 Only `ACTIVE` keys of existing, active service accounts authenticate S3 requests. `account`, `expires_at` and
 `secret_delivery_mode` are immutable.
 
+### Service-account keys and token exchange
+
+How a service account authenticates, end to end (the flow in the
+[nebius/api README](https://github.com/nebius/api#authentication-with-service-accounts)):
+
+1. Upload an RSA public key with one of:
+   - `nebius iam auth-public-key create --account-service-account-id $SA_ID --data "$(cat public.pem)"`;
+   - `nebius iam auth-public-key generate --service-account-id $SA_ID --output=creds.json`, which also writes the
+     gosdk/CLI credentials file;
+   - Terraform `nebius_iam_v1_auth_public_key`;
+   - `AuthPublicKeyService.Create`.
+2. The client signs an RS256 JWT (`kid` is the key ID `publickey-…`, `iss` = `sub` is the service account ID, plus
+   `exp`) and exchanges it. gosdk, the provider and the CLI do this themselves over gRPC
+   (`nebius.iam.v1.TokenExchangeService/Exchange` on the edge). Over HTTP:
+
+   ```bash
+   curl http://localhost:4566/oauth2/token/exchange \
+     -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+     -d "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
+     -d "subject_token=${JWT}" \
+     -d "subject_token_type=urn:ietf:params:oauth:token-type:jwt"
+   ```
+
+   The HTTP endpoint is served on the edge port (`:4566`; `https://` when `NEBIUS_MOCKER_TLS_*` is set). Where the
+   README uses `https://auth.eu.nebius.com:443/oauth2/token/exchange`, use `http://<mocker>:4566/oauth2/token/exchange`.
+3. The response carries:
+   - `access_token` (`nmock.v1.…`);
+   - `issued_token_type`;
+   - `token_type: Bearer`;
+   - `expires_in` in seconds (`NEBIUS_MOCKER_TOKEN_TTL`, default 12h, the lifetime of Nebius IAM tokens).
+
+   Requests made with the token run as the service account. Authorization uses the SA's group memberships and
+   permits, and audit events name the SA.
+
+**Keys.**
+- The parent (`metadata.parent_id`) must be the service account's project, which is also what the CLI's `generate`
+  uses by default. A key for an SA in another project is refused. This way, editor rights in one project cannot mint
+  credentials for an SA elsewhere.
+- Only `spec.account.service_account` is supported. User-account keys are refused with `BadRequest` on `spec.account`.
+- `spec.data` must be a single PEM block holding an RSA key of at least 2048 bits. Either `PUBLIC KEY` (PKIX, what
+  `openssl rsa -pubout` writes) or `RSA PUBLIC KEY` (PKCS#1) is accepted. Anything else is refused with `BadRequest`
+  naming `spec.data`.
+- `spec.account`, `spec.expires_at` and `spec.data` are immutable. Name, labels and description update in place.
+
+| Status field | Value |
+|---|---|
+| `state` | `ACTIVE` on create. `INACTIVE` after `Deactivate`, and `ACTIVE` again after `Activate`. `EXPIRED` once `spec.expires_at` has passed on the mocker clock (computed on read). `Delete` removes the key (`Get` returns `NOT_FOUND`), so `DELETING` and `DELETED` are never reported |
+| `fingerprint` | Lower-case hex SHA-256 of the DER `SubjectPublicKeyInfo`. It is the same for a PKIX and a PKCS#1 upload of one key. Upstream does not document the format |
+| `algorithm` | `RSA` |
+| `key_size` | Modulus size in bits |
+
+**Key age and expiry.** Nebius has no `status.created_at` or `status.expires_at`. The creation time is
+`metadata.created_at`, and the expiry is `spec.expires_at`. Tools that report key age read `metadata.created_at`.
+
+**Exchange checks.** Any failed check refuses the exchange. Over HTTP the response is status 400 with OAuth JSON
+`{"error": …, "error_description": …}`. Over gRPC it is the mapped code:
+
+| Check | OAuth `error` | gRPC |
+|---|---|---|
+| `grant_type` is `urn:ietf:params:oauth:grant-type:token-exchange` | `unsupported_grant_type` | `INVALID_ARGUMENT` |
+| `requested_token_type` is empty or `…:access_token`; `subject_token` and `subject_token_type` are present; HTTP only: the body is form-encoded and no parameter repeats | `invalid_request` | `INVALID_ARGUMENT` |
+| `scopes` (HTTP `scope`), `audience` and `resource` are unsupported and refused by name | `invalid_scope` / `invalid_target` | `INVALID_ARGUMENT` |
+| `subject_token_type` is `…:jwt`, or `urn:nebius:params:oauth:token-type:subject_identifier` for impersonation. Federated token types are refused | `invalid_request` | `INVALID_ARGUMENT` |
+| See the JWT checks below | `invalid_grant` | `UNAUTHENTICATED` |
+| See the impersonation checks below | `invalid_grant` / `unauthorized_client` | `UNAUTHENTICATED` / `PERMISSION_DENIED` |
+
+JWT checks, all reported as `invalid_grant` / `UNAUTHENTICATED`:
+- `alg` must be RS256. `none`, HS*, RS512, PS* and ES* are refused before any key lookup.
+- `kid` must name an existing `publickey-…`. Kids from external issuers are refused as federated.
+- The key must be `ACTIVE`, not `INACTIVE` or `EXPIRED`.
+- `iss` = `sub` must be the key's service account.
+- The signature must verify.
+- `exp` must be present, in the future, and at most `NEBIUS_MOCKER_IAM_JWT_MAX_TTL` (1h) ahead.
+- `iat` and `nbf` must not be in the future (30s skew allowed), and `exp - iat` must not exceed the max TTL.
+- The service account must exist and be active.
+
+Impersonation checks:
+- `actor_token` must be a valid mocker token (static or issued), with `actor_token_type` `…:access_token`. Otherwise
+  `invalid_grant` / `UNAUTHENTICATED`.
+- `subject_token` must be an existing SA. Otherwise `invalid_grant` / `UNAUTHENTICATED`.
+- The actor needs `iam.serviceAccounts.impersonate` on the SA. Only `admin` grants it, and it is checked according to
+  `NEBIUS_MOCKER_AUTHZ`. A denial is `unauthorized_client` / `PERMISSION_DENIED`.
+
+This is the flow behind the gosdk/provider `impersonate_service_account_id`. An `actor_token` sent with a JWT subject
+is refused (`invalid_request`).
+
+**Revocation.** Nebius does not document whether deactivating a key ends the sessions it already opened. The mock
+ends them, because local development uses deactivation to check that a key really stops working:
+- `Deactivate` and `Delete` of a key revoke every token exchanged with it. Tokens issued after a later `Activate`
+  work.
+- Deleting a service account deletes its auth public keys and access keys. It also revokes all its tokens, including
+  tokens it obtained by impersonation.
+- Expired tokens are refused (`UNAUTHENTICATED`) once their `expires_in` has passed on the mocker clock.
+
+Tokens are verified statelessly with `NEBIUS_MOCKER_TOKEN_SECRET`. The secret is random per process by default, so
+tokens do not survive a restart. The revocation deny-list is kept in process memory.
+
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (re-verified for
-`ProjectService`/`TenantService` v1+v2 on 2026-11-25; `nebius` CLI 0.12.312).
+`ProjectService`/`TenantService` v1+v2 and for `AuthPublicKeyService`/`TokenExchangeService` on 2026-11-25;
+`nebius` CLI 0.12.312).
 
 Covered by unit tests (`services/iam/domain`, `services/iam/dal`), gosdk contract tests (`test/contract`) and the
 Terraform e2e suite (`make e2e`). The suite runs create → add → remove → destroy, plus in-place label and name updates.
@@ -136,15 +239,15 @@ Confirm them during parity recording.
 | `subject_token_type` | Validation | Principal |
 |---|---|---|
 | `urn:ietf:params:oauth:token-type:jwt`, self-signed by SA key | RS256 signature against the `AuthPublicKey` named by `kid`; `iss == sub == serviceaccount id`; key `ACTIVE` and not expired; `exp` ≤ 1h ahead | that SA |
-| `…:jwt` from an external issuer | Matches a `FederatedCredentials` (issuer + subject). Signature checked against the issuer's JWKS (fetched, or a mocker-hosted fake issuer) | the SA that owns the federated credentials |
-| `…:access_token` + `actor_token` | Impersonation: the actor needs `iam.serviceAccounts.impersonate` on the target SA | target SA |
+| `…:jwt` from an external issuer (federated credentials) | **Not yet**: refused with `invalid_grant` naming federation | — |
+| `urn:nebius:params:oauth:token-type:subject_identifier` (the SA ID) + `actor_token` | Impersonation: the actor needs `iam.serviceAccounts.impersonate` on the target SA | target SA |
 
-The response is `CreateTokenResponse{access_token, issued_token_type, token_type="Bearer", expires_in}`. Errors follow
-OAuth conventions in the HTTP form (`invalid_grant`, `invalid_request`) and `UNAUTHENTICATED`/`INVALID_ARGUMENT` in gRPC.
+The response is `CreateTokenResponse{access_token, issued_token_type, token_type="Bearer", expires_in}`. The checks and
+error mapping are listed under [Service-account keys and token exchange](#service-account-keys-and-token-exchange).
 
 ### Keys
 - `AuthPublicKey.Create` parses the PEM and computes the fingerprint, algorithm and key size. Unsupported key types are
-  rejected with `BadRequest`.
+  rejected with `BadRequest` naming `spec.data` (details above).
 - `StaticKeyService.Issue` returns the secret **once**. `Find` looks up by token. `Revoke` invalidates it immediately.
 - `iam.v2.AccessKey`: on create the module generates an AWS-style `aws_access_key_id` (`NMK…`, 20 chars) and secret.
   `GetSecret` reveals the secret, and only to principals with `iam.accessKeys.getSecret`. With
@@ -215,6 +318,22 @@ and calls `TokenExchangeService` when the provider uses SA or impersonation cred
 | `NEBIUS_MOCKER_IAM_ROLES_FILE` | built-in | Role → permission catalog override |
 | `NEBIUS_MOCKER_IAM_FAKE_OIDC` | `1` | Serve a fake OIDC issuer at `/_mocker/oidc/<name>` for federated-credential tests |
 | `NEBIUS_MOCKER_IAM_JWT_MAX_TTL` | `1h` | Max `exp` accepted on self-signed exchange JWTs |
+| `NEBIUS_MOCKER_TOKEN_SECRET` | random per process | HMAC key of issued access tokens (at least 32 bytes). Processes sharing it accept each other's tokens |
+| `NEBIUS_MOCKER_TOKEN_TTL` | `12h` | Lifetime of issued access tokens (`expires_in`) |
+
+Of these, `IAM_JWT_MAX_TTL`, `TOKEN_SECRET` and `TOKEN_TTL` are implemented; the others are planned.
+
+### Not yet (service-account authentication)
+- Federated credentials (`FederatedCredentialsService`, external OIDC issuers): refused by name in the exchange.
+- `StaticKeyService`, `SessionManagementService` (revoking sessions through the API) and an admin API for minting
+  user tokens.
+- Scoped, audience- or resource-restricted tokens (`scopes`, `audience`, `resource`): refused by name.
+- The revocation deny-list is per process: split deployments sharing `NEBIUS_MOCKER_TOKEN_SECRET` do not share revocations.
+- Quotas on keys (`iam.authpublickey.count`).
+- The `nebius_iam_token` ephemeral resource makes no RPC of its own (it returns the provider's current token, which the
+  exchange above issues for `service_account` credentials) and has no e2e test yet.
+- The HTTP exchange ignores unrecognized form parameters, as RFC 6749 §3.2 requires; every parameter of
+  `ExchangeTokenRequest` is either implemented or refused by name.
 
 ## Open questions
 - Exact NID prefixes for keys, federation, invitations and static keys.

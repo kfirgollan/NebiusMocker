@@ -96,7 +96,7 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if !isHarbor || m.cfg.Listen == listenOff {
 		return nil
 	}
-	access, err := domain.NewAccessService(tokens(deps.Config.Tokens), deps.Authz, registries, deps.Config.Authz, deps.Log)
+	access, err := domain.NewAccessService(deps.Authenticator, deps.Authz, registries, deps.Config.Authz, deps.Log)
 	if err != nil {
 		return err
 	}
@@ -202,12 +202,4 @@ func portOf(listen string) string {
 		return ""
 	}
 	return port
-}
-
-// tokens verifies the static bearer tokens of the mocker configuration.
-type tokens map[string]string
-
-func (t tokens) Principal(token string) (string, bool) {
-	p, ok := t[token]
-	return p, ok
 }
