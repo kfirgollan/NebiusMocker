@@ -24,6 +24,9 @@ CI with no Nebius account.
 > [docs/services/kms.md](docs/services/kms.md#implementation-status).
 > **MysteryBox (SecretStash) secrets, versions and payloads** work with the official Terraform provider, CLI and Go
 > SDK: see [docs/services/mysterybox.md](docs/services/mysterybox.md#implementation-status).
+> **VPC networking** (pools, networks, subnets, private and public allocations, route tables and routes, security
+> groups and rules, with real IPAM) works with Terraform, the Go SDK and the `nebius vpc` CLI; see
+> [docs/services/vpc.md](docs/services/vpc.md#implementation-status).
 
 ## Quick start
 

@@ -41,6 +41,9 @@ Implemented so far: `NEBIUS_MOCKER_REGISTRY_BACKEND` (`memory`|`harbor`), `_LIST
 `_HARBOR_URL`, `_HARBOR_USERNAME`, `_HARBOR_PASSWORD` (see [registry](../services/registry.md#configuration)).
 They are documented in each service doc (for example `NEBIUS_MOCKER_STORAGE_*` in
 [services/storage.md](../services/storage.md#configuration)).
+VPC: `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` (default `10.0.0.0/13`, the `default-network-pool` of each project) and
+`NEBIUS_MOCKER_VPC_PUBLIC_CIDR` (default `203.0.113.0/24`, the `default-public-pool`); see
+[services/vpc.md](../services/vpc.md#configuration).
 
 ## Seed data
 

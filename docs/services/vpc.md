@@ -3,6 +3,30 @@
 > Module: `services/vpc` · Image: `nebius-mocker-vpc` · `NEBIUS_MOCKER_SERVICES=vpc`
 > M1 tier: **T2** · Endpoint: `vpc.api.nebius.cloud`
 
+## Implementation status
+
+| Piece | Status |
+|---|---|
+| Seeded per project: `default-network-pool` (private, `10.0.0.0/13` = eu-north1), `default-public-pool` (public, `203.0.113.0/24`), `default-network` (`status.default`) and `default-subnet` (uses the network's pools) | ✅ |
+| Every network gets `default-route-table-<suffix>` (route `default-egress`: `0.0.0.0/0` → default egress gateway) and `default-security-group-<suffix>`; both are removed with the network | ✅ |
+| `PoolService`: Get, GetByName, List, ListAggregated, ListBySourcePool, Create, Update, Delete; child pools carved from `source_pool_id` (`"/16"` or explicit), `status.cidrs`, live `status.assignment` | ✅ T2 |
+| `NetworkService`: Get, GetByName, GetDefault, List, ListAggregated, Create, CreateDefault, Update, Delete; default pools filled in when omitted | ✅ T2 |
+| `SubnetService`: Get, GetByName, List, ListAggregated, ListByNetwork, Create, Update, Delete; `use_network_pools` (shared) or explicit blocks (`"/24"` lowest free, or a free CIDR inside the network's pools), `route_table_id` | ✅ T2 |
+| `AllocationService`: Get, GetByName, List, ListAggregated, ListByPool, ListBySubnet, Create, Update, Delete; private and public, lowest free address (skips network, gateway and broadcast) or an explicit free one | ✅ T2 |
+| `RouteTableService` (+ ListByNetwork, live `status.assignment`), `RouteService` (next hop: allocation in the same network, or default egress for `0.0.0.0/0`; unique destination per table) | ✅ T2 |
+| `SecurityGroupService` (+ ListByNetwork), `SecurityRuleService` (stored and validated, not enforced; priority 500 and `STATEFUL` defaults; `status.effective_priority`, direction, match) | ✅ T2 |
+| Delete refused while referenced (table below); cascades: route table → routes, security group → rules, network → default route table and security group | ✅ |
+| Authorization: `vpc.<resources>.<verb>` for every RPC, ancestry through project / route table / security group | ✅ |
+| All `nebius_vpc_v1_*` resources and data sources (incl. `nebius_vpc_v1_default_network`) with the official Terraform provider | ✅ e2e: `test/terraform/vpc` |
+| `nebius vpc network\|subnet list\|get-by-name` with the official CLI | ✅ e2e: `test/terraform/vpc/cli_test.go` |
+| `TargetGroupService` (needs compute instances), `status.assignment` of allocations (set by compute through a peer call), quotas | Not yet |
+| `vpc.v1alpha1` (scopes, legacy network/subnet/pool shapes, `nebius_vpc_v1alpha1_allocation`) | Not yet |
+
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
+
+Covered by unit tests (`services/vpc/domain` incl. the IPAM primitives, `services/vpc/dal`), gosdk contract tests
+(`test/contract/vpc_*`) and the Terraform + CLI e2e suite (`make e2e`).
+
 ## Overview
 
 VPC models IP address management and private networking: **pools** (CIDR sets), **networks** that draw from pools,
@@ -25,50 +49,75 @@ network/subnet/pool shapes, which the provider exposes as data sources plus `neb
 
 ## Emulation design
 
+VPC is pure control plane: no backend is adopted, and there is no packet path. IPAM is implemented with `net/netip`
+in `services/vpc/domain` (`ipam.go`, `space.go`). One lock serializes every VPC mutation, so placement decisions are
+atomic.
+
 ### IPAM core
-This module carries the most real logic in M1, because outputs must be consistent and must survive an empty
-`terraform plan`:
+Outputs must be deterministic and must survive an empty `terraform plan`, so **specs are stored as written** (a
+`"/24"` stays `"/24"`) and resolved blocks live in `status`.
 
-- **Pools.** Each project gets a seeded **default private pool** (`10.0.0.0/8`, configurable) and the tenant gets a
-  **public pool** (default `203.0.113.0/24`, from the TEST-NET-3 documentation range, so mock IPs can never collide with
-  real ones). A user pool with `source_pool_id` must carve its CIDRs from the source pool. Prefix length rules match
-  upstream validation.
-- **Networks.** `spec.ipv4_private_pools.pools[].id` must reference pools in the same project. With no pools given, the
-  network uses the project default pool. `GetDefault` returns the project's default network.
-  `CreateDefault` creates one if missing (seeded by default, named `default-network`).
-- **Subnets.** CIDRs come from the network's pools (`use_network_pools`) or from explicit pools. A
-  `cidrs[].cidr` value is either a block (`10.1.2.0/24`), which must be free and inside the pool, or a bare prefix length
-  (`/24`), for which the mocker auto-allocates the lowest free block. Pools work the same way. `max_mask_length` bounds
-  later allocations. Overlapping subnets in the same network → `INVALID_ARGUMENT`.
-  `status.ipv4_private_cidrs` echoes what was allocated. The default subnet of the default network has `status.default=true`.
-- **Allocations.** Private allocations pick the next free address in the subnet's CIDR (deterministic: lowest free
-  address, skipping network/gateway/broadcast addresses). Public allocations draw from the public pool.
-  `status.assignment` records the consumer (an instance NIC or a load balancer) and is set and cleared through
-  `peer` calls from `compute`. Deleting an assigned allocation → `FAILED_PRECONDITION`.
-- **Dynamic addresses.** When `compute` creates an instance NIC without an `allocation_id`, it asks `vpc` (via `peer`)
-  for an ephemeral allocation that is owned by the instance and released with it.
+- **Pools.** Each project gets `default-network-pool` (private, `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR`, default
+  `10.0.0.0/13`, the documented eu-north1 block) and `default-public-pool` (public, `NEBIUS_MOCKER_VPC_PUBLIC_CIDR`,
+  default `203.0.113.0/24` from TEST-NET-3, so mock IPs never collide with real ones). The public pool cannot be
+  changed or deleted, as documented. A pool with `source_pool_id` carves its CIDRs (explicit, or `"/N"` for the
+  lowest free block) from the source pool, which must have the same version and visibility. A root pool (no source)
+  needs explicit CIDRs. `status.cidrs` holds the resolution in spec order. Only IPv4 is supported.
+- **Block settings.** Every pool or subnet CIDR entry has `state` (default `AVAILABLE`) and `max_mask_length`
+  (default 32). Nothing is placed in a `DISABLED` block, and nothing longer than `max_mask_length` is carved from a
+  block (for example a /32 allocation from a block limited to /28 is refused with `INVALID_ARGUMENT`).
+- **What a pool's space is used by.** Child pools, subnets with explicit blocks, and allocations. Subnets with
+  `use_network_pools` share the network's pools and consume nothing, so many of them can coexist ("all subnets in
+  that network can use those pools at the same time").
+- **Networks.** `spec.ipv4_private_pools` / `ipv4_public_pools` reference pools of the right visibility in the same
+  project; omitted lists are filled with the project's default pools. A network's private pools must not overlap.
+  Removing a pool still used by the network's subnets or allocations is refused. `GetDefault` returns the network
+  with `status.default` and its default subnet; `CreateDefault` creates them if the project has none.
+- **Subnets.** Each family (private, public) either uses the network's pools (the default when no pools are given) or
+  lists `pools[].cidrs[]`. Each `cidr` is a block (`10.1.2.0/24`), which must be inside the network's pools and free,
+  or a bare prefix length (`/24`), for which the lowest free aligned block is chosen. Overlap → `INVALID_ARGUMENT`;
+  no room left → `FAILED_PRECONDITION`. Updates keep blocks already held (a `"/24"` does not move). Status:
+  `ipv4_private_pools[] {pool_id, cidrs}` (plus the deprecated flat `ipv4_private_cidrs`, in spec order) and
+  `route_table {id, default}`.
+- **Allocations.** From a subnet (its explicit blocks, or the network's pools for a shared family) or directly from a
+  pool. Without `cidr` the lowest free address is used (skipping network, gateway `.1` and broadcast). `cidr` may be
+  an address, a CIDR or `/N`. `status.details` records `allocated_cidr`, `pool_id` and `subnet_id`; `static` is
+  `true`. `status.assignment` is reserved for compute (an assigned allocation cannot be deleted).
+  The whole allocation spec is treated as immutable (upstream marks only `cidr` `IMMUTABLE`): changing `subnet_id`
+  or `pool_id` in place is refused, because the mock never moves an address.
 
-### Security groups, rules and routes
-These are stored and validated (port ranges, CIDR syntax, protocol enums, priority uniqueness per group/direction) but not
-enforced: there is no packet path. Rules are fully immutable (every spec field is `IMMUTABLE`), so Terraform plans a
-replacement on any change. The conformance kit checks this. Route next hops must reference existing allocations or
-default egress.
+### Routing
+Every network gets a default route table (`status.default`, referenced by `network.status.default_route_table_id`)
+with one route, `0.0.0.0/0` → default egress gateway. Subnets without `route_table_id` use it. A custom route table
+can only be assigned to subnets of its network. Route destinations are unique per table. A next hop is an allocation
+in a subnet of the same network, or `default_egress_gateway = true`, which is valid only for `0.0.0.0/0`.
+`destination` and `next_hop` are immutable; `description` is updatable.
+
+### Security groups and rules
+Stored and validated, not enforced. Every network gets a default security group. Rule spec fields are all
+`IMMUTABLE`, so Terraform plans a replacement on any change. Priority defaults to 500 and type to `STATEFUL`;
+several rules may share a priority (DENY is evaluated first), which `status.effective_priority` reflects
+(`2·priority`, `+1` for ALLOW). A referenced security group must be in the same network; ports are rejected for ICMP.
 
 ### Integrity
 | Delete | Refused while |
 |---|---|
-| Pool | Networks or subnets reference it, or child pools exist |
-| Network | Subnets, security groups or route tables exist |
-| Subnet | Allocations, instance NICs (via `peer` to compute) or mk8s clusters (via `peer` to mk8s) reference it |
-| Security group | NICs reference it |
+| Pool | Networks reference it, child pools exist, subnets carve from it, or allocations come from it; always for `default-public-pool` |
+| Network | Subnets, non-default security groups or non-default route tables exist (the defaults are deleted with it) |
+| Subnet | Allocations reference it (instance NICs and mk8s clusters: later, via `peer`) |
+| Allocation | It is assigned, or a route uses it as next hop |
+| Route table | Subnets use it; always for a default route table |
+| Security group | Another group's rule references it; always for a default security group |
 
 ### Aggregated lists
-`ListAggregated` returns resources across all projects of the tenant the caller can see. `ListByNetwork`, `ListBySubnet`
-and `ListByPool` are index queries.
+`ListAggregated` currently returns the same as `List` (the mock has one project per tenant). `ListByNetwork`,
+`ListBySubnet`, `ListByPool` and `ListBySourcePool` filter across all parents and page in creation order.
 
 ### Permissions and quotas
-- Permissions: `vpc.pools.*`, `vpc.networks.*`, `vpc.subnets.*`, `vpc.allocations.*`, `vpc.securityGroups.*`, `vpc.securityRules.*`, `vpc.routeTables.*`, `vpc.routes.*`, `vpc.targetGroups.*`.
-- Quotas: `vpc.network.count`, `vpc.subnet.count` (project), `vpc.allocation.public.count` (tenant), `vpc.securitygroup.count`.
+- Permissions: `vpc.pools.*`, `vpc.networks.*`, `vpc.subnets.*`, `vpc.allocations.*`, `vpc.securityGroups.*`,
+  `vpc.securityRules.*`, `vpc.routeTables.*`, `vpc.routes.*`. `ListBy*` need `list` on the filtered resource;
+  `GetDefault` needs `vpc.networks.get` on the project.
+- Quotas: not enforced yet.
 
 ## Terraform
 
@@ -105,14 +154,12 @@ is required for M1.
 
 | Env | Default | Description |
 |---|---|---|
-| `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` | `10.0.0.0/8` | Per-project default private pool |
-| `NEBIUS_MOCKER_VPC_PUBLIC_CIDR` | `203.0.113.0/24` | Tenant public pool |
-| `NEBIUS_MOCKER_VPC_SEED_DEFAULT_NETWORK` | `1` | Create `default-network` + default subnet per project |
-| `NEBIUS_MOCKER_VPC_ALLOCATION_STRATEGY` | `lowest-free` | `lowest-free` \| `random` |
+| `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` | `10.0.0.0/13` | CIDR of each project's `default-network-pool` |
+| `NEBIUS_MOCKER_VPC_PUBLIC_CIDR` | `203.0.113.0/24` | CIDR of `default-public-pool` |
 
 ## Open questions
-- Real default pool CIDRs and subnet prefix defaults.
-- Whether network deletion cascades to the default subnet.
+- Real default subnet prefix sizes and whether upstream echoes resolved CIDRs into `spec`.
+- Whether upstream refuses deleting a route table that still has routes (the mock cascades them).
 - Exact `status.assignment` shape for each consumer type.
 
 ## API surface

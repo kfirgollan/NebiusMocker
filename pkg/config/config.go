@@ -75,6 +75,8 @@ type Config struct {
 	Storage StorageConfig
 	// MysteryBox holds the secrets manager's limits and payload key.
 	MysteryBox MysteryBoxConfig
+	// VPC is the seeded VPC address space (NEBIUS_MOCKER_VPC_*).
+	VPC VPCConfig
 }
 
 // Region is one emulated Nebius region.
@@ -163,6 +165,7 @@ func Default() Config {
 		ProjectID:      DefaultProjectID,
 		Regions:        DefaultRegions(),
 		LogLevel:       slog.LevelInfo,
+		VPC:            defaultVPC(),
 		ObjStore: ObjStoreConfig{
 			Backend:   ObjStoreMemory,
 			Endpoint:  "http://127.0.0.1:9000",
@@ -229,6 +232,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"MYSTERYBOX_KEY", func(v string) error { c.MysteryBox.Key = v; return nil }},
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
+	parsers = append(parsers, vpcParsers(&c.VPC)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {
