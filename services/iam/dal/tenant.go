@@ -14,7 +14,7 @@ import (
 // TenantRepo stores tenants.
 type TenantRepo struct{ st store.Store }
 
-var _ domain.TenantRepository = (*TenantRepo)(nil)
+var _ domain.ContainerRepository = (*TenantRepo)(nil)
 
 // NewTenantRepo returns a TenantRepo over st.
 func NewTenantRepo(st store.Store) *TenantRepo { return &TenantRepo{st: st} }
@@ -48,4 +48,25 @@ func (r *TenantRepo) Ensure(ctx context.Context, t *iampb.Container) error {
 		return perr
 	})
 	return toDomain(err, md.GetId())
+}
+
+// ProjectRepo stores projects (records are children of their tenant).
+type ProjectRepo struct{ st store.Store }
+
+var _ domain.ContainerRepository = (*ProjectRepo)(nil)
+
+// NewProjectRepo returns a ProjectRepo over st.
+func NewProjectRepo(st store.Store) *ProjectRepo { return &ProjectRepo{st: st} }
+
+// Get returns the project or errs.NotFound.
+func (r *ProjectRepo) Get(ctx context.Context, id string) (*iampb.Container, error) {
+	return get(ctx, r.st, domain.KindProject, id, func() *iampb.Container { return &iampb.Container{} })
+}
+
+// Ensure inserts p unless a project with the same ID exists.
+func (r *ProjectRepo) Ensure(ctx context.Context, p *iampb.Container) error {
+	if _, err := r.Get(ctx, p.GetMetadata().GetId()); err == nil {
+		return nil
+	}
+	return write(ctx, r.st, domain.KindProject, p, true, nil)
 }

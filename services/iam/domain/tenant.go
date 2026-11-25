@@ -17,7 +17,7 @@ const DefaultRegion = "eu-north1"
 
 // SeedTenant creates the tenant with the given ID if it does not exist yet.
 // Tenants cannot be created through the public API, so the mocker seeds them.
-func SeedTenant(ctx context.Context, tenants TenantRepository, clk clock.Clock, id, name string) error {
+func SeedTenant(ctx context.Context, tenants ContainerRepository, clk clock.Clock, id, name string) error {
 	now := timestamppb.New(clk.Now())
 	t := &iampb.Container{
 		Metadata: &commonpb.ResourceMetadata{
@@ -31,6 +31,26 @@ func SeedTenant(ctx context.Context, tenants TenantRepository, clk clock.Clock, 
 	}
 	if err := tenants.Ensure(ctx, t); err != nil {
 		return fmt.Errorf("seed tenant %s: %w", id, err)
+	}
+	return nil
+}
+
+// SeedProject creates the project under tenantID if it does not exist yet.
+// Projects are the parent of most cloud resources (registries, buckets, …).
+func SeedProject(ctx context.Context, projects ContainerRepository, clk clock.Clock, id, tenantID, name string) error {
+	now := timestamppb.New(clk.Now())
+	p := &iampb.Container{
+		Metadata: &commonpb.ResourceMetadata{
+			Id: id, ParentId: tenantID, Name: name, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+		},
+		Spec: &iampb.ContainerSpec{Region: DefaultRegion},
+		Status: &iampb.ContainerStatus{
+			ContainerState: iampb.State_ACTIVE,
+			Region:         DefaultRegion,
+		},
+	}
+	if err := projects.Ensure(ctx, p); err != nil {
+		return fmt.Errorf("seed project %s: %w", id, err)
 	}
 	return nil
 }

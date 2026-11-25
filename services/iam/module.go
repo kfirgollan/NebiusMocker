@@ -33,6 +33,7 @@ func (*Module) Name() string { return "iam" }
 
 type repos struct {
 	tenants     *dal.TenantRepo
+	projects    *dal.ProjectRepo
 	groups      *dal.GroupRepo
 	memberships *dal.MembershipRepo
 	permits     *dal.PermitRepo
@@ -43,6 +44,7 @@ type repos struct {
 func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	r := repos{
 		tenants:     dal.NewTenantRepo(deps.Store),
+		projects:    dal.NewProjectRepo(deps.Store),
 		groups:      dal.NewGroupRepo(deps.Store),
 		memberships: dal.NewMembershipRepo(deps.Store),
 		permits:     dal.NewPermitRepo(deps.Store),
@@ -81,6 +83,9 @@ func seed(ctx context.Context, r repos, deps mocker.Deps) error {
 	if err := domain.SeedTenant(ctx, r.tenants, deps.Clock, tenantID, "default"); err != nil {
 		return err
 	}
+	if err := domain.SeedProject(ctx, r.projects, deps.Clock, deps.Config.ProjectID, tenantID, "default"); err != nil {
+		return err
+	}
 	return domain.SeedAuthz(ctx, domain.AuthzRepos{Groups: r.groups, Memberships: r.memberships, Permits: r.permits},
 		deps.IDs, deps.Clock, domain.AuthzSeed{
 			TenantID: tenantID,
@@ -98,6 +103,10 @@ func registerAuthz(r repos, deps mocker.Deps) {
 	e.RegisterKind(domain.KindTenant, func(ctx context.Context, id string) (string, error) {
 		_, err := r.tenants.Get(ctx, id)
 		return "", err // tenants are roots
+	})
+	e.RegisterKind(domain.KindProject, func(ctx context.Context, id string) (string, error) {
+		p, err := r.projects.Get(ctx, id)
+		return p.GetMetadata().GetParentId(), err
 	})
 	e.RegisterKind(domain.KindGroup, func(ctx context.Context, id string) (string, error) {
 		g, err := r.groups.Get(ctx, id)

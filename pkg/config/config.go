@@ -37,6 +37,7 @@ const (
 	DefaultViewerToken     = "nmock-dev-viewer" //nolint:gosec // documented local dev token
 	DefaultViewerPrincipal = "tenantuseraccount-e00mock000000000devviewer"
 	DefaultTenantID        = "tenant-e00mock0000000000default"
+	DefaultProjectID       = "project-e00mock000000000default"
 )
 
 // Config is the full process configuration.
@@ -56,7 +57,9 @@ type Config struct {
 	RoutingCode    string
 	// TenantID is the seeded default tenant.
 	TenantID string
-	LogLevel slog.Level
+	// ProjectID is the seeded default project (child of TenantID, region eu-north1).
+	ProjectID string
+	LogLevel  slog.Level
 }
 
 // Default returns the configuration used when no environment is set.
@@ -74,6 +77,7 @@ func Default() Config {
 		IDMode:         nid.Random,
 		RoutingCode:    "e00",
 		TenantID:       DefaultTenantID,
+		ProjectID:      DefaultProjectID,
 		LogLevel:       slog.LevelInfo,
 	}
 }
@@ -103,6 +107,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"IDS", func(v string) error { return parseIDMode(v, &c.IDMode) }},
 		{"ROUTING_CODE", func(v string) error { c.RoutingCode = v; return nil }},
 		{"TENANT_ID", func(v string) error { c.TenantID = v; return nil }},
+		{"PROJECT_ID", func(v string) error { c.ProjectID = v; return nil }},
 		{"LOG_LEVEL", func(v string) error { return c.LogLevel.UnmarshalText([]byte(v)) }},
 	}
 	for _, p := range parsers {

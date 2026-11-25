@@ -13,6 +13,7 @@ import (
 // Resource type prefixes (NID types) owned by IAM.
 const (
 	KindTenant            = "tenant"
+	KindProject           = "project"
 	KindGroup             = "group"
 	KindGroupMembership   = "groupmembership"
 	KindAccessPermit      = "accesspermit"
@@ -20,11 +21,12 @@ const (
 	KindServiceAccount    = "serviceaccount"
 )
 
-// TenantRepository stores tenants (iam.v1.Container).
-type TenantRepository interface {
+// ContainerRepository stores tenants or projects (both iam.v1.Container; a
+// project's parent is its tenant). One repository exists per kind.
+type ContainerRepository interface {
 	Get(ctx context.Context, id string) (*iampb.Container, error)
-	// Ensure inserts the tenant if no tenant with its ID exists.
-	Ensure(ctx context.Context, t *iampb.Container) error
+	// Ensure inserts the container if none with its ID exists.
+	Ensure(ctx context.Context, c *iampb.Container) error
 }
 
 // GroupPage is one page of a group listing.

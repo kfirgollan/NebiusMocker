@@ -29,6 +29,8 @@ type Instance struct {
 	Token string
 	// TenantID is the seeded default tenant.
 	TenantID string
+	// ProjectID is the seeded default project (child of TenantID).
+	ProjectID string
 }
 
 type settings struct {
@@ -99,7 +101,7 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 			tb.Errorf("testkit: stop mocker: %v", err)
 		}
 	})
-	return &Instance{Addr: addr.String(), Token: config.DefaultDevToken, TenantID: cfg.TenantID}
+	return &Instance{Addr: addr.String(), Token: config.DefaultDevToken, TenantID: cfg.TenantID, ProjectID: cfg.ProjectID}
 }
 
 // SDK returns an official gosdk client routed to the instance, the same way the

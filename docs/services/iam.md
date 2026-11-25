@@ -7,7 +7,7 @@
 
 | Piece | Status |
 |---|---|
-| Seeded default tenant (`tenant-e00mock0000000000default`) | ✅ |
+| Seeded default tenant (`tenant-e00mock0000000000default`) and default project (`project-e00mock000000000default`, region `eu-north1`) | ✅ (projects are seeded only; `ProjectService` not served yet) |
 | `nebius.iam.v1.GroupService`: Create, Get, GetByName, List (paged), Update (reset mask, `resource_version`), Delete | ✅ T1 |
 | `nebius.iam.v1.GroupMembershipService`: Create, Get, Delete, ListMembers, ListMemberOf (`*WithAttributes` not yet) | ✅ T1 |
 | `nebius.iam.v1.AccessPermitService`: Create, Get, Delete, List | ✅ T1 |

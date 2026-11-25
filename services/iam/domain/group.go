@@ -28,7 +28,7 @@ const (
 // GroupService implements IAM group behavior.
 type GroupService struct {
 	groups      GroupRepository
-	tenants     TenantRepository
+	tenants     ContainerRepository
 	memberships MembershipRepository
 	permits     PermitRepository
 	ops         Operations
@@ -39,7 +39,7 @@ type GroupService struct {
 // GroupDeps are the dependencies of a GroupService. All are required.
 type GroupDeps struct {
 	Groups      GroupRepository
-	Tenants     TenantRepository
+	Tenants     ContainerRepository
 	Memberships MembershipRepository
 	Permits     PermitRepository
 	Ops         Operations

@@ -33,6 +33,14 @@ type Module interface {
 	Register(ctx context.Context, reg grpc.ServiceRegistrar, deps Deps) error
 }
 
+// Lifecycle is implemented by modules that run background work or extra
+// listeners (e.g. a data-plane HTTP server). Start is called after every module
+// is registered and before the edge serves; Stop runs in reverse order on shutdown.
+type Lifecycle interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+}
+
 // Deps are the shared dependencies handed to every module.
 type Deps struct {
 	Config config.Config
@@ -120,8 +128,13 @@ func (s *Server) Start(ctx context.Context) (net.Addr, error) {
 		}
 	}
 	s.ops.Start(ctx)
+	if err := s.startModules(ctx); err != nil {
+		s.ops.Stop()
+		return nil, err
+	}
 	addr, err := s.edge.Start(ctx, s.cfg.Listen)
 	if err != nil {
+		s.stopModules(ctx)
 		s.ops.Stop()
 		return nil, err
 	}
@@ -129,11 +142,42 @@ func (s *Server) Start(ctx context.Context) (net.Addr, error) {
 	return addr, nil
 }
 
-// Stop drains the edge server and stops the operation engine.
+// Stop drains the edge server, stops modules and the operation engine.
 func (s *Server) Stop(ctx context.Context) error {
 	err := s.edge.Stop(ctx)
+	s.stopModules(ctx)
 	s.ops.Stop()
 	return err
+}
+
+// startModules starts every Lifecycle module; on failure it stops the ones
+// already started.
+func (s *Server) startModules(ctx context.Context) error {
+	for i, m := range s.modules {
+		lc, ok := m.(Lifecycle)
+		if !ok {
+			continue
+		}
+		if err := lc.Start(ctx); err != nil {
+			for _, prev := range slices.Backward(s.modules[:i]) {
+				if plc, ok := prev.(Lifecycle); ok {
+					_ = plc.Stop(ctx) // best-effort rollback; the start error is what matters
+				}
+			}
+			return fmt.Errorf("start module %s: %w", m.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) stopModules(ctx context.Context) {
+	for _, m := range slices.Backward(s.modules) {
+		if lc, ok := m.(Lifecycle); ok {
+			if err := lc.Stop(ctx); err != nil {
+				s.log.ErrorContext(ctx, "stop module", "module", m.Name(), "error", err)
+			}
+		}
+	}
 }
 
 func selectModules(names []string, all []Module) ([]Module, error) {
