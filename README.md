@@ -27,6 +27,10 @@ CI with no Nebius account.
 > **VPC networking** (pools, networks, subnets, private and public allocations, route tables and routes, security
 > groups and rules, with real IPAM) works with Terraform, the Go SDK and the `nebius vpc` CLI; see
 > [docs/services/vpc.md](docs/services/vpc.md#implementation-status).
+> **Serverless AI endpoints** keep a real inventory (validation, lifecycle, start/stop/restart, auth token or
+> MysteryBox secret) through Terraform, the Go SDK and the `nebius ai endpoint` CLI. No container runs: each endpoint
+> URL points at a stub listener on `:4600` that answers `200 "endpoint was called"` to authorized calls; see
+> [docs/services/ai.md](docs/services/ai.md#implementation-status).
 
 ## Quick start
 
@@ -114,6 +118,7 @@ docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
 Details, including Docker Desktop, are in [docs/services/registry.md](docs/services/registry.md#local-workflow).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
+| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | Stub data plane that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL) |
 
 ## Development
 

@@ -23,7 +23,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Capacity | [capacity.md](capacity.md) | 4 | 14 | 2 / 3 | T1 | T2 with capacity simulation (M2) |
 | Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | T1 | — |
 | Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | T1 | — |
-| AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | T1 endpoint, T0 rest | T1 (M4) |
+| AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
 | Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release, T0 rest | T2 with k3s (M3) |
 | Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 | — |
 | Audit | [audit.md](audit.md) | 2 | 5 | 0 / 0 | T0 | T1 from request journal (M4) |

@@ -63,11 +63,32 @@ func authorize(ctx context.Context, engine *authz.Engine, rules *authz.Rules, me
 		return "cannot evaluate: " + cerr.Error(), cerr
 	}
 	if d.Allowed {
-		return "", nil
+		return checkAlso(ctx, engine, rule, principal.ID, target, req)
 	}
 	reason = "permission " + string(rule.Permission) + " denied on " + target + ": " + d.Reason
 	if rule.Permission.Verb() == authz.VerbGet {
 		return reason, errs.NotFound(target) // do not leak existence
 	}
+	return reason, &errs.Error{Kind: errs.KindPermissionDenied, ResourceID: target, Message: reason}
+}
+
+// checkAlso evaluates the rule's request-dependent extra permission. The
+// caller can already read the target, so a denial is PERMISSION_DENIED.
+func checkAlso(ctx context.Context, engine *authz.Engine, rule authz.Rule, principalID, target string, req any) (reason string, err error) {
+	if rule.Also == nil {
+		return "", nil
+	}
+	perm := rule.Also(req)
+	if perm == "" {
+		return "", nil
+	}
+	d, cerr := engine.Check(ctx, principalID, perm, target)
+	if cerr != nil {
+		return "cannot evaluate: " + cerr.Error(), cerr
+	}
+	if d.Allowed {
+		return "", nil
+	}
+	reason = "permission " + string(perm) + " denied on " + target + ": " + d.Reason
 	return reason, &errs.Error{Kind: errs.KindPermissionDenied, ResourceID: target, Message: reason}
 }

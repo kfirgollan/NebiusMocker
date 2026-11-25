@@ -77,6 +77,8 @@ type Config struct {
 	MysteryBox MysteryBoxConfig
 	// VPC is the seeded VPC address space (NEBIUS_MOCKER_VPC_*).
 	VPC VPCConfig
+	// AI configures the AI endpoints area and its stub data plane.
+	AI AIConfig
 }
 
 // Region is one emulated Nebius region.
@@ -180,6 +182,7 @@ func Default() Config {
 			Region:     "eu-north1",
 			PurgeGrace: 7 * 24 * time.Hour,
 		},
+		AI: defaultAI(),
 	}
 }
 
@@ -230,6 +233,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"MYSTERYBOX_MAX_VERSIONS", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxVersions) }},
 		{"MYSTERYBOX_PURGE_DELAY", func(v string) error { return parseDuration(v, &c.MysteryBox.PurgeDelay) }},
 		{"MYSTERYBOX_KEY", func(v string) error { c.MysteryBox.Key = v; return nil }},
+		{"AI_LISTEN", func(v string) error { c.AI.Listen = v; return nil }},
+		{"AI_PUBLIC_URL", func(v string) error { c.AI.PublicURL = v; return nil }},
+		{"AI_PLATFORMS", func(v string) error { return parseAIPlatforms(v, &c.AI.Platforms) }},
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	parsers = append(parsers, vpcParsers(&c.VPC)...)

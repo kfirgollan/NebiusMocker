@@ -29,6 +29,14 @@ const (
 	VerbDelete = "delete"
 )
 
+// Lifecycle verbs of runnable resources (AI endpoints, and later compute
+// instances). Editors hold them: running a workload is managing it.
+const (
+	VerbStart   = "start"
+	VerbStop    = "stop"
+	VerbRestart = "restart"
+)
+
 // Perm builds a permission from its parts.
 func Perm(service, resources, verb string) Permission {
 	return Permission(service + "." + resources + "." + verb)
@@ -115,7 +123,8 @@ func DefaultCatalog() *Catalog {
 				// Editors use KMS keys and manage their lifecycle (Nebius KMS
 				// docs: crypto operations need the editor role). Viewers can
 				// read keys and public keys but cannot encrypt, decrypt or sign.
-				"kms.*.encrypt", "kms.*.decrypt", "kms.*.sign", "kms.*.rotate", "kms.*.undelete"),
+				"kms.*.encrypt", "kms.*.decrypt", "kms.*.sign", "kms.*.rotate", "kms.*.undelete",
+				"*.*."+VerbStart, "*.*."+VerbStop, "*.*."+VerbRestart),
 			// Editors manage resources, not who may access them.
 			Excludes: []string{"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete"},
 		},

@@ -1,7 +1,7 @@
 # AI Studio — endpoints, jobs, devlabs
 
 > Module: `services/ai` · Image: `nebius-mocker-ai` · `NEBIUS_MOCKER_SERVICES=ai`
-> M1 tier: **T1** endpoint · T0 jobs, devlabs, hardware · Endpoint: `apps.msp.api.nebius.cloud`
+> M1 tier: **T2** endpoint inventory (stub data plane) · T0 jobs, devlabs, hardware · Endpoint: `apps.msp.api.nebius.cloud`
 
 ## Overview
 
@@ -14,11 +14,104 @@ Container-based serverless AI workloads:
 - **Devlabs** (`devlab`): interactive development environments.
 - **HardwareService**: lists the available hardware configurations.
 
+## Implementation status
+
+| Piece | Status |
+|---|---|
+| `nebius.ai.v1.EndpointService`: Create (incl. `dry_run`), Get (view `SECRET`), GetByName, List (paged), Delete, Start, Stop, Restart | ✅ T2 inventory · stub execution |
+| Spec validation: image, ports, auth (`auth_token` ⊕ `auth_token_mysterybox_secret`, exactly one HTTP port), env vars, volumes/S3, injected files, registry credentials, disk minimums, platform/preset or `gpu`/`cpu` selectors | ✅ |
+| Cross-service references (`project`, `vpcsubnet`, `mbsec`, `mbsecver`, `pricingpolicy`) checked through the authz hierarchy; MysteryBox refs pinned through `pkg/peer` `SecretPayloads` | ✅ |
+| Lifecycle state machine as operations, synthetic instance, `status.private_endpoints` / `public_endpoints` | ✅ |
+| Stub data plane on `:4600` (`200` / `401` / `503` / `404`) | ✅ |
+| Authorization rules for every RPC (`ai.endpoints.get/list/create/delete/start/stop/restart`, plus `getSensitiveData` for view `SECRET`); editors hold start/stop/restart, viewers only get/list | ✅ |
+| `nebius_ai_v1_endpoint` resource and data source with the official Terraform provider, incl. `auth_token_mysterybox_secret` backed by a real `nebius_mysterybox_v1_secret` | ✅ e2e: `test/terraform/ai` |
+| `nebius ai endpoint create/get-by-name/get/list/stop/start/delete` + curl (docs quickstart) | ✅ e2e: `test/terraform/ai` |
+| Not yet: `JobService`, `DevlabService`, `HardwareService`, `applications.v1alpha1.VmAppTemplateService`, `nebius ai endpoint logs`, TCP/UDP port URLs, a caller `mysterybox.payload.read` check on referenced secrets at Create | UNIMPLEMENTED |
+
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
+
 ## Emulation design
 
-- Endpoint: T1 CRUD with references (subnet, MysteryBox secret, registry credentials) checked through `peer`, and
-  platform/preset validated against compute's catalog. The lifecycle synthesizes endpoint URLs and fake instances.
-  The provider calls `Create`, `Get`, `GetByName` and `Delete` (no Update), so changes plan as replacements.
+**The inventory and its semantics are real; execution is a stub.** No container, image pull or VM ever happens.
+
+### Resource and validation
+
+- `aiendpoint` lives in a project (`metadata.parent_id`, normally the seeded `project-e00mock000000000default`).
+  Names are unique per project. There is no Update RPC, so every spec or label change plans a **replace** in
+  Terraform. `resource_version` stays `1`; lifecycle changes only touch `status`.
+- The edge validator enforces the proto rules (required fields, ranges, the CEL rules such as
+  `pricing_model_matches_preemptible`, `platform_required`, `hardware_selector_exclusive`). The domain adds the rules
+  the protos only state in comments: `auth_token` and `auth_token_mysterybox_secret` are mutually exclusive, and
+  authentication needs exactly one HTTP port; env var `value` ⊕ `mysterybox_secret`, unique names; volumes need a
+  source and an absolute, unique `container_path`, `s3_config` needs an `s3://` source; injected files need content
+  on create; registry password needs a username; disk ≥ 20 GiB (CPU) / 50 GiB (GPU) when set.
+- **Platforms.** There is no compute `PlatformService` yet, so `platform`/`preset` are validated against a small
+  catalog inside the area (`cpu-d3`, `cpu-e2`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-l40s-a`), overridable with
+  `NEBIUS_MOCKER_AI_PLATFORMS` (JSON, see below). `gpu = ["H100:8"]` / `cpu = ["amd:16"]` selectors resolve to a
+  platform and preset, which reads return. The catalog will be replaced by compute's once it exists.
+- **References** are checked generically, never by importing other areas: an ID must have the right NID prefix;
+  if the owning service is enabled (its kind is registered with the authz engine) the resource must exist
+  (`NotFound` otherwise); if not, a well-formed ID is accepted and logged at debug.
+- **MysteryBox.** When the mysterybox module provides `peer.SecretPayloadsKey`, every secret reference is resolved:
+  a ref with only `secret_id` is pinned to the primary version (`version_id` is filled, as the API documents), the
+  auth secret must contain `AUTH_TOKEN`, and registry secrets `REGISTRY_USERNAME`/`REGISTRY_PASSWORD`.
+  These reads go in-process through `pkg/peer`, not over gRPC, so they are **not** subject to
+  `mysterybox.payload.read`. That is intended: the platform reads the secret on the endpoint's behalf, as Nebius
+  does for the running workload, and the caller never sees the payload. Not yet: `Create` does not check that the
+  caller itself holds `mysterybox.payload.read` on the referenced secret; it only checks that the secret exists.
+- Input-only secrets (registry password, injected file content, inline S3 credentials) are stored but returned only
+  by `Get` with `view = SECRET`. `auth_token` is returned as sent (Terraform keeps it in state as sensitive).
+  `view = SECRET` also needs `ai.endpoints.getSensitiveData` (`resource.aiendpoint.getSensitiveData` upstream);
+  in the default roles only `admin` holds it, so editors and viewers get `PERMISSION_DENIED`.
+
+### Lifecycle
+
+| Verb | Allowed from | While the operation runs | Ends in |
+|---|---|---|---|
+| Create | — | `PROVISIONING` | `RUNNING` |
+| Stop | `RUNNING`, `ERROR` | `STOPPING` | `STOPPED` (instances released, URLs kept) |
+| Start | `STOPPED`, `ERROR` | `STARTING` | `RUNNING` (new instance) |
+| Restart | `RUNNING`, `ERROR` | `STARTING` | `RUNNING` (new instance) |
+| Delete | any settled or transitional state | `DELETING` | removed |
+
+Other verbs return `FAILED_PRECONDITION` (bad state); a second operation while one runs returns the operation-conflict
+error. With `NEBIUS_MOCKER_OP_DELAY` the transitional states are visible for that long. `status.state_details.code`
+is the short state name. `status.instances` holds one **synthetic** instance while running: a `computeinstance-…`
+ID that is not a real compute instance, a deterministic private IP, and a public IP when `public_ip` or SSH keys are
+set.
+
+### Stub data plane (contract)
+
+The module starts an HTTP listener (`NEBIUS_MOCKER_AI_LISTEN`, default `127.0.0.1:4600`; 4580 is S3 and 4590 the
+registry). Routing is **path-based**, because the mock has no wildcard DNS for per-endpoint hosts:
+
+- an endpoint with one HTTP port is served at `http://127.0.0.1:4600/<endpoint-id>`; with several, each at
+  `http://127.0.0.1:4600/<endpoint-id>:<container_port>`. Those URLs are what `status.public_endpoints` and
+  `status.private_endpoints` contain (real Nebius returns managed `https://` URLs; the mock is plain HTTP, so the
+  quickstart's `select(startswith("https://"))` becomes `startswith("http")`). TCP/UDP ports get no URL.
+- Anything after the first path segment is the application path: `POST <url>/v1/chat/completions` works.
+
+| Request | Response |
+|---|---|
+| Unknown endpoint ID or port | `404` |
+| Endpoint not `RUNNING` (provisioning, stopped, …) | `503` |
+| Auth configured, `Authorization: Bearer <token>` missing or wrong | `401` with `WWW-Authenticate: Bearer` |
+| Running, token right (or no auth configured: endpoints without auth are open) | `200` |
+
+The `200` body is `{"message":"endpoint was called","endpoint_id":"aiendpoint-…","port":80,"method":"POST","path":"/v1/chat/completions"}`.
+The token is `spec.auth_token`, or the `AUTH_TOKEN` entry of the pinned MysteryBox secret version, read at call time
+(`503` if that secret cannot be read).
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | Stub data-plane listener |
+| `NEBIUS_MOCKER_AI_PUBLIC_URL` | derived from the listener | Base URL written into endpoint statuses (e.g. behind Docker port mapping) |
+| `NEBIUS_MOCKER_AI_PLATFORMS` | built-in catalog | JSON `[{"name":"cpu-d3","cpu":"amd","presets":[{"name":"4vcpu-16gb","vcpus":4}]},{"name":"gpu-h100-sxm","gpu":"H100","presets":[{"name":"1gpu-16vcpu-200gb","gpus":1,"vcpus":16}]}]` |
+
+### Later
+
 - **M4**: jobs and devlabs at T1, with a job lifecycle that runs to `SUCCEEDED` after the configured duration (or
   `FAILED` via fault injection). Hardware is listed from compute's platform catalog.
 - **Possible T3**: run endpoint and job images as local containers through the Docker socket (CPU-only).

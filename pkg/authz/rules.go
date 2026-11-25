@@ -17,6 +17,10 @@ type Rule struct {
 	// AllowIf, when set, short-circuits to "allowed" (e.g. the creator of an
 	// operation may always poll it, even after its resource is deleted).
 	AllowIf func(ctx context.Context, principalID string, req any) bool
+	// Also, when set, returns an extra permission this particular request
+	// needs on the same target, or "" for none. Example: Get with view SECRET
+	// also needs "<svc>.<resources>.getSensitiveData".
+	Also func(req any) Permission
 }
 
 // Rules maps full gRPC method names ("/pkg.Service/Method") to rules.
