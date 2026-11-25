@@ -137,6 +137,20 @@ type SnapshotRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// DiskLocker locks disks while images are created from them (disk.proto:
+// "Disk is locked for deletion and for read-write operations while image is
+// being created"). Satisfied by *DiskLocks.
+type DiskLocker interface {
+	// LockForImage atomically checks that the disk exists (errs.NotFound), is
+	// in parentID (errs.BadRequest) and is READY (errs.BadState), then adds
+	// imageID to status.lock_state.images. Locking twice with the same image
+	// is a no-op.
+	LockForImage(ctx context.Context, diskID, parentID, imageID string) (*computepb.Disk, error)
+	// UnlockForImage removes imageID from the disk's lock. A missing disk or
+	// entry is not an error.
+	UnlockForImage(ctx context.Context, diskID, imageID string) error
+}
+
 // ImageLookup resolves disk sources from images (satisfied by *ImageService).
 type ImageLookup interface {
 	Get(ctx context.Context, id string) (*computepb.Image, error)
