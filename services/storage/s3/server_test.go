@@ -17,7 +17,6 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -28,6 +27,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/rustfs"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/storage/domain"
@@ -135,14 +135,85 @@ func bucket(id, name string, state storagepb.BucketStatus_State) *storagepb.Buck
 
 func startFront(t *testing.T, up Upstream) *httptest.Server {
 	t.Helper()
-	gate, err := domain.NewS3Gate(bucketsFake{items: []*storagepb.Bucket{
+	return startFrontWith(t, up, &opsFake{},
 		bucket("storagebucket-1", "data", storagepb.BucketStatus_ACTIVE),
-		bucket("storagebucket-2", "deleted", storagepb.BucketStatus_SCHEDULED_FOR_DELETION),
-	}}, keysFake{}, checkerFake{}, authz.ModeEnforce)
+		bucket("storagebucket-2", "deleted", storagepb.BucketStatus_SCHEDULED_FOR_DELETION))
+}
+
+// hierarchyFake places every principal in project-e00test.
+type hierarchyFake struct{}
+
+func (hierarchyFake) Parent(context.Context, string) (string, error) { return "project-e00test", nil }
+
+// opsFake records the bucket operations the front performs.
+type opsFake struct {
+	mu       sync.Mutex
+	created  []string
+	deleted  []string
+	specs    map[string]*storagepb.BucketSpec
+	used     int64
+	sizes    map[string]int64
+	updateFn func(*storagepb.BucketSpec) error
+}
+
+func (o *opsFake) CreateFromS3(_ context.Context, projectID, name string) (*storagepb.Bucket, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.created = append(o.created, projectID+"/"+name)
+	return bucket("storagebucket-new", name, storagepb.BucketStatus_ACTIVE), nil
+}
+
+func (o *opsFake) DeleteFromS3(_ context.Context, id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.deleted = append(o.deleted, id)
+	return nil
+}
+
+func (o *opsFake) UpdateSpecFromS3(_ context.Context, id string, mutate func(*storagepb.BucketSpec)) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.specs == nil {
+		o.specs = map[string]*storagepb.BucketSpec{}
+	}
+	spec := &storagepb.BucketSpec{}
+	mutate(spec)
+	if o.updateFn != nil {
+		if err := o.updateFn(spec); err != nil {
+			return err
+		}
+	}
+	o.specs[id] = spec
+	return nil
+}
+
+func (o *opsFake) CheckCapacity(_ context.Context, b *storagepb.Bucket, incoming int64) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if limit := b.GetSpec().GetMaxSizeBytes(); limit > 0 && o.used+incoming > limit {
+		return &errs.Error{Kind: errs.KindQuotaExceeded, Message: "full"}
+	}
+	return nil
+}
+
+func (o *opsFake) ObjectSize(_ context.Context, bucket, key, _ string) (int64, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if n, ok := o.sizes[bucket+"/"+key]; ok {
+		return n, nil
+	}
+	return 0, objstore.ErrNotFound
+}
+
+func startFrontWith(t *testing.T, up Upstream, ops BucketOps, buckets ...*storagepb.Bucket) *httptest.Server {
+	t.Helper()
+	gate, err := domain.NewS3Gate(domain.GateDeps{
+		Buckets: bucketsFake{items: buckets}, Keys: keysFake{}, Checker: checkerFake{}, Hierarchy: hierarchyFake{}, Mode: authz.ModeEnforce,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewServer(Config{Domain: "s3.test", Region: "eu-north1"}, gate, up, clock.Real{}, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(NewServer(Config{Domain: "s3.test", Region: "eu-north1"}, gate, ops, up, clock.Real{}, slog.New(slog.DiscardHandler)))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -152,6 +223,17 @@ func client(url, keyID, secret string) *awss3.Client {
 		Region: "eu-north1", BaseEndpoint: aws.String(url), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(keyID, secret, ""),
 	})
+}
+
+func regionClient(url, region string) *awss3.Client {
+	return awss3.New(awss3.Options{
+		Region: region, BaseEndpoint: aws.String(url), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider(testKeyID, testSecret, ""),
+	})
+}
+
+func anonymousClient(url string) *awss3.Client {
+	return awss3.New(awss3.Options{Region: "eu-north1", BaseEndpoint: aws.String(url), UsePathStyle: true, Credentials: aws.AnonymousCredentials{}})
 }
 
 func code(err error) string {
@@ -239,10 +321,11 @@ func TestSigV4AndAccessRejections(t *testing.T) {
 		{"unknown bucket", put(good, "nope"), "NoSuchBucket"},
 		{"soft-deleted bucket", put(good, "deleted"), "NoSuchBucket"},
 		{"permission denied", errOf(good.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String("data"), Key: aws.String("k")})), "AccessDenied"},
-		{"bucket management over S3", errOf(good.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("made-by-s3")})), "NotImplemented"},
-		{"versioning over S3", errOf(good.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
-			Bucket: aws.String("data"), VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+		{"AWS bucket policy over S3 (Nebius policies use the Nebius API)", errOf(good.PutBucketPolicy(ctx, &awss3.PutBucketPolicyInput{
+			Bucket: aws.String("data"), Policy: aws.String("{}"),
 		})), "NotImplemented"},
+		{"credential scope for another region", put(regionClient(srv.URL, "us-east-1"), "data"), "AuthorizationHeaderMalformed"},
+		{"anonymous write without a policy", put(anonymousClient(srv.URL), "data"), "AccessDenied"},
 	}
 	for _, tt := range tests {
 		if got := code(tt.err); got != tt.want {
@@ -300,35 +383,61 @@ func TestClassify(t *testing.T) {
 	for _, tt := range []struct {
 		method, target string
 		header         string
-		want           authz.Permission
+		want           domain.S3Action
 		wantErr        bool
 	}{
-		{http.MethodGet, "/", "", domain.PermBucketList, false},
-		{http.MethodGet, "/b?list-type=2", "", domain.PermObjectList, false},
-		{http.MethodGet, "/b", "", domain.PermObjectList, false},
-		{http.MethodGet, "/b?versioning", "", domain.PermBucketGet, false},
-		{http.MethodHead, "/b", "", domain.PermBucketGet, false},
-		{http.MethodPost, "/b?delete", "", domain.PermObjectDelete, false},
-		{http.MethodPut, "/b", "", "", true},
-		{http.MethodDelete, "/b", "", "", true},
-		{http.MethodGet, "/b/k", "", domain.PermObjectGet, false},
-		{http.MethodPut, "/b/k", "", domain.PermObjectWrite, false},
-		{http.MethodPut, "/b/k", "/src/x", domain.PermObjectWrite, false},
-		{http.MethodPost, "/b/k?uploads", "", domain.PermObjectWrite, false},
-		{http.MethodDelete, "/b/k?uploadId=1", "", domain.PermObjectWrite, false},
-		{http.MethodDelete, "/b/k", "", domain.PermObjectDelete, false},
+		{http.MethodGet, "/", "", domain.ActListBuckets, false},
+		{http.MethodGet, "/b?list-type=2&prefix=p/", "", domain.ActListObjects, false},
+		{http.MethodGet, "/b", "", domain.ActListObjects, false},
+		{http.MethodGet, "/b?versioning", "", domain.ActGetBucketVersioning, false},
+		{http.MethodGet, "/b?lifecycle", "", domain.ActGetBucketLifecycle, false},
+		{http.MethodGet, "/b?cors", "", domain.ActGetBucketCors, false},
+		{http.MethodGet, "/b?location", "", domain.ActGetBucketLocation, false},
+		{http.MethodGet, "/b?versions", "", domain.ActListObjectVersions, false},
+		{http.MethodGet, "/b?uploads", "", domain.ActListMultipartUploads, false},
+		{http.MethodGet, "/b?acl", "", domain.ActGetBucketOther, false},
+		{http.MethodHead, "/b", "", domain.ActHeadBucket, false},
+		{http.MethodPost, "/b?delete", "", domain.ActDeleteObjects, false},
+		{http.MethodPut, "/b", "", domain.ActCreateBucket, false},
+		{http.MethodPut, "/b?versioning", "", domain.ActPutBucketVersioning, false},
+		{http.MethodPut, "/b?lifecycle", "", domain.ActPutBucketLifecycle, false},
+		{http.MethodPut, "/b?cors", "", domain.ActPutBucketCors, false},
+		{http.MethodPut, "/b?policy", "", "", true},
+		{http.MethodDelete, "/b", "", domain.ActDeleteBucket, false},
+		{http.MethodDelete, "/b?cors", "", domain.ActDeleteBucketCors, false},
+		{http.MethodDelete, "/b?lifecycle", "", domain.ActDeleteBucketLifecycle, false},
+		{http.MethodDelete, "/b?website", "", "", true},
+		{http.MethodGet, "/b/k", "", domain.ActGetObject, false},
+		{http.MethodGet, "/b/k?tagging", "", domain.ActGetObjectTagging, false},
+		{http.MethodGet, "/b/k?uploadId=1", "", domain.ActListParts, false},
+		{http.MethodHead, "/b/k", "", domain.ActHeadObject, false},
+		{http.MethodPut, "/b/k", "", domain.ActPutObject, false},
+		{http.MethodPut, "/b/k", "/src/x", domain.ActCopyObject, false},
+		{http.MethodPut, "/b/k?partNumber=1&uploadId=1", "", domain.ActUploadPart, false},
+		{http.MethodPut, "/b/k?partNumber=1&uploadId=1", "/src/x", domain.ActUploadPartCopy, false},
+		{http.MethodPut, "/b/k?tagging", "", domain.ActPutObjectTagging, false},
+		{http.MethodPost, "/b/k?uploads", "", domain.ActCreateMultipartUpload, false},
+		{http.MethodPost, "/b/k?uploadId=1", "", domain.ActCompleteMultipartUpload, false},
+		{http.MethodPost, "/b/k?restore", "", "", true},
+		{http.MethodDelete, "/b/k?uploadId=1", "", domain.ActAbortMultipartUpload, false},
+		{http.MethodDelete, "/b/k?tagging", "", domain.ActDeleteObjectTagging, false},
+		{http.MethodDelete, "/b/k", "", domain.ActDeleteObject, false},
 	} {
 		r := httptest.NewRequestWithContext(t.Context(), tt.method, "http://h"+tt.target, http.NoBody)
 		if tt.header != "" {
 			r.Header.Set("X-Amz-Copy-Source", tt.header)
 		}
 		op, err := classify(r, parseTarget(r, ""))
-		if (err != nil) != tt.wantErr || op.perm != tt.want {
-			t.Errorf("classify(%s %s) = %v, %v; want %v (err=%v)", tt.method, tt.target, op.perm, err, tt.want, tt.wantErr)
+		if (err != nil) != tt.wantErr || op.action != tt.want {
+			t.Errorf("classify(%s %s) = %v, %v; want %v (err=%v)", tt.method, tt.target, op.action, err, tt.want, tt.wantErr)
 		}
-		if tt.header != "" && op.copySource != "src" {
-			t.Errorf("copy source = %q, want src", op.copySource)
+		if tt.header != "" && (op.copy == nil || op.copy.Bucket != "src" || op.copy.Key != "x") {
+			t.Errorf("copy source = %+v, want src/x", op.copy)
 		}
+	}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://h/b?list-type=2&prefix=p/", http.NoBody)
+	if op, _ := classify(r, parseTarget(r, "")); op.target != "p/" {
+		t.Errorf("listing target = %q, want the prefix p/", op.target)
 	}
 }
 

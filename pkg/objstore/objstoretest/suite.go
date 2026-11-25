@@ -35,6 +35,9 @@ func Run(t *testing.T, store objstore.Store, bucket string) {
 	}
 
 	runObjects(t, store, bucket)
+	if inv, ok := store.(objstore.Inventory); ok {
+		runInventory(t, store, inv, bucket)
+	}
 	runDeleteBucket(t, store, bucket)
 }
 

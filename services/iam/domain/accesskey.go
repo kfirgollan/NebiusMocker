@@ -85,7 +85,7 @@ func GenerateKeyMaterial() (awsAccessKeyID, secret string, err error) {
 	for _, c := range b[:17] {
 		id.WriteByte(idAlphabet[int(c)%len(idAlphabet)])
 	}
-	return id.String(), base64.RawURLEncoding.EncodeToString(b[17:])[:40], nil
+	return id.String(), base64.RawStdEncoding.EncodeToString(b[17:])[:40], nil
 }
 
 // CreateAccessKeyCmd is the input of Create.

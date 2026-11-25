@@ -88,9 +88,12 @@ docker run -d --name rustfs -p 127.0.0.1:9000:9000 rustfs/rustfs:1.0.6
 NEBIUS_MOCKER_OBJSTORE=rustfs make run
 ```
 
-Create a bucket (`nebius_storage_v1_bucket`), a service account with a permit, and a `nebius_iam_v2_access_key`, then
-use any S3 client with that key, region `eu-north1` and endpoint `http://127.0.0.1:4580` (path style), for example
-`aws --endpoint-url http://127.0.0.1:4580 s3 ls s3://my-bucket`. Terraform objects use the official `hashicorp/aws`
+Create a service account with a permit (or in the `editors` group) and a `nebius_iam_v2_access_key`, then use any S3
+client with that key, region `eu-north1` and endpoint `http://127.0.0.1:4580` (path style), as the Nebius quick start
+does: `aws configure set endpoint_url http://127.0.0.1:4580`, `aws s3 mb s3://my-bucket`, `aws s3 cp`, `aws s3 ls`.
+Buckets can also be created with `nebius storage bucket create` or `nebius_storage_v1_bucket`. CORS, bucket policies
+(incl. anonymous reads), lifecycle rules, size limits and storage classes take effect; see the storage doc for what is
+rejected. Terraform objects use the official `hashicorp/aws`
 provider; see [docs/services/storage.md](docs/services/storage.md#terraform).
 
 Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/architecture/11-configuration.md)):
@@ -135,7 +138,7 @@ make check   # lint (layering rules included) + unit/contract/architecture tests
 make e2e     # real terraform + official nebius provider against the mock
 make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
 make e2e-registry  # Harbor + nebius CLI + docker push/pull (needs Docker; Harbor is started and removed)
-make e2e-storage  # Object Storage with RustFS in Docker: Terraform (nebius + aws providers), gosdk + AWS SDK
+make e2e-storage  # Object Storage with RustFS in Docker: Terraform (nebius + aws providers), gosdk + AWS SDK, nebius + aws CLIs
 ```
 
 Read [docs/architecture](docs/architecture/README.md) first. The Go rules for this repo live in `.claude/skills/`

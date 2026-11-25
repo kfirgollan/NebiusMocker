@@ -222,7 +222,7 @@ func TestGenerateKeyMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^NMK[A-Z2-7]{17}$`).MatchString(id) || len(secret) != 40 {
+	if !regexp.MustCompile(`^NMK[A-Z2-7]{17}$`).MatchString(id) || !regexp.MustCompile(`^[A-Za-z0-9+/]{40}$`).MatchString(secret) {
 		t.Fatalf("GenerateKeyMaterial = %q, %q (len %d)", id, secret, len(secret))
 	}
 	id2, secret2, _ := domain.GenerateKeyMaterial()

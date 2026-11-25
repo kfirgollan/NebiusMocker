@@ -87,6 +87,8 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))
 	iampb.RegisterProfileServiceServer(reg, api.NewProfileHandler(deps.Config.TenantID, deps.Config.ProjectID))
 	api.RegisterProfileAuthzRule(deps.Rules, deps.Config.TenantID)
+	iampb.RegisterProjectServiceServer(reg, api.NewProjectHandler(r.projects)) //nolint:staticcheck // SA1019: "nebius iam project get" (CLI 0.12) still calls the v1 ProjectService
+	api.RegisterProjectAuthzRules(deps.Rules)
 	return nil
 }
 
@@ -107,6 +109,9 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 		return fmt.Errorf("iam: %w", err)
 	}
 	if err := peer.Provide[peer.AccessKeys](deps.Peers, peer.AccessKeysKey, keys); err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	if err := peer.Provide[peer.GroupMembers](deps.Peers, peer.GroupMembersKey, domain.NewGroupMembers(r.memberships, deps.Clock)); err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
 	api.RegisterCredentialRules(deps.Rules, func(ctx context.Context, awsID string) (string, error) {

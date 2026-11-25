@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -41,6 +42,7 @@ type Settings struct {
 type BucketService struct {
 	buckets BucketRepository
 	backend ObjectBackend
+	content ContentBackend
 	parents Hierarchy
 	ops     Operations
 	ids     IDGenerator
@@ -50,8 +52,10 @@ type BucketService struct {
 
 // BucketDeps are the dependencies of a BucketService. All are required.
 type BucketDeps struct {
-	Buckets   BucketRepository
-	Backend   ObjectBackend
+	Buckets BucketRepository
+	Backend ObjectBackend
+	// Content is the same object store, for counters and lifecycle rules.
+	Content   ContentBackend
 	Hierarchy Hierarchy
 	Ops       Operations
 	IDs       IDGenerator
@@ -61,14 +65,14 @@ type BucketDeps struct {
 
 // NewBucketService wires a BucketService.
 func NewBucketService(d BucketDeps) (*BucketService, error) {
-	if d.Buckets == nil || d.Backend == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.Buckets == nil || d.Backend == nil || d.Content == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("storage: bucket service dependencies must not be nil")
 	}
 	if d.Settings.Region == "" || d.Settings.Domain == "" || d.Settings.PurgeGrace <= 0 {
 		return nil, errors.New("storage: region, domain and a positive purge grace are required")
 	}
 	return &BucketService{
-		buckets: d.Buckets, backend: d.Backend, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, set: d.Settings,
+		buckets: d.Buckets, backend: d.Backend, content: d.Content, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, set: d.Settings,
 	}, nil
 }
 
@@ -98,7 +102,7 @@ type DeleteBucketCmd struct {
 
 // Get returns a bucket by ID (including soft-deleted ones).
 func (s *BucketService) Get(ctx context.Context, id string) (*storagepb.Bucket, error) {
-	return s.buckets.Get(ctx, id)
+	return s.withCounters(ctx)(s.buckets.Get(ctx, id))
 }
 
 // BackendBucket implements peer.BucketResolver: the object-store bucket that
@@ -113,7 +117,7 @@ func (s *BucketService) BackendBucket(ctx context.Context, id string) (string, e
 
 // GetByName returns a bucket by project and name.
 func (s *BucketService) GetByName(ctx context.Context, parentID, name string) (*storagepb.Bucket, error) {
-	return s.buckets.GetByName(ctx, parentID, name)
+	return s.withCounters(ctx)(s.buckets.GetByName(ctx, parentID, name))
 }
 
 // List returns one page of a project's buckets in creation order.
@@ -127,7 +131,16 @@ func (s *BucketService) List(ctx context.Context, parentID string, pageSize int6
 	if size == 0 {
 		size = defaultPageSize
 	}
-	return s.buckets.List(ctx, parentID, size, pageToken)
+	page, err := s.buckets.List(ctx, parentID, size, pageToken)
+	if err != nil {
+		return BucketPage{}, err
+	}
+	for i, b := range page.Items {
+		if page.Items[i], err = s.withCounters(ctx)(b, nil); err != nil {
+			return BucketPage{}, err
+		}
+	}
+	return page, nil
 }
 
 // ListWithFilter is List restricted by bucket type and filesystem. The
@@ -287,6 +300,7 @@ func (s *BucketService) patch(stored *storagepb.Bucket, cmd UpdateBucketCmd) (*s
 		return nil, err
 	}
 	updated.Status = proto.CloneOf(stored.GetStatus())
+	updated.Status.AnonymousAccessEnabled = AnonymousAccess(updated.GetSpec().GetBucketPolicy())
 	return updated, nil
 }
 
@@ -471,11 +485,12 @@ func (s *BucketService) newBucket(ctx context.Context, cmd CreateBucketCmd) (*st
 		},
 		Spec: spec,
 		Status: &storagepb.BucketStatus{
-			State:           storagepb.BucketStatus_CREATING,
-			SuspensionState: storagepb.BucketStatus_NOT_SUSPENDED,
-			DomainName:      md.GetName() + "." + s.set.Domain,
-			Region:          s.set.Region,
-			BucketType:      storagepb.BucketStatus_REGULAR,
+			State:                  storagepb.BucketStatus_CREATING,
+			SuspensionState:        storagepb.BucketStatus_NOT_SUSPENDED,
+			DomainName:             md.GetName() + "." + s.set.Domain,
+			Region:                 s.set.Region,
+			BucketType:             storagepb.BucketStatus_REGULAR,
+			AnonymousAccessEnabled: AnonymousAccess(spec.GetBucketPolicy()),
 		},
 	}, nil
 }
@@ -485,7 +500,7 @@ func (s *BucketService) checkParent(ctx context.Context, parentID string) error 
 	if parentID == "" {
 		return errs.BadRequest(errs.Violation{Field: "metadata.parent_id", Message: "required"})
 	}
-	if kind, _, _ := cutKind(parentID); kind != KindProject {
+	if kindOf(parentID) != KindProject {
 		return errs.BadRequest(errs.Violation{Field: "metadata.parent_id", Message: "must be a project ID"})
 	}
 	if _, err := s.parents.Parent(ctx, parentID); err != nil {
@@ -494,13 +509,13 @@ func (s *BucketService) checkParent(ctx context.Context, parentID string) error 
 	return nil
 }
 
-func cutKind(id string) (kind, rest string, ok bool) {
-	for i := range len(id) {
-		if id[i] == '-' {
-			return id[:i], id[i+1:], true
-		}
+// kindOf returns the NID type prefix of id ("" when it has none).
+func kindOf(id string) string {
+	kind, _, ok := strings.Cut(id, "-")
+	if !ok {
+		return ""
 	}
-	return "", id, false
+	return kind
 }
 
 // checkVersioningTransition allows disabled → enabled/suspended and
@@ -518,14 +533,51 @@ func checkVersioningTransition(from, to storagepb.VersioningPolicy) error {
 	return nil
 }
 
+// validateSpec checks every spec setting. Settings the mocker cannot emulate
+// are rejected by name rather than stored without effect.
 func validateSpec(spec *storagepb.BucketSpec) error {
 	if spec.GetMaxSizeBytes() < 0 {
 		return errs.BadRequest(errs.Violation{Field: "spec.max_size_bytes", Message: "must not be negative"})
 	}
-	if spec.GetDefaultStorageClass() == storagepb.StorageClass_FILESYSTEM {
-		return errs.BadRequest(errs.Violation{Field: "spec.default_storage_class", Message: "FILESYSTEM is only for filesystem buckets"})
+	if err := checkStorageClass("spec.default_storage_class", spec.GetDefaultStorageClass()); err != nil {
+		return err
+	}
+	if l := spec.GetObjectAuditLogging(); l != storagepb.BucketSpec_OBJECT_AUDIT_LOGGING_UNSPECIFIED && l != storagepb.BucketSpec_NONE {
+		return errs.BadRequest(errs.Violation{Field: "spec.object_audit_logging", Message: "not supported by NebiusMocker: S3 object requests are not audit-logged; use NONE"})
+	}
+	if len(spec.GetLastAccess().GetConditions()) > 0 {
+		return errs.BadRequest(errs.Violation{Field: "spec.last_access", Message: "not supported by NebiusMocker: last-access tracking is not emulated"})
+	}
+	for _, check := range []func() error{
+		func() error { return ValidateLifecycle(spec.GetLifecycleConfiguration()) },
+		func() error { return ValidateCORS(spec.GetCors()) },
+		func() error { return ValidatePolicy(spec.GetBucketPolicy()) },
+	} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// withCounters fills status.counters of a usable bucket from the object
+// store's actual content.
+func (s *BucketService) withCounters(ctx context.Context) func(*storagepb.Bucket, error) (*storagepb.Bucket, error) {
+	return func(b *storagepb.Bucket, err error) (*storagepb.Bucket, error) {
+		if err != nil || !usable(b) {
+			return b, err
+		}
+		cs, err := ComputeCounters(ctx, s.content, b.GetMetadata().GetName())
+		if errors.Is(err, objstore.ErrBucketNotFound) {
+			return b, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("bucket %s counters: %w", b.GetMetadata().GetName(), err)
+		}
+		b = proto.CloneOf(b)
+		b.Status.Counters = cs
+		return b, nil
+	}
 }
 
 func toBackendVersioning(p storagepb.VersioningPolicy) objstore.Versioning {

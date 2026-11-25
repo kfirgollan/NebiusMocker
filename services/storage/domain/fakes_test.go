@@ -191,7 +191,12 @@ func (inlineOps) Submit(ctx context.Context, s operations.Spec) (*operations.Ope
 	if s.Work != nil {
 		op.Err = s.Work(ctx)
 	}
+	op.FinishedAt = t0
 	return op, nil
+}
+
+func (inlineOps) Get(context.Context, string) (*operations.Operation, error) {
+	return nil, errors.New("inlineOps: operations finish in Submit")
 }
 
 type seqIDs struct {

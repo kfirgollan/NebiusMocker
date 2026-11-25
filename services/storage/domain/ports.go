@@ -56,6 +56,8 @@ type ObjectBackend interface {
 // Operations starts long-running operations (satisfied by *operations.Engine).
 type Operations interface {
 	Submit(ctx context.Context, spec operations.Spec) (*operations.Operation, error)
+	// Get returns an operation (synchronous S3 calls wait on it).
+	Get(ctx context.Context, id string) (*operations.Operation, error)
 }
 
 // IDGenerator creates NIDs (satisfied by pkg/nid generators).
@@ -77,4 +79,18 @@ type AccessChecker interface {
 // KeyResolver authenticates S3 access keys (the iam module's peer.AccessKeys).
 type KeyResolver interface {
 	ResolveAccessKey(ctx context.Context, accessKeyID string) (peer.AccessKey, error)
+}
+
+// ContentBackend is the object-store introspection behind bucket counters,
+// size limits and lifecycle rules (objstore.Inventory plus deletion of the
+// current object version, which leaves a delete marker in versioned buckets).
+type ContentBackend interface {
+	objstore.Inventory
+	Delete(ctx context.Context, bucket, key string) error
+}
+
+// GroupMembers answers group membership for bucket policies (the iam
+// module's peer.GroupMembers).
+type GroupMembers interface {
+	IsMember(ctx context.Context, principalID, groupID string) (bool, error)
 }

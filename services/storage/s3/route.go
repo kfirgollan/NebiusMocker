@@ -3,9 +3,9 @@ package s3
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
-	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/services/storage/domain"
 )
 
@@ -30,99 +30,190 @@ func parseTarget(r *http.Request, domainSuffix string) target {
 	return target{Bucket: bucket, Key: key}
 }
 
-// action is what a request does, as far as authorization is concerned.
-type action int
-
-const (
-	actionForward     action = iota // relay to the backend
-	actionListBuckets               // answered by the mocker from Nebius metadata
-	actionGetLocation               // answered by the mocker (Nebius region)
-)
-
 // operation is a classified S3 request.
 type operation struct {
-	action action
-	perm   authz.Permission
-	// copySource is the source bucket of CopyObject / UploadPartCopy.
-	copySource string
+	action domain.S3Action
+	// target is the key (object actions) or the listing prefix.
+	target string
+	// copy is the source of CopyObject / UploadPartCopy.
+	copy *copySource
 }
 
-// bucketSubresources are bucket-level read APIs relayed as storage.buckets.get.
-var listParams = []string{"list-type", "prefix", "delimiter", "marker", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner", "versions", "uploads"}
+// copySource is an x-amz-copy-source.
+type copySource struct {
+	Bucket, Key, VersionID string
+	// Length is the x-amz-copy-source-range length, or -1 for the whole object.
+	Length int64
+}
 
-// classify maps an S3 request to the permission it needs. Bucket management
-// over S3 (CreateBucket, DeleteBucket, PutBucket*) is refused: buckets are
-// Nebius resources, managed with nebius.storage.v1.BucketService.
+// otherBucketReads are bucket sub-resources relayed to the backend as reads.
+var otherBucketReads = []string{
+	"acl", "policy", "policyStatus", "tagging", "encryption", "website", "logging", "notification", "replication",
+	"requestPayment", "ownershipControls", "publicAccessBlock", "object-lock", "accelerate", "analytics",
+	"inventory", "metrics", "intelligent-tiering",
+}
+
+const bucketConfigOverS3 = "this bucket setting is managed with the Nebius API (nebius.storage.v1.BucketService)"
+
+// classify maps an S3 request to its action.
 func classify(r *http.Request, t target) (operation, error) {
 	q := r.URL.Query()
 	switch {
 	case t.Bucket == "":
 		if r.Method == http.MethodGet {
-			return operation{action: actionListBuckets, perm: domain.PermBucketList}, nil
+			return operation{action: domain.ActListBuckets}, nil
 		}
 		return operation{}, notImplemented("unsupported service-level operation")
 	case t.Key == "":
 		return classifyBucket(r.Method, q)
 	default:
-		return classifyObject(r, q)
+		return classifyObject(r, t.Key, q)
 	}
 }
 
 func classifyBucket(method string, q url.Values) (operation, error) {
+	var act domain.S3Action
 	switch method {
 	case http.MethodGet:
-		if q.Has("location") {
-			return operation{action: actionGetLocation, perm: domain.PermBucketGet}, nil
-		}
-		if len(q) == 0 || hasAny(q, listParams) {
-			return operation{perm: domain.PermObjectList}, nil
-		}
-		return operation{perm: domain.PermBucketGet}, nil // versioning, lifecycle, cors, policy, acl, …
+		act = bucketGet(q)
 	case http.MethodHead:
-		return operation{perm: domain.PermBucketGet}, nil
+		act = domain.ActHeadBucket
+	case http.MethodPut:
+		act = pick(q, map[string]domain.S3Action{"versioning": domain.ActPutBucketVersioning, "lifecycle": domain.ActPutBucketLifecycle, "cors": domain.ActPutBucketCors}, domain.ActCreateBucket)
+	case http.MethodDelete:
+		act = pick(q, map[string]domain.S3Action{"lifecycle": domain.ActDeleteBucketLifecycle, "cors": domain.ActDeleteBucketCors}, domain.ActDeleteBucket)
 	case http.MethodPost:
 		if q.Has("delete") {
-			return operation{perm: domain.PermObjectDelete}, nil
+			act = domain.ActDeleteObjects
 		}
 	}
-	return operation{}, notImplemented("bucket configuration is managed with the Nebius API (nebius.storage.v1.BucketService), not over S3")
-}
-
-func classifyObject(r *http.Request, q url.Values) (operation, error) {
-	switch r.Method {
-	case http.MethodGet, http.MethodHead:
-		return operation{perm: domain.PermObjectGet}, nil
-	case http.MethodPut:
-		op := operation{perm: domain.PermObjectWrite}
-		if src := r.Header.Get("X-Amz-Copy-Source"); src != "" {
-			op.copySource = copySourceBucket(src)
-		}
-		return op, nil
-	case http.MethodPost:
-		return operation{perm: domain.PermObjectWrite}, nil // multipart create/complete, restore
-	case http.MethodDelete:
-		if q.Has("uploadId") {
-			return operation{perm: domain.PermObjectWrite}, nil // abort multipart upload
-		}
-		return operation{perm: domain.PermObjectDelete}, nil
+	if act == "" || (act == domain.ActCreateBucket || act == domain.ActDeleteBucket) && hasSubresource(q) {
+		return operation{}, notImplemented(bucketConfigOverS3)
 	}
-	return operation{}, notImplemented("unsupported object operation " + r.Method)
+	return operation{action: act, target: q.Get("prefix")}, nil
 }
 
-// copySourceBucket extracts the bucket of "[/]bucket/key[?versionId=…]".
-func copySourceBucket(src string) string {
-	if u, err := url.PathUnescape(src); err == nil {
-		src = u
+func bucketGet(q url.Values) domain.S3Action {
+	switch {
+	case q.Has("location"):
+		return domain.ActGetBucketLocation
+	case q.Has("versioning"):
+		return domain.ActGetBucketVersioning
+	case q.Has("lifecycle"):
+		return domain.ActGetBucketLifecycle
+	case q.Has("cors"):
+		return domain.ActGetBucketCors
+	case q.Has("versions"):
+		return domain.ActListObjectVersions
+	case q.Has("uploads"):
+		return domain.ActListMultipartUploads
 	}
-	b, _, _ := strings.Cut(strings.TrimPrefix(src, "/"), "/")
-	return b
+	for _, k := range otherBucketReads {
+		if q.Has(k) {
+			return domain.ActGetBucketOther
+		}
+	}
+	return domain.ActListObjects
 }
 
-func hasAny(q url.Values, keys []string) bool {
-	for _, k := range keys {
+// pick returns the action of the first sub-resource present, else def.
+func pick(q url.Values, subs map[string]domain.S3Action, def domain.S3Action) domain.S3Action {
+	for k, a := range subs {
+		if q.Has(k) {
+			return a
+		}
+	}
+	return def
+}
+
+// hasSubresource reports a bucket sub-resource the front does not serve.
+func hasSubresource(q url.Values) bool {
+	for _, k := range otherBucketReads {
 		if q.Has(k) {
 			return true
 		}
 	}
 	return false
+}
+
+func classifyObject(r *http.Request, key string, q url.Values) (operation, error) {
+	op := operation{target: key}
+	switch r.Method {
+	case http.MethodGet:
+		op.action = domain.ActGetObject
+		if q.Has("tagging") {
+			op.action = domain.ActGetObjectTagging
+		} else if q.Has("uploadId") {
+			op.action = domain.ActListParts
+		}
+	case http.MethodHead:
+		op.action = domain.ActHeadObject
+	case http.MethodPut:
+		src, err := parseCopySource(r.Header.Get("X-Amz-Copy-Source"), r.Header.Get("X-Amz-Copy-Source-Range"))
+		if err != nil {
+			return operation{}, err
+		}
+		op.copy = src
+		switch {
+		case q.Has("tagging"):
+			op.action = domain.ActPutObjectTagging
+		case q.Has("uploadId") && src != nil:
+			op.action = domain.ActUploadPartCopy
+		case q.Has("uploadId"):
+			op.action = domain.ActUploadPart
+		case src != nil:
+			op.action = domain.ActCopyObject
+		default:
+			op.action = domain.ActPutObject
+		}
+	case http.MethodPost:
+		switch {
+		case q.Has("uploads"):
+			op.action = domain.ActCreateMultipartUpload
+		case q.Has("uploadId"):
+			op.action = domain.ActCompleteMultipartUpload
+		default:
+			return operation{}, notImplemented("unsupported object operation POST (restore and select are not supported)")
+		}
+	case http.MethodDelete:
+		op.action = domain.ActDeleteObject
+		if q.Has("tagging") {
+			op.action = domain.ActDeleteObjectTagging
+		} else if q.Has("uploadId") {
+			op.action = domain.ActAbortMultipartUpload
+		}
+	default:
+		return operation{}, notImplemented("unsupported object operation " + r.Method)
+	}
+	return op, nil
+}
+
+// parseCopySource parses "[/]bucket/key[?versionId=…]" and an optional
+// "bytes=first-last" range. An empty header is no copy.
+func parseCopySource(src, rng string) (*copySource, error) {
+	if src == "" {
+		return nil, nil //nolint:nilnil // no copy source is not an error
+	}
+	path, query, _ := strings.Cut(src, "?")
+	if u, err := url.PathUnescape(path); err == nil {
+		path = u
+	}
+	bucket, key, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if !ok || bucket == "" || key == "" {
+		return nil, invalidArgument("x-amz-copy-source must be <bucket>/<key>")
+	}
+	cs := &copySource{Bucket: bucket, Key: key, Length: -1}
+	if v, err := url.ParseQuery(query); err == nil {
+		cs.VersionID = v.Get("versionId")
+	}
+	if rng != "" {
+		first, last, ok := strings.Cut(strings.TrimPrefix(rng, "bytes="), "-")
+		a, errA := strconv.ParseInt(first, 10, 64)
+		b, errB := strconv.ParseInt(last, 10, 64)
+		if !ok || errA != nil || errB != nil || a < 0 || b < a {
+			return nil, invalidArgument("invalid x-amz-copy-source-range " + rng)
+		}
+		cs.Length = b - a + 1
+	}
+	return cs, nil
 }

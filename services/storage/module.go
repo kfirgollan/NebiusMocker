@@ -27,7 +27,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/storage/s3"
 )
 
-// sweepInterval is how often expired soft-deleted buckets are purged.
+// sweepInterval is how often expired soft-deleted buckets are purged and
+// lifecycle rules are applied (on the injected clock).
 const sweepInterval = time.Minute
 
 // s3Off disables the S3 front (NEBIUS_MOCKER_STORAGE_S3_LISTEN=off).
@@ -73,8 +74,12 @@ func (*Module) Name() string { return "storage" }
 func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	cfg := deps.Config.Storage
 	buckets := dal.NewBucketRepo(deps.Store)
+	content, ok := deps.ObjStore.(domain.ContentBackend)
+	if !ok {
+		return fmt.Errorf("storage: the object store %T does not support content inventory (objstore.Inventory)", deps.ObjStore)
+	}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
-		Buckets: buckets, Backend: deps.ObjStore, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Buckets: buckets, Backend: deps.ObjStore, Content: content, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		Settings: domain.Settings{Region: cfg.Region, Domain: cfg.S3Domain, PurgeGrace: cfg.PurgeGrace},
 	})
 	if err != nil {
@@ -100,11 +105,19 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if listen == s3Off {
 		return nil
 	}
-	gate, err := domain.NewS3Gate(buckets, peerAccessKeys{deps.Peers}, deps.Authz, deps.Config.Authz)
+	gate, err := domain.NewS3Gate(domain.GateDeps{
+		Buckets: buckets, Keys: peerAccessKeys{deps.Peers}, Checker: deps.Authz, Hierarchy: deps.Authz, Mode: deps.Config.Authz,
+		Members: func() domain.GroupMembers {
+			if m, ok := peer.Lookup(deps.Peers, peer.GroupMembersKey); ok {
+				return m
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
-	m.s3 = s3.NewServer(s3.Config{Listen: listen, Domain: cfg.S3Domain, Region: cfg.Region}, gate, upstreamFor(deps), deps.Clock, deps.Log)
+	m.s3 = s3.NewServer(s3.Config{Listen: listen, Domain: cfg.S3Domain, Region: cfg.Region}, gate, svc, upstreamFor(deps), deps.Clock, deps.Log)
 	return nil
 }
 
@@ -167,7 +180,8 @@ func (m *Module) S3Addr() string {
 	return m.s3.Addr().String()
 }
 
-// sweep purges expired soft-deleted buckets until ctx ends.
+// sweep purges expired soft-deleted buckets and applies lifecycle rules
+// until ctx ends.
 func (m *Module) sweep(ctx context.Context) {
 	for {
 		select {
@@ -179,6 +193,13 @@ func (m *Module) sweep(ctx context.Context) {
 			m.log.WarnContext(ctx, "purge expired buckets", "purged", n, "error", err)
 		} else if n > 0 {
 			m.log.InfoContext(ctx, "purged expired buckets", "purged", n)
+		}
+		r, err := m.buckets.ApplyLifecycles(ctx)
+		if err != nil {
+			m.log.WarnContext(ctx, "apply lifecycle rules", "result", r, "error", err)
+		} else if r != (domain.LifecycleResult{}) {
+			m.log.InfoContext(ctx, "applied lifecycle rules", "expired", r.Expired, "noncurrent_expired", r.NoncurrentExpired,
+				"markers_removed", r.MarkersRemoved, "uploads_aborted", r.UploadsAborted)
 		}
 	}
 }

@@ -1,14 +1,20 @@
 // Package s3 is the S3 data-plane front of Object Storage (transport).
 //
 // It authenticates every request with a Nebius access key (SigV4 against
-// iam.v2 AccessKey secrets), authorizes it against Nebius buckets and IAM
-// permits (domain.S3Gate), and relays it to the object store (RustFS)
-// re-signed with the store's own credentials. Handlers make no decisions of
-// their own beyond mapping requests to permissions.
+// iam.v2 AccessKey secrets, credential scope in the bucket region) or treats
+// it as anonymous, authorizes it against Nebius buckets, IAM permits and
+// bucket policies (domain.S3Gate), and applies the bucket's Nebius settings:
+// CORS (preflight and response headers), max_size_bytes, default/forced
+// storage classes. Object traffic is relayed to the object store (RustFS)
+// re-signed with the store's own credentials; bucket management and bucket
+// configuration (versioning, lifecycle, CORS) are answered from and written
+// to the Nebius bucket records.
 package s3
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -16,7 +22,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +32,9 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/rustfs"
+	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 	"github.com/kfirgollan/NebiusMocker/pkg/sigv4"
 	"github.com/kfirgollan/NebiusMocker/services/storage/domain"
 )
@@ -44,13 +54,24 @@ func (NoDataPlane) Forward(w http.ResponseWriter, _ rustfs.ForwardRequest) {
 	writeXML(w, e.status, e)
 }
 
+// BucketOps are the bucket operations the front performs (satisfied by
+// *domain.BucketService).
+type BucketOps interface {
+	CreateFromS3(ctx context.Context, projectID, name string) (*storagepb.Bucket, error)
+	DeleteFromS3(ctx context.Context, id string) error
+	UpdateSpecFromS3(ctx context.Context, id string, mutate func(*storagepb.BucketSpec)) error
+	CheckCapacity(ctx context.Context, b *storagepb.Bucket, incoming int64) error
+	ObjectSize(ctx context.Context, bucket, key, versionID string) (int64, error)
+}
+
 // Config configures a Server.
 type Config struct {
 	// Listen is the address, e.g. ":4580" or "127.0.0.1:0".
 	Listen string
 	// Domain is the virtual-hosted-style suffix ("<bucket>.<Domain>").
 	Domain string
-	// Region is returned by GetBucketLocation.
+	// Region is the buckets' region: requests must be signed for it, and
+	// GetBucketLocation returns it.
 	Region string
 }
 
@@ -58,6 +79,7 @@ type Config struct {
 type Server struct {
 	cfg      Config
 	gate     *domain.S3Gate
+	buckets  BucketOps
 	upstream Upstream
 	clk      clock.Clock
 	log      *slog.Logger
@@ -69,8 +91,8 @@ type Server struct {
 }
 
 // NewServer returns a server; Start begins listening.
-func NewServer(cfg Config, gate *domain.S3Gate, upstream Upstream, clk clock.Clock, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, gate: gate, upstream: upstream, clk: clk, log: log}
+func NewServer(cfg Config, gate *domain.S3Gate, buckets BucketOps, upstream Upstream, clk clock.Clock, log *slog.Logger) *Server {
+	return &Server{cfg: cfg, gate: gate, buckets: buckets, upstream: upstream, clk: clk, log: log}
 }
 
 // Start listens on cfg.Listen and serves until Stop.
@@ -112,24 +134,37 @@ func (s *Server) Stop(ctx context.Context) error {
 	return err
 }
 
-// ServeHTTP authenticates, authorizes and relays one S3 request.
+// ServeHTTP authenticates, authorizes and serves one S3 request.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	t := parseTarget(r, s.cfg.Domain)
-	auth, principal, body, err := s.authenticate(r)
-	if err == nil {
-		err = s.serve(w, r, t, auth, principal, body)
+	if r.Method == http.MethodOptions {
+		s.preflight(w, r, t)
+		return
 	}
-	if err != nil {
-		e := toS3Error(err)
-		e.Resource = r.URL.Path
-		if e.status >= http.StatusInternalServerError && e.status != http.StatusNotImplemented {
-			s.log.ErrorContext(ctx, "s3 request failed", "method", r.Method, "path", r.URL.Path, "error", err)
-		} else {
-			s.log.DebugContext(ctx, "s3 request rejected", "method", r.Method, "path", r.URL.Path, "code", e.Code, "error", err)
+	rw := &responseWriter{ResponseWriter: w}
+	defer rw.finish()
+	if origin := r.Header.Get("Origin"); origin != "" && t.Bucket != "" {
+		rw.vary = true
+		if b, err := s.gate.Bucket(r.Context(), t.Bucket); err == nil {
+			if m, ok := domain.MatchCORS(b.GetSpec().GetCors(), origin, r.Method, nil); ok {
+				rw.cors = &m
+			}
 		}
-		writeXML(w, e.status, e)
 	}
+	if err := s.handle(rw, r, t); err != nil {
+		s.fail(rw, r, err)
+	}
+}
+
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	e := toS3Error(err)
+	e.Resource = r.URL.Path
+	if e.status >= http.StatusInternalServerError && e.status != http.StatusNotImplemented {
+		s.log.ErrorContext(r.Context(), "s3 request failed", "method", r.Method, "path", r.URL.Path, "error", err)
+	} else {
+		s.log.DebugContext(r.Context(), "s3 request rejected", "method", r.Method, "path", r.URL.Path, "code", e.Code, "error", err)
+	}
+	writeXML(w, e.status, e)
 }
 
 // body is the request payload as it will be forwarded.
@@ -140,78 +175,95 @@ type body struct {
 }
 
 // authenticate verifies the SigV4 signature with the access key's secret and
-// returns the principal and the (decoded) payload.
-func (s *Server) authenticate(r *http.Request) (sigv4.Auth, string, body, error) {
+// returns the principal and the (decoded) payload. An unsigned request is
+// anonymous: principal "".
+func (s *Server) authenticate(r *http.Request) (string, body, error) {
 	a, err := sigv4.Parse(r)
+	if errors.Is(err, sigv4.ErrMissingAuth) {
+		return "", body{r: r.Body, length: max(r.ContentLength, 0), hash: sigv4.UnsignedPayload}, nil
+	}
 	if err != nil {
-		return a, "", body{}, err
+		return "", body{}, err
+	}
+	if err := sigv4.CheckRegion(a, s.cfg.Region); err != nil {
+		return "", body{}, err
 	}
 	key, err := s.gate.ResolveKey(r.Context(), a.AccessKeyID)
 	if err != nil {
-		return a, "", body{}, err
+		return "", body{}, err
 	}
 	if err := sigv4.Verify(r, a, key.Secret, s.clk.Now()); err != nil {
-		return a, "", body{}, err
+		return "", body{}, err
 	}
-	b := body{r: r.Body, length: r.ContentLength, hash: a.PayloadHash}
+	b := body{r: r.Body, length: max(r.ContentLength, 0), hash: a.PayloadHash}
 	if a.Streaming() {
 		cr, err := sigv4.NewChunkedReader(r.Body, a, key.Secret)
 		if err != nil {
-			return a, "", body{}, err
+			return "", body{}, err
 		}
 		n, err := strconv.ParseInt(r.Header.Get("X-Amz-Decoded-Content-Length"), 10, 64)
 		if err != nil || n < 0 {
-			return a, "", body{}, errs.BadRequest(errs.Violation{Field: "x-amz-decoded-content-length", Message: "required for aws-chunked uploads"})
+			return "", body{}, errs.BadRequest(errs.Violation{Field: "x-amz-decoded-content-length", Message: "required for aws-chunked uploads"})
 		}
 		b = body{r: cr, length: n, hash: sigv4.UnsignedPayload}
 	}
-	if b.length < 0 {
-		b.length = 0
-	}
-	return a, key.PrincipalID, b, nil
+	return key.PrincipalID, b, nil
 }
 
-func (s *Server) serve(w http.ResponseWriter, r *http.Request, t target, _ sigv4.Auth, principal string, b body) error {
+func (s *Server) handle(w *responseWriter, r *http.Request, t target) error {
+	principal, b, err := s.authenticate(r)
+	if err != nil {
+		return err
+	}
 	op, err := classify(r, t)
 	if err != nil {
 		return err
 	}
-	ctx := r.Context()
-	if op.action == actionListBuckets {
-		buckets, err := s.gate.VisibleBuckets(ctx, principal)
-		if err != nil {
-			return err
-		}
-		writeXML(w, http.StatusOK, listBucketsResult(principal, buckets))
-		return nil
+	// Operations started for S3 calls record the key's account as created_by.
+	ctx := reqctx.WithInfo(r.Context(), &reqctx.Info{RequestID: reqctx.RequestID(r.Context()), Principal: reqctx.Principal{ID: principal}})
+	r = r.WithContext(ctx)
+	if op.action == domain.ActListBuckets {
+		return s.listBuckets(ctx, w, principal)
 	}
-	if err := s.authorize(ctx, principal, t.Bucket, op); err != nil {
-		return err
+	if op.action == domain.ActCreateBucket {
+		return s.createBucket(w, r, t.Bucket, principal, b)
 	}
-	if op.action == actionGetLocation {
-		writeXML(w, http.StatusOK, locationConstraint{Xmlns: s3NS, Region: s.cfg.Region})
-		return nil
-	}
-	s.upstream.Forward(w, rustfs.ForwardRequest{
-		In: r, Bucket: t.Bucket, Key: t.Key, Body: b.r, ContentLength: b.length, PayloadHash: b.hash,
-	})
-	return nil
-}
-
-func (s *Server) authorize(ctx context.Context, principal, bucket string, op operation) error {
-	acc, err := s.gate.Authorize(ctx, principal, bucket, op.perm)
+	acc, err := s.authorize(ctx, principal, t.Bucket, op)
 	if err != nil {
 		return err
 	}
+	if h, ok := configHandlers[op.action]; ok {
+		return h(ctx, s, configReq{w: w, b: acc.Bucket, bd: b})
+	}
+	return s.forward(w, r, t, op, acc.Bucket, b)
+}
+
+func (s *Server) listBuckets(ctx context.Context, w http.ResponseWriter, principal string) error {
+	if principal == "" {
+		return sigv4.ErrMissingAuth
+	}
+	buckets, err := s.gate.VisibleBuckets(ctx, principal)
+	if err != nil {
+		return err
+	}
+	writeXML(w, http.StatusOK, listBucketsResult(principal, buckets))
+	return nil
+}
+
+func (s *Server) authorize(ctx context.Context, principal, bucket string, op operation) (domain.Access, error) {
+	acc, err := s.gate.Authorize(ctx, domain.S3Request{Principal: principal, Bucket: bucket, Action: op.action, Target: op.target})
+	if err != nil {
+		return acc, err
+	}
 	s.auditLog(ctx, principal, acc)
-	if op.copySource != "" && op.copySource != bucket {
-		src, err := s.gate.Authorize(ctx, principal, op.copySource, domain.PermObjectGet)
+	if op.copy != nil {
+		src, err := s.gate.Authorize(ctx, domain.S3Request{Principal: principal, Bucket: op.copy.Bucket, Action: domain.ActGetObject, Target: op.copy.Key})
 		if err != nil {
-			return err
+			return acc, err
 		}
 		s.auditLog(ctx, principal, src)
 	}
-	return nil
+	return acc, nil
 }
 
 func (s *Server) auditLog(ctx context.Context, principal string, acc domain.Access) {
@@ -219,6 +271,141 @@ func (s *Server) auditLog(ctx context.Context, principal string, acc domain.Acce
 		s.log.WarnContext(ctx, "authz denied", "method", "s3", "principal", principal,
 			"permission", string(d.Permission), "target", d.Target, "enforced", false, "reason", d.Reason)
 	}
+}
+
+// forward applies the bucket's data-plane settings and relays to the store.
+func (s *Server) forward(w *responseWriter, r *http.Request, t target, op operation, b *storagepb.Bucket, bd body) error {
+	ctx := r.Context()
+	if slices.Contains(classedUploads, op.action) {
+		class, err := effectiveClass(b.GetSpec(), r.Header.Get("X-Amz-Storage-Class"))
+		if err != nil {
+			return err
+		}
+		r.Header.Set("X-Amz-Storage-Class", domain.BackendClass(class))
+	}
+	w.rewriteBody = slices.Contains(classListings, op.action)
+	if op.action.AddsBytes() {
+		if err := s.checkCapacity(ctx, b, t, op, bd.length); err != nil {
+			return err
+		}
+	}
+	s.upstream.Forward(w, rustfs.ForwardRequest{
+		In: r, Bucket: t.Bucket, Key: t.Key, Body: bd.r, ContentLength: bd.length, PayloadHash: bd.hash,
+	})
+	return nil
+}
+
+// classedUploads create objects with a storage class; classListings report
+// storage classes in their XML bodies.
+var (
+	classedUploads = []domain.S3Action{domain.ActPutObject, domain.ActCopyObject, domain.ActCreateMultipartUpload}
+	classListings  = []domain.S3Action{domain.ActListObjects, domain.ActListObjectVersions, domain.ActListMultipartUploads, domain.ActListParts}
+)
+
+// effectiveClass is the storage class of an upload: the bucket default when
+// forced or when the request names none, else the request's class.
+func effectiveClass(spec *storagepb.BucketSpec, header string) (storagepb.StorageClass, error) {
+	def := spec.GetDefaultStorageClass()
+	if def == storagepb.StorageClass_STORAGE_CLASS_UNSPECIFIED {
+		def = storagepb.StorageClass_STANDARD
+	}
+	if spec.GetForceStorageClass() || header == "" {
+		return def, nil
+	}
+	return domain.ParseS3Class(header)
+}
+
+func (s *Server) checkCapacity(ctx context.Context, b *storagepb.Bucket, t target, op operation, length int64) error {
+	if b.GetSpec().GetMaxSizeBytes() == 0 {
+		return nil
+	}
+	incoming := length
+	if op.copy != nil {
+		n, err := s.copySize(ctx, op.copy)
+		if errors.Is(err, objstore.ErrNotFound) {
+			return nil // the store answers NoSuchKey
+		}
+		if err != nil {
+			return err
+		}
+		incoming = n
+	}
+	// An overwrite in a never-versioned bucket replaces the old bytes.
+	if (op.action == domain.ActPutObject || op.action == domain.ActCopyObject) &&
+		b.GetSpec().GetVersioningPolicy() == storagepb.VersioningPolicy_DISABLED {
+		if old, err := s.buckets.ObjectSize(ctx, t.Bucket, t.Key, ""); err == nil {
+			incoming -= old
+		}
+	}
+	return s.buckets.CheckCapacity(ctx, b, incoming)
+}
+
+// copySize is the number of bytes a copy adds.
+func (s *Server) copySize(ctx context.Context, cs *copySource) (int64, error) {
+	if cs.Length >= 0 {
+		return cs.Length, nil
+	}
+	return s.buckets.ObjectSize(ctx, cs.Bucket, cs.Key, cs.VersionID)
+}
+
+// createBucket serves S3 CreateBucket (aws s3 mb): a Nebius bucket with
+// default settings in the project of the key's service account.
+func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, name, principal string, bd body) error {
+	if principal == "" {
+		return sigv4.ErrMissingAuth
+	}
+	raw, err := readBody(bd)
+	if err != nil {
+		return err
+	}
+	if len(raw) > 0 {
+		var cfg struct {
+			LocationConstraint string `xml:"LocationConstraint"`
+		}
+		if err := xml.Unmarshal(raw, &cfg); err != nil { //nolint:gosec // G709: a size-bounded (1 MiB) document into a plain string struct; encoding/xml expands no entities
+			return coded("MalformedXML", http.StatusBadRequest, "The XML you provided was not well-formed or did not validate against our published schema")
+		}
+		if c := cfg.LocationConstraint; c != "" && c != s.cfg.Region {
+			return coded("InvalidLocationConstraint", http.StatusBadRequest, fmt.Sprintf("The specified location-constraint %q is not valid; this endpoint serves %s", c, s.cfg.Region))
+		}
+	}
+	ctx := r.Context()
+	project, d, err := s.gate.AuthorizeProject(ctx, principal, domain.PermBucketCreate)
+	if err != nil {
+		return err
+	}
+	s.auditLog(ctx, principal, domain.Access{Decision: d})
+	if _, err := s.buckets.CreateFromS3(ctx, project, name); err != nil {
+		if errs.IsKind(err, errs.KindBadRequest) {
+			return coded("InvalidBucketName", http.StatusBadRequest, domainMessage(err))
+		}
+		return err
+	}
+	w.Header().Set("Location", "/"+name)
+	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+// maxConfigBody bounds bucket configuration documents.
+const maxConfigBody = 1 << 20
+
+// readBody reads a configuration body handled by the front itself and checks
+// it against the signed payload hash (the store re-checks relayed bodies).
+func readBody(bd body) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(bd.r, maxConfigBody+1))
+	if err != nil {
+		return nil, coded("IncompleteBody", http.StatusBadRequest, "read request body: "+err.Error())
+	}
+	if len(raw) > maxConfigBody {
+		return nil, coded("MalformedXML", http.StatusBadRequest, "the configuration document is too large")
+	}
+	if h := bd.hash; h != "" && h != sigv4.UnsignedPayload && !strings.HasPrefix(h, "STREAMING-") {
+		sum := sha256.Sum256(raw)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), h) {
+			return nil, coded("XAmzContentSHA256Mismatch", http.StatusBadRequest, "The provided 'x-amz-content-sha256' header does not match what was computed.")
+		}
+	}
+	return raw, nil
 }
 
 const s3NS = "http://s3.amazonaws.com/doc/2006-03-01/"

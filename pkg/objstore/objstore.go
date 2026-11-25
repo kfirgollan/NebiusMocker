@@ -53,6 +53,66 @@ const (
 	VersioningSuspended
 )
 
+// NullVersion is the version ID of objects written while versioning was
+// never enabled or is suspended.
+const NullVersion = "null"
+
+// Version is one object version or delete marker.
+type Version struct {
+	Key       string
+	VersionID string // NullVersion for unversioned objects
+	// IsLatest marks the current version (or a current delete marker).
+	IsLatest     bool
+	DeleteMarker bool
+	Size         int64
+	ETag         string // without quotes; multipart ETags end in "-<parts>"
+	// StorageClass is the backend's class name ("STANDARD" when unset).
+	StorageClass string
+	LastModified time.Time
+}
+
+// Multipart reports whether the version was assembled from a multipart upload.
+func (v Version) Multipart() bool {
+	for i := len(v.ETag) - 1; i >= 0; i-- {
+		if v.ETag[i] == '-' {
+			return i < len(v.ETag)-1
+		}
+		if v.ETag[i] < '0' || v.ETag[i] > '9' {
+			return false
+		}
+	}
+	return false
+}
+
+// Upload is an incomplete multipart upload with its uploaded parts.
+type Upload struct {
+	Key          string
+	UploadID     string
+	StorageClass string // "STANDARD" when unset
+	Initiated    time.Time
+	Parts        int64
+	PartsSize    int64
+}
+
+// Inventory is the bucket-content introspection and maintenance a backend
+// offers on top of Store: bucket counters, size limits and lifecycle rules
+// are computed from it.
+type Inventory interface {
+	// ListVersions yields every version and delete marker whose key starts
+	// with prefix, by key and then newest first. Unversioned objects are
+	// yielded once with VersionID NullVersion.
+	ListVersions(ctx context.Context, bucket, prefix string) iter.Seq2[Version, error]
+	// ListUploads yields the incomplete multipart uploads with their parts.
+	ListUploads(ctx context.Context, bucket string) iter.Seq2[Upload, error]
+	// DeleteVersion permanently removes one version or delete marker; a
+	// missing version is not an error.
+	DeleteVersion(ctx context.Context, bucket, key, versionID string) error
+	// AbortUpload aborts a multipart upload; a missing upload is not an error.
+	AbortUpload(ctx context.Context, bucket, key, uploadID string) error
+	// ObjectTags returns the tags of one object version.
+	ObjectTags(ctx context.Context, bucket, key, versionID string) (map[string]string, error)
+}
+
 // Store is an S3-like object store.
 type Store interface {
 	// EnsureBucket creates the bucket unless it exists.

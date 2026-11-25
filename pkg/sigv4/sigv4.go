@@ -54,7 +54,39 @@ var (
 	ErrTimeSkewed = errors.New("sigv4: request time too skewed")
 	// ErrExpired: a presigned URL has expired (AccessDenied "Request has expired").
 	ErrExpired = errors.New("sigv4: presigned request has expired")
+	// ErrWrongRegion: the credential scope names a region other than the server's (AuthorizationHeaderMalformed).
+	ErrWrongRegion = errors.New("sigv4: credential scope region is wrong")
 )
+
+// RegionError is the typed form of ErrWrongRegion.
+type RegionError struct {
+	// Got is the region in the credential scope; Want is the server's region.
+	Got, Want string
+	// Presigned selects the X-Amz-Credential wording of the message.
+	Presigned bool
+}
+
+// Error mimics the AWS message for the header and presigned forms.
+func (e *RegionError) Error() string {
+	msg := fmt.Sprintf("the region '%s' is wrong; expecting '%s'", e.Got, e.Want)
+	if e.Presigned {
+		return "Error parsing the X-Amz-Credential parameter; " + msg
+	}
+	return msg
+}
+
+// Unwrap returns ErrWrongRegion.
+func (e *RegionError) Unwrap() error { return ErrWrongRegion }
+
+// CheckRegion reports a *RegionError when a's credential scope region is not
+// want. It is separate from Verify: the signature itself does not depend on
+// the region being the server's.
+func CheckRegion(a Auth, want string) error {
+	if a.Region == want {
+		return nil
+	}
+	return &RegionError{Got: a.Region, Want: want, Presigned: a.Presigned}
+}
 
 // Auth is the parsed authorization of one request.
 type Auth struct {

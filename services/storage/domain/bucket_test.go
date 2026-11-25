@@ -23,14 +23,15 @@ type fixture struct {
 	svc     *domain.BucketService
 	buckets *fakeBuckets
 	backend *fakeBackend
+	content *contentFake
 	clk     *clock.Manual
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{buckets: &fakeBuckets{}, backend: newFakeBackend(), clk: clock.NewManual(t0)}
+	f := &fixture{buckets: &fakeBuckets{}, backend: newFakeBackend(), content: newContentFake(false), clk: clock.NewManual(t0)}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
-		Buckets: f.buckets, Backend: f.backend, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk,
+		Buckets: f.buckets, Backend: f.backend, Content: f.content, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk,
 		Settings: domain.Settings{Region: "eu-north1", Domain: "s3.test", PurgeGrace: grace},
 	})
 	if err != nil {

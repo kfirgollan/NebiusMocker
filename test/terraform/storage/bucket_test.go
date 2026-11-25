@@ -4,8 +4,11 @@ package storage
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/terraform-exec/tfexec"
 
 	storagepb "github.com/nebius/gosdk/proto/nebius/storage/v1"
 	storagesvc "github.com/nebius/gosdk/services/nebius/storage/v1"
@@ -113,5 +116,110 @@ func TestBucketLifecycle(t *testing.T) {
 	// Nebius soft-deletes: the bucket stays restorable until purge_at.
 	if b := get(id); b.GetStatus().GetState() != storagepb.BucketStatus_SCHEDULED_FOR_DELETION || b.GetStatus().GetPurgeAt() == nil {
 		t.Fatalf("after destroy: status %v, want SCHEDULED_FOR_DELETION with purge_at", b.GetStatus())
+	}
+}
+
+func settingsConfig(tenant, project, name, class string) string {
+	return fmt.Sprintf(`
+resource "nebius_iam_v1_group" "readers" {
+  parent_id = %[1]q
+  name      = "readers-%[3]s"
+}
+
+resource "nebius_storage_v1_bucket" "s" {
+  parent_id             = %[2]q
+  name                  = %[3]q
+  versioning_policy     = "ENABLED"
+  max_size_bytes        = 1048576
+  default_storage_class = %[4]q
+
+  cors = {
+    rules = [{
+      id              = "web"
+      allowed_methods = ["GET", "HEAD"]
+      allowed_origins = ["https://example.com"]
+      allowed_headers = ["*"]
+      max_age_seconds = 600
+    }]
+  }
+
+  bucket_policy = {
+    rules = [{
+      group_id = nebius_iam_v1_group.readers.id
+      paths    = ["public/*"]
+      roles    = ["storage.object-viewer"]
+    }]
+  }
+
+  lifecycle_configuration = {
+    rules = [{
+      id     = "expire-tmp"
+      status = "ENABLED"
+      filter     = { prefix = "tmp/" }
+      expiration = { days = 7 }
+    }]
+  }
+}
+`, tenant, project, name, class)
+}
+
+// TestBucketSettings applies the settings the mock acts on (cors, bucket
+// policy, lifecycle, max size) and proves they round-trip without drift; a
+// setting the mock cannot emulate fails the apply, naming the field.
+func TestBucketSettings(t *testing.T) {
+	inst := testkit.StartT(t, []mocker.Module{iam.New(), storage.New(storage.WithS3Listen("off"))},
+		mockerOptions(testkit.WithOperationDelay(200*time.Millisecond), testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce))...)
+	buckets := storagesvc.NewBucketService(inst.SDK(t))
+	tf := newTerraform(t)
+	const name = "tf-settings-bucket"
+
+	tf.write(t, nebiusProvider(inst.Addr, inst.Token)+settingsConfig(inst.TenantID, inst.ProjectID, name, "STANDARD"))
+	tf.init(t)
+	tf.expectPlan(t, map[string]string{"nebius_iam_v1_group.readers": "create", "nebius_storage_v1_bucket.s": "create"})
+	tf.apply(t)
+	tf.expectNoChanges(t)
+
+	id, _ := tf.state(t)["nebius_storage_v1_bucket.s"]["id"].(string)
+	b, err := buckets.Get(t.Context(), &storagepb.GetBucketRequest{Id: id})
+	if err != nil {
+		t.Fatalf("Get %s: %v", id, err)
+	}
+	sp := b.GetSpec()
+	if sp.GetMaxSizeBytes() != 1<<20 || len(sp.GetCors().GetRules()) != 1 || len(sp.GetBucketPolicy().GetRules()) != 1 ||
+		sp.GetLifecycleConfiguration().GetRules()[0].GetExpiration().GetDays() != 7 {
+		t.Fatalf("mock spec does not reflect the config: %v", sp)
+	}
+	if b.GetStatus().GetAnonymousAccessEnabled() {
+		t.Fatalf("anonymous_access_enabled = true for a group-only policy")
+	}
+
+	// Add an anonymous rule: status.anonymous_access_enabled follows.
+	cfg := settingsConfig(inst.TenantID, inst.ProjectID, name, "STANDARD")
+	cfg = strings.Replace(cfg, "    rules = [{\n      group_id", `    rules = [{
+      anonymous = {}
+      paths     = ["open/*"]
+      roles     = ["storage.viewer"]
+    }, {
+      group_id`, 1)
+	tf.write(t, nebiusProvider(inst.Addr, inst.Token)+cfg)
+	tf.expectPlan(t, map[string]string{"nebius_iam_v1_group.readers": "no-op", "nebius_storage_v1_bucket.s": "update"})
+	tf.apply(t)
+	tf.expectNoChanges(t)
+	b, err = buckets.Get(t.Context(), &storagepb.GetBucketRequest{Id: id})
+	if err != nil || !b.GetStatus().GetAnonymousAccessEnabled() || len(b.GetSpec().GetBucketPolicy().GetRules()) != 2 {
+		t.Fatalf("after anonymous rule: %v, %v; want anonymous_access_enabled", b, err)
+	}
+
+	// Unsupported: INTELLIGENT storage class fails the update, naming the field.
+	tf.write(t, nebiusProvider(inst.Addr, inst.Token)+settingsConfig(inst.TenantID, inst.ProjectID, name, "INTELLIGENT"))
+	if _, err := tf.tf.Plan(t.Context(), tfexec.Out(planFile)); err != nil {
+		t.Fatalf("terraform plan: %v", err)
+	}
+	err = tf.tf.Apply(t.Context(), tfexec.DirOrPlan(planFile))
+	if err == nil {
+		t.Fatalf("apply with default_storage_class = INTELLIGENT succeeded; want an error")
+	}
+	if got := tf.out.String(); !strings.Contains(got, "default_storage_class") {
+		t.Errorf("apply error does not mention default_storage_class:\n%s%v", got, err)
 	}
 }

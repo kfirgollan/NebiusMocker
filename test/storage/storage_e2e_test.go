@@ -315,8 +315,9 @@ func TestS3FrontRejects(t *testing.T) {
 	if got := getObject(t, e.s3Client(viewerKey, viewerSecret), name, "k"); string(got) != "v" {
 		t.Errorf("viewer GetObject = %q", got)
 	}
-	if _, err := e.s3Client(editorKey, editorSecret).CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(unique("s3made"))}); s3Code(err) != "NotImplemented" {
-		t.Errorf("S3 CreateBucket: %v, want NotImplemented (buckets are Nebius resources)", err)
+	// AWS-style bucket policies are not Nebius bucket policies (those are set with the Nebius API).
+	if _, err := e.s3Client(editorKey, editorSecret).PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{Bucket: aws.String(name), Policy: aws.String("{}")}); s3Code(err) != "NotImplemented" {
+		t.Errorf("S3 PutBucketPolicy: %v, want NotImplemented", err)
 	}
 	// A deactivated key stops working at once.
 	wait(t)(iamv2svc.NewAccessKeyService(e.sdk).Deactivate(ctx, &iamv2pb.DeactivateAccessKeyRequest{Id: editorKeyNID}))

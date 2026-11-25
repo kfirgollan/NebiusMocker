@@ -256,3 +256,63 @@ func TestEscape(t *testing.T) {
 		t.Errorf("Escape = %q, want %q", got, want)
 	}
 }
+
+func TestCheckRegion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		auth    sigv4.Auth
+		wantErr string // empty: no error
+	}{
+		{"match", sigv4.Auth{Region: "eu-north1"}, ""},
+		{"header mismatch", sigv4.Auth{Region: "us-east-1"}, "the region 'us-east-1' is wrong; expecting 'eu-north1'"},
+		{"presigned mismatch", sigv4.Auth{Region: "us-east-1", Presigned: true}, "Error parsing the X-Amz-Credential parameter; the region 'us-east-1' is wrong; expecting 'eu-north1'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := sigv4.CheckRegion(tt.auth, "eu-north1")
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("CheckRegion = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, sigv4.ErrWrongRegion) {
+				t.Fatalf("CheckRegion = %v, want ErrWrongRegion", err)
+			}
+			re, ok := errors.AsType[*sigv4.RegionError](err)
+			if !ok || re.Got != "us-east-1" || re.Want != "eu-north1" || re.Presigned != tt.auth.Presigned {
+				t.Fatalf("RegionError = %+v, ok=%v", re, ok)
+			}
+			if err.Error() != tt.wantErr {
+				t.Fatalf("message = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestRegionIsSeparateFromSignature: a request signed for another region still
+// verifies; only CheckRegion rejects it.
+func TestRegionIsSeparateFromSignature(t *testing.T) {
+	t.Parallel()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://s3.example.test/bucket/key", http.NoBody)
+	req.Header.Set("X-Amz-Content-Sha256", sigv4.UnsignedPayload)
+	s := v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })
+	if err := s.SignHTTP(t.Context(), aws.Credentials{AccessKeyID: keyID, SecretAccessKey: secret}, req, sigv4.UnsignedPayload, "s3", "us-east-1", signedAt); err != nil {
+		t.Fatalf("SignHTTP: %v", err)
+	}
+	a, err := sigv4.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Region != "us-east-1" {
+		t.Fatalf("Region = %q, want us-east-1", a.Region)
+	}
+	if err := sigv4.Verify(req, a, secret, signedAt); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if err := sigv4.CheckRegion(a, region); !errors.Is(err, sigv4.ErrWrongRegion) {
+		t.Fatalf("CheckRegion = %v, want ErrWrongRegion", err)
+	}
+}

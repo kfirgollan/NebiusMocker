@@ -103,7 +103,18 @@ output "bucket_id"         { value = nebius_storage_v1_bucket.data.id }
 // objectsConfig manages an object with the unmodified hashicorp/aws provider,
 // configured as Nebius documents for S3 tools, with the secret read by the
 // nebius_iam_v2_access_key_secret ephemeral resource (never stored in state).
-func objectsConfig(nebiusAddr, token, s3Addr, accessKeyID, bucket, content string) string {
+func objectsConfig(nebiusAddr, token, s3Addr, accessKeyID, bucket, project, content, extra string) string {
+	extraObject, extraDep := "", ""
+	if extra != "" {
+		extraDep = ", aws_s3_object.extra"
+		extraObject = fmt.Sprintf(`
+resource "aws_s3_object" "extra" {
+  bucket  = %q
+  key     = "extra/second.txt"
+  content = %q
+}
+`, bucket, extra)
+	}
 	return fmt.Sprintf(`terraform {
   required_providers {
     nebius = {
@@ -156,7 +167,16 @@ data "aws_s3_object" "hello" {
 }
 
 output "body" { value = data.aws_s3_object.hello.body }
-`, nebiusProviderVersion, awsProviderVersion, nebiusAddr, token, s3Addr, accessKeyID, bucket, content)
+%[9]s
+# Read after the objects, so status.counters reflects them.
+data "nebius_storage_v1_bucket" "counted" {
+  parent_id  = %[10]q
+  name       = %[7]q
+  depends_on = [aws_s3_object.hello%[11]s]
+}
+
+output "counters" { value = data.nebius_storage_v1_bucket.counted.status.counters }
+`, nebiusProviderVersion, awsProviderVersion, nebiusAddr, token, s3Addr, accessKeyID, bucket, content, extraObject, project, extraDep)
 }
 
 // TestObjectsWithAWSProvider is the Terraform done-criterion for objects:
@@ -233,7 +253,7 @@ func TestObjectsWithAWSProvider(t *testing.T) {
 	// 2. Objects with the aws provider: create, read back, update, no drift.
 	objects := newTerraform(t)
 	for i, content := range []string{"hello from terraform", "hello again"} {
-		objects.write(t, objectsConfig(inst.Addr, inst.Token, mod.S3Addr(), keyNID, bucket, content))
+		objects.write(t, objectsConfig(inst.Addr, inst.Token, mod.S3Addr(), keyNID, bucket, inst.ProjectID, content, ""))
 		action := "update"
 		if i == 0 {
 			objects.init(t)
@@ -249,6 +269,47 @@ func TestObjectsWithAWSProvider(t *testing.T) {
 		}
 		objects.expectNoChanges(t)
 	}
+
+	// 2b. Bucket status.counters follow the objects: add one, then remove it.
+	standard := func() (quantity, size int64) {
+		t.Helper()
+		list, _ := objects.output(t, "counters").([]any)
+		for _, e := range list {
+			m, _ := e.(map[string]any)
+			if m["storage_class"] != "STANDARD" {
+				continue
+			}
+			cur, _ := m["counters"].(map[string]any)
+			q, _ := cur["simple_objects_quantity"].(float64)
+			sz, _ := cur["simple_objects_size"].(float64)
+			return int64(q), int64(sz)
+		}
+		t.Fatalf("no STANDARD entry in counters output %v", list)
+		return 0, 0
+	}
+	const hello, second = "hello again", "0123456789"
+	if q, sz := standard(); q != 1 || sz != int64(len(hello)) {
+		t.Fatalf("counters after create+update = %d objects / %d bytes, want 1 / %d", q, sz, len(hello))
+	}
+	objects.write(t, objectsConfig(inst.Addr, inst.Token, mod.S3Addr(), keyNID, bucket, inst.ProjectID, hello, second))
+	objects.expectPlan(t, map[string]string{"aws_s3_object.hello": "no-op", "aws_s3_object.extra": "create"})
+	objects.apply(t)
+	if q, sz := standard(); q != 2 || sz != int64(len(hello)+len(second)) {
+		t.Fatalf("counters after adding an object = %d / %d, want 2 / %d", q, sz, len(hello)+len(second))
+	}
+	objects.expectNoChanges(t)
+	objects.write(t, objectsConfig(inst.Addr, inst.Token, mod.S3Addr(), keyNID, bucket, inst.ProjectID, hello, ""))
+	objects.expectPlan(t, map[string]string{"aws_s3_object.hello": "no-op", "aws_s3_object.extra": "delete"})
+	objects.apply(t)
+	// The removed object no longer exists in the config, so nothing orders the
+	// data source after its deletion: refresh re-reads it.
+	if err := objects.tf.Refresh(t.Context()); err != nil {
+		t.Fatalf("terraform refresh: %v", err)
+	}
+	if q, sz := standard(); q != 1 || sz != int64(len(hello)) {
+		t.Fatalf("counters after removing an object = %d / %d, want 1 / %d", q, sz, len(hello))
+	}
+	objects.expectNoChanges(t)
 
 	// 3. Destroy the object, then the credentials and the bucket.
 	objects.destroy(t)
