@@ -81,3 +81,65 @@ type Blobs interface {
 	// StatSource returns an object in a user bucket, or errs.NotFound.
 	StatSource(ctx context.Context, bucket, object string) (BlobInfo, error)
 }
+
+// NID type prefixes of disks and disk snapshots.
+const (
+	KindDisk         = "computedisk"
+	KindDiskSnapshot = "computedisksnapshot"
+)
+
+// DiskReader reads disks and disk snapshots for other compute resources (for
+// example images created from a disk or snapshot). Both methods return
+// errs.NotFound when the ID does not exist. Disks and snapshots keep no data
+// payload: the mocker never allocates storage.
+type DiskReader interface {
+	Disk(ctx context.Context, id string) (*computepb.Disk, error)
+	Snapshot(ctx context.Context, id string) (*computepb.DiskSnapshot, error)
+}
+
+// DiskPage is one page of a disk listing.
+type DiskPage struct {
+	Items         []*computepb.Disk
+	NextPageToken string
+}
+
+// SnapshotPage is one page of a disk snapshot listing.
+type SnapshotPage struct {
+	Items         []*computepb.DiskSnapshot
+	NextPageToken string
+}
+
+// DiskRepository stores disks.
+type DiskRepository interface {
+	Get(ctx context.Context, id string) (*computepb.Disk, error)
+	GetByName(ctx context.Context, parentID, name string) (*computepb.Disk, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (DiskPage, error)
+	// Create fails with errs.AlreadyExists if the ID or the name in the parent is taken.
+	Create(ctx context.Context, d *computepb.Disk) error
+	// Mutate atomically loads the disk, lets fn change it and stores the
+	// result. An error from fn aborts without writing. It returns the stored
+	// disk, or errs.NotFound.
+	Mutate(ctx context.Context, id string, fn func(*computepb.Disk) error) (*computepb.Disk, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// SnapshotRepository stores disk snapshots.
+type SnapshotRepository interface {
+	Get(ctx context.Context, id string) (*computepb.DiskSnapshot, error)
+	GetByName(ctx context.Context, parentID, name string) (*computepb.DiskSnapshot, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (SnapshotPage, error)
+	// ListByDisk pages through the snapshots in parentID whose source is diskID.
+	ListByDisk(ctx context.Context, parentID, diskID string, pageSize int, pageToken string) (SnapshotPage, error)
+	// Create fails with errs.AlreadyExists if the ID or the name in the parent is taken.
+	Create(ctx context.Context, s *computepb.DiskSnapshot) error
+	// Mutate is DiskRepository.Mutate for snapshots.
+	Mutate(ctx context.Context, id string, fn func(*computepb.DiskSnapshot) error) (*computepb.DiskSnapshot, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// ImageLookup resolves disk sources from images (satisfied by *ImageService).
+type ImageLookup interface {
+	Get(ctx context.Context, id string) (*computepb.Image, error)
+	GetLatestByFamily(ctx context.Context, family, parentID string) (*computepb.Image, error)
+	IsPublicProject(id string) bool
+}
