@@ -97,6 +97,11 @@ A leader's report is a claim. Verify it:
    uncommitted changes or commits that are not on `origin/main`. It also unlocks harness-locked worktrees. Never call
    `git worktree remove` or `git branch -D` directly on a leader's worktree.
 
+   **The guard also stops left-over processes.** A leader's background shells (wait loops, mock servers, probes)
+   outlive the agent, and once the worktree is gone they hold ports or retry failing commands forever. Before
+   removal, the guard stops every process whose working directory or command line is inside the worktree, except
+   `claude` processes. It lists what it stopped; mention anything unexpected in the report to the user.
+
    ```bash
    sh .claude/skills/orchestrate-task/scripts/close-worktree.sh <path> \
      && python3 -I $L update <id> --status done --note "shipped <sha>"

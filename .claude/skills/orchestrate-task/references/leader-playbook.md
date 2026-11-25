@@ -81,7 +81,9 @@ python3 -I $L push-lock <task> release
 python3 -I $L update <task> --status done --note "pushed <sha>"
 ```
 
-Always release the lock, including when tests fail (fix, then re-acquire). Commit messages follow the repo
+Always release the lock, including when tests fail (fix, then re-acquire). Before your final report, stop every
+background shell, server or wait loop you or your workers started. The dispatcher's guard stops any it finds, but a
+loop still running when the worktree is removed retries forever. Commit messages follow the repo
 conventions, including the Co-Authored-By trailer. Don't delete your worktree. The dispatcher does that after it
 verifies your work.
 
