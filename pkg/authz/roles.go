@@ -80,7 +80,15 @@ const (
 	RoleViewer = "viewer"
 	RoleEditor = "editor"
 	RoleAdmin  = "admin"
+	// RoleMysteryBoxPayloadViewer may read MysteryBox secret payloads, which
+	// viewer and editor may not.
+	RoleMysteryBoxPayloadViewer = "mysterybox.payload-viewer"
 )
+
+// permMysteryBoxPayloadRead reads decrypted secret payloads. Its verb is not
+// "get", so the viewer and editor read patterns do not grant it (Nebius docs:
+// only admin and mysterybox.payload-viewer may read payloads).
+const permMysteryBoxPayloadRead = "mysterybox.payload.read"
 
 // Catalog is the set of known roles.
 type Catalog struct {
@@ -96,7 +104,7 @@ func NewCatalog(roles ...Role) *Catalog {
 	return c
 }
 
-// DefaultCatalog returns viewer, editor and admin.
+// DefaultCatalog returns viewer, editor, admin and the service roles.
 func DefaultCatalog() *Catalog {
 	read := []string{"*.*." + VerbGet, "*.*." + VerbList}
 	return NewCatalog(
@@ -112,6 +120,7 @@ func DefaultCatalog() *Catalog {
 			Excludes: []string{"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete"},
 		},
 		Role{Name: RoleAdmin, Grants: []string{"*"}},
+		Role{Name: RoleMysteryBoxPayloadViewer, Grants: []string{permMysteryBoxPayloadRead}},
 	)
 }
 

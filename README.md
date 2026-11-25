@@ -22,6 +22,8 @@ CI with no Nebius account.
 > **KMS** symmetric and asymmetric keys work with real crypto (AES-256-GCM, ECDSA, RSA-OAEP), plus rotation and
 > delayed deletion, through Terraform, the Go SDK and the `nebius kms` CLI; see
 > [docs/services/kms.md](docs/services/kms.md#implementation-status).
+> **MysteryBox (SecretStash) secrets, versions and payloads** work with the official Terraform provider, CLI and Go
+> SDK: see [docs/services/mysterybox.md](docs/services/mysterybox.md#implementation-status).
 
 ## Quick start
 

@@ -27,6 +27,9 @@ func TestRepositoryLayering(t *testing.T) {
 		for _, e := range lp.Errors {
 			t.Errorf("load %s: %v", lp.PkgPath, e)
 		}
+		if strings.HasSuffix(lp.PkgPath, ".test") {
+			continue // the generated test main imports the package under test; it is not code
+		}
 		path := strings.TrimSuffix(lp.PkgPath, "_test") // external test packages share the rules
 		p := byPath[path]
 		if p == nil {

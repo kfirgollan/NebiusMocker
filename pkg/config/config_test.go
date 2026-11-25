@@ -115,3 +115,29 @@ func TestFromLookupStorage(t *testing.T) {
 		t.Error("FromLookup(PURGE_GRACE=0s) succeeded, want error")
 	}
 }
+
+func TestFromLookupMysteryBox(t *testing.T) {
+	t.Parallel()
+	if got := Default().MysteryBox; got != (MysteryBoxConfig{}) {
+		t.Fatalf("default MysteryBox = %+v, want zero (module defaults)", got)
+	}
+	c, err := FromLookup(lookup(map[string]string{
+		"NEBIUS_MOCKER_MYSTERYBOX_MAX_ENTRIES":     "10",
+		"NEBIUS_MOCKER_MYSTERYBOX_MAX_VALUE_BYTES": "1024",
+		"NEBIUS_MOCKER_MYSTERYBOX_MAX_VERSIONS":    "5",
+		"NEBIUS_MOCKER_MYSTERYBOX_PURGE_DELAY":     "1h",
+		"NEBIUS_MOCKER_MYSTERYBOX_KEY":             "a2V5",
+	}))
+	if err != nil {
+		t.Fatalf("FromLookup: %v", err)
+	}
+	want := MysteryBoxConfig{MaxEntries: 10, MaxValueBytes: 1024, MaxVersions: 5, PurgeDelay: time.Hour, Key: "a2V5"}
+	if c.MysteryBox != want {
+		t.Fatalf("MysteryBox = %+v, want %+v", c.MysteryBox, want)
+	}
+	for _, bad := range []string{"0", "-3", "many"} {
+		if _, err := FromLookup(lookup(map[string]string{"NEBIUS_MOCKER_MYSTERYBOX_MAX_ENTRIES": bad})); err == nil {
+			t.Errorf("FromLookup(MAX_ENTRIES=%s) succeeded, want error", bad)
+		}
+	}
+}

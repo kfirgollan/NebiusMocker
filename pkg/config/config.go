@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,8 @@ type Config struct {
 	Registry RegistryConfig
 	// Storage configures the Object Storage module (NEBIUS_MOCKER_STORAGE_*).
 	Storage StorageConfig
+	// MysteryBox holds the secrets manager's limits and payload key.
+	MysteryBox MysteryBoxConfig
 }
 
 // Region is one emulated Nebius region.
@@ -103,6 +106,22 @@ type StorageConfig struct {
 	Region string
 	// PurgeGrace is how long a deleted bucket can be undeleted (default ttl).
 	PurgeGrace time.Duration
+}
+
+// MysteryBoxConfig configures the mysterybox module (NEBIUS_MOCKER_MYSTERYBOX_*).
+// Zero limits take the module's defaults (see docs/services/mysterybox.md).
+type MysteryBoxConfig struct {
+	// MaxEntries is the number of payload entries one version may hold.
+	MaxEntries int
+	// MaxValueBytes is the size of one payload value.
+	MaxValueBytes int
+	// MaxVersions is the number of versions one secret may hold.
+	MaxVersions int
+	// PurgeDelay is how long a deleted secret or version can be restored.
+	PurgeDelay time.Duration
+	// Key is the base64 AES-256 key payloads are sealed with; empty means a
+	// random key per process.
+	Key string
 }
 
 // ObjStoreBackend selects the pkg/objstore implementation.
@@ -203,6 +222,11 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"STORAGE_S3_DOMAIN", func(v string) error { c.Storage.S3Domain = v; return nil }},
 		{"STORAGE_REGION", func(v string) error { c.Storage.Region = v; return nil }},
 		{"STORAGE_PURGE_GRACE", func(v string) error { return parsePositive(v, &c.Storage.PurgeGrace) }},
+		{"MYSTERYBOX_MAX_ENTRIES", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxEntries) }},
+		{"MYSTERYBOX_MAX_VALUE_BYTES", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxValueBytes) }},
+		{"MYSTERYBOX_MAX_VERSIONS", func(v string) error { return parsePositiveInt(v, &c.MysteryBox.MaxVersions) }},
+		{"MYSTERYBOX_PURGE_DELAY", func(v string) error { return parseDuration(v, &c.MysteryBox.PurgeDelay) }},
+		{"MYSTERYBOX_KEY", func(v string) error { c.MysteryBox.Key = v; return nil }},
 	}
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	for _, p := range parsers {
@@ -296,6 +320,18 @@ func parseDuration(v string, out *time.Duration) error {
 		return fmt.Errorf("must not be negative, got %s", d)
 	}
 	*out = d
+	return nil
+}
+
+func parsePositiveInt(v string, out *int) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return err
+	}
+	if n <= 0 {
+		return fmt.Errorf("must be positive, got %d", n)
+	}
+	*out = n
 	return nil
 }
 

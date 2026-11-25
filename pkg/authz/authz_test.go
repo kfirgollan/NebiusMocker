@@ -42,6 +42,13 @@ func TestDefaultRoles(t *testing.T) {
 		{authz.RoleAdmin, "kms.symmetricKeys.decrypt", true},
 		{authz.RoleAdmin, "iam.accessPermits.create", true},
 		{"nobody", "iam.groups.get", false},
+		{authz.RoleViewer, "mysterybox.secrets.get", true},
+		{authz.RoleViewer, "mysterybox.payload.read", false},
+		{authz.RoleEditor, "mysterybox.secrets.create", true},
+		{authz.RoleEditor, "mysterybox.payload.read", false},
+		{authz.RoleAdmin, "mysterybox.payload.read", true},
+		{authz.RoleMysteryBoxPayloadViewer, "mysterybox.payload.read", true},
+		{authz.RoleMysteryBoxPayloadViewer, "mysterybox.secrets.get", false},
 	}
 	for _, tt := range tests {
 		if got := c.Allows(tt.role, tt.perm); got != tt.want {

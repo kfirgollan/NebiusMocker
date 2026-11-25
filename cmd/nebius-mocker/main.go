@@ -11,10 +11,11 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/compute"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
 	"github.com/kfirgollan/NebiusMocker/services/kms"
+	"github.com/kfirgollan/NebiusMocker/services/mysterybox"
 	"github.com/kfirgollan/NebiusMocker/services/registry"
 	"github.com/kfirgollan/NebiusMocker/services/storage"
 )
 
 func main() {
-	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New()))
+	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New()))
 }
