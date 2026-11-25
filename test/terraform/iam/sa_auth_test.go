@@ -299,9 +299,16 @@ resource "nebius_iam_v1_group" "made_by_sa" {
 // the create to the service account (so the exchange happened server-side).
 func runAsServiceAccount(t *testing.T, inst *testkit.Instance, c saCredentials, auth string) {
 	t.Helper()
+	runAsServiceAccountWith(t, inst, c, auth, groupConfig(inst.TenantID))
+}
+
+// runAsServiceAccountWith is runAsServiceAccount with a custom body that must
+// declare the resource nebius_iam_v1_group.made_by_sa.
+func runAsServiceAccountWith(t *testing.T, inst *testkit.Instance, c saCredentials, auth, body string) {
+	t.Helper()
 	tf := newTerraformAs(t, inst, "")
 	tf.setAuth(auth)
-	tf.writeConfig(t, groupConfig(inst.TenantID))
+	tf.writeConfig(t, body)
 	tf.init(t)
 	tf.expectPlan(t, map[string]string{"made_by_sa": "create"})
 	tf.apply(t)
@@ -394,4 +401,31 @@ func TestProviderServiceAccountDeactivatedKey(t *testing.T) {
 	if _, err := iamsvc.NewGroupService(inst.SDK(t)).GetByName(t.Context(), &iampb.GetGroupByNameRequest{ParentId: inst.TenantID, Name: "made-by-sa"}); status.Code(err) != codes.NotFound {
 		t.Errorf("group exists after a failed apply: %v", err)
 	}
+}
+
+// TestProviderIAMTokenEphemeral evaluates the provider's nebius_iam_token
+// ephemeral resource while the provider authenticates as a service account:
+// the provider exchanges the service account's JWT for a token, the ephemeral
+// resource yields that token, and a second provider configured only with it
+// creates a group, which the audit log credits to the service account.
+func TestProviderIAMTokenEphemeral(t *testing.T) {
+	inst := authStartMocker(t)
+	c := newEditorServiceAccount(t, inst)
+	auth := fmt.Sprintf("service_account = { credentials_file = %q }", c.credentialsFile(t))
+	runAsServiceAccountWith(t, inst, c, auth, fmt.Sprintf(`
+ephemeral "nebius_iam_token" "sa" {}
+
+provider "nebius" {
+  alias           = "via_token"
+  resolvers       = { "*" = %[1]q }
+  address_options = { "*" = { insecure = true } }
+  token           = ephemeral.nebius_iam_token.sa.token
+}
+
+resource "nebius_iam_v1_group" "made_by_sa" {
+  provider  = nebius.via_token
+  parent_id = %[2]q
+  name      = "made-by-sa"
+}
+`, inst.Addr, inst.TenantID))
 }

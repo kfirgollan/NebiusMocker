@@ -31,6 +31,8 @@
 | Issued access tokens (`nmock.v1.…`, HMAC-signed, 12h, revocable) accepted by every gRPC service and the registry's docker front, next to the static dev tokens | ✅ |
 | Service-account credentials in the official tools: gosdk `ServiceAccountReader` (credentials file, private key file), Terraform provider `service_account` block, `nebius profile create --service-account-file`, `nebius iam auth-public-key create/generate` | ✅ contract: `test/contract/iam_token*_test.go`, `iam_authkey*_test.go`; e2e: `test/terraform/iam/sa_auth_test.go`, `test/cli/iam/sa_auth_e2e_test.go` |
 | `nebius_iam_v1_auth_public_key` resource and data source | ✅ e2e: `test/terraform/iam/sa_auth_test.go` |
+| `nebius_iam_token` ephemeral resource: with `service_account` credentials it yields the token the provider exchanged (it makes no RPC of its own); a second provider configured with only that token works as the service account | ✅ e2e: `TestProviderIAMTokenEphemeral` in `test/terraform/iam/sa_auth_test.go` |
+| Keys live in their service account's project: a key parented in another existing project is refused (`metadata.parent_id`), even for an editor of that project, and its key material mints no token | ✅ contract: `test/contract/iam_authkey_crossproject_test.go` |
 | Everything else in this document | Planned |
 
 Access keys: the secret is generated in `services/iam/domain` (`GenerateKeyMaterial`: a 20-character `NMK…` AWS key ID and
@@ -330,8 +332,6 @@ Of these, `IAM_JWT_MAX_TTL`, `TOKEN_SECRET` and `TOKEN_TTL` are implemented; the
 - Scoped, audience- or resource-restricted tokens (`scopes`, `audience`, `resource`): refused by name.
 - The revocation deny-list is per process: split deployments sharing `NEBIUS_MOCKER_TOKEN_SECRET` do not share revocations.
 - Quotas on keys (`iam.authpublickey.count`).
-- The `nebius_iam_token` ephemeral resource makes no RPC of its own (it returns the provider's current token, which the
-  exchange above issues for `service_account` credentials) and has no e2e test yet.
 - The HTTP exchange ignores unrecognized form parameters, as RFC 6749 §3.2 requires; every parameter of
   `ExchangeTokenRequest` is either implemented or refused by name.
 
