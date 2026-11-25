@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage check hooks run tidy clean
 
 all: check
 
@@ -23,6 +23,15 @@ test: ## Unit, contract and architecture tests with the race detector
 
 e2e: ## End-to-end tests: real terraform + official nebius provider, official nebius CLI
 	$(GO) test -tags e2e -count=1 -v ./test/terraform/... ./test/internal/nebiuscli/...
+
+# RustFS containers started by test/rustfsfixture carry this label.
+RUSTFS_LABEL := nebius-mocker.test=rustfs
+RUSTFS_CLEANUP := docker ps -aq --filter label=$(RUSTFS_LABEL) | xargs docker rm -f -v >/dev/null 2>&1 || true
+
+e2e-storage: ## RustFS-backed tests (needs Docker); RustFS is started and removed by the tests
+	@$(RUSTFS_CLEANUP)
+	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./test/... || status=$$?; \
+	$(RUSTFS_CLEANUP); exit $$status
 
 check: lint test ## Everything the pre-commit hook runs
 

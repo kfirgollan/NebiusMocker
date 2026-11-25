@@ -60,6 +60,29 @@ type Config struct {
 	// ProjectID is the seeded default project (child of TenantID, region eu-north1).
 	ProjectID string
 	LogLevel  slog.Level
+	// ObjStore selects the object-storage backend shared by modules that keep blobs.
+	ObjStore ObjStoreConfig
+}
+
+// ObjStoreBackend selects the pkg/objstore implementation.
+type ObjStoreBackend int
+
+// Object-storage backends.
+const (
+	// ObjStoreMemory keeps objects in process memory (no data plane; tests).
+	ObjStoreMemory ObjStoreBackend = iota
+	// ObjStoreRustFS stores objects in a RustFS server.
+	ObjStoreRustFS
+)
+
+// ObjStoreConfig configures the object-storage backend (NEBIUS_MOCKER_OBJSTORE*).
+type ObjStoreConfig struct {
+	Backend ObjStoreBackend
+	// Endpoint, AccessKey, SecretKey and Region locate the RustFS server.
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Region    string
 }
 
 // Default returns the configuration used when no environment is set.
@@ -79,6 +102,13 @@ func Default() Config {
 		TenantID:       DefaultTenantID,
 		ProjectID:      DefaultProjectID,
 		LogLevel:       slog.LevelInfo,
+		ObjStore: ObjStoreConfig{
+			Backend:   ObjStoreMemory,
+			Endpoint:  "http://127.0.0.1:9000",
+			AccessKey: "rustfsadmin", // RustFS's documented default credentials
+			SecretKey: "rustfsadmin",
+			Region:    "us-east-1",
+		},
 	}
 }
 
@@ -109,6 +139,11 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"TENANT_ID", func(v string) error { c.TenantID = v; return nil }},
 		{"PROJECT_ID", func(v string) error { c.ProjectID = v; return nil }},
 		{"LOG_LEVEL", func(v string) error { return c.LogLevel.UnmarshalText([]byte(v)) }},
+		{"OBJSTORE", func(v string) error { return parseObjStore(v, &c.ObjStore.Backend) }},
+		{"OBJSTORE_ENDPOINT", func(v string) error { c.ObjStore.Endpoint = v; return nil }},
+		{"OBJSTORE_ACCESS_KEY", func(v string) error { c.ObjStore.AccessKey = v; return nil }},
+		{"OBJSTORE_SECRET_KEY", func(v string) error { c.ObjStore.SecretKey = v; return nil }},
+		{"OBJSTORE_REGION", func(v string) error { c.ObjStore.Region = v; return nil }},
 	}
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
@@ -190,6 +225,18 @@ func parseIDMode(v string, out *nid.Mode) error {
 		*out = nid.Sequential
 	default:
 		return fmt.Errorf("want random or sequential, got %q", v)
+	}
+	return nil
+}
+
+func parseObjStore(v string, out *ObjStoreBackend) error {
+	switch v {
+	case "memory":
+		*out = ObjStoreMemory
+	case "rustfs":
+		*out = ObjStoreRustFS
+	default:
+		return fmt.Errorf("want memory or rustfs, got %q", v)
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
+	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 )
 
 // Instance is a running mocker.
@@ -34,8 +35,9 @@ type Instance struct {
 }
 
 type settings struct {
-	cfg  config.Config
-	logs bool
+	cfg      config.Config
+	logs     bool
+	objStore objstore.Store
 }
 
 // Option adjusts the instance before start.
@@ -65,6 +67,12 @@ func WithTokens(tokens map[string]string) Option {
 	}
 }
 
+// WithObjStore makes the instance use s as its object store (default: a
+// fresh in-memory store).
+func WithObjStore(s objstore.Store) Option {
+	return func(st *settings) { st.objStore = s }
+}
+
 // WithLogs writes the mocker's request log to the test output.
 func WithLogs() Option {
 	return func(s *settings) { s.logs = true }
@@ -85,7 +93,11 @@ func StartT(tb testing.TB, modules []mocker.Module, opts ...Option) *Instance {
 	if s.logs {
 		log = slog.New(slog.NewTextHandler(tb.Output(), &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	srv, err := mocker.New(cfg, log, modules)
+	var mopts []mocker.Option
+	if s.objStore != nil {
+		mopts = append(mopts, mocker.WithObjStore(s.objStore))
+	}
+	srv, err := mocker.New(cfg, log, modules, mopts...)
 	if err != nil {
 		tb.Fatalf("testkit: assemble mocker: %v", err)
 	}

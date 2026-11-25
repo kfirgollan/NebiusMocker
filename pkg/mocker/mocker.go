@@ -19,6 +19,9 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/edge"
 	"github.com/kfirgollan/NebiusMocker/pkg/interceptors"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
+	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
+	objmemory "github.com/kfirgollan/NebiusMocker/pkg/objstore/memory"
+	objrustfs "github.com/kfirgollan/NebiusMocker/pkg/objstore/rustfs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 	opsapi "github.com/kfirgollan/NebiusMocker/pkg/operations/api"
 	opsdal "github.com/kfirgollan/NebiusMocker/pkg/operations/dal"
@@ -54,17 +57,24 @@ type Deps struct {
 	Authz *authz.Engine
 	// Rules is where modules declare the permission each RPC needs.
 	Rules *authz.Rules
+	// ObjStore is the object-storage backend shared by modules that keep
+	// blobs (memory or RustFS, from Config.ObjStore).
+	ObjStore objstore.Store
 }
 
 // Option customizes a Server.
 type Option func(*options)
 
 type options struct {
-	clk clock.Clock
+	clk      clock.Clock
+	objStore objstore.Store
 }
 
 // WithClock replaces the real clock (tests use clock.Manual).
 func WithClock(c clock.Clock) Option { return func(o *options) { o.clk = c } }
+
+// WithObjStore replaces the object store built from Config.ObjStore.
+func WithObjStore(s objstore.Store) Option { return func(o *options) { o.objStore = s } }
 
 // Server is an assembled, not-yet-started mocker.
 type Server struct {
@@ -98,6 +108,12 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	if err != nil {
 		return nil, err
 	}
+	objs := o.objStore
+	if objs == nil {
+		if objs, err = newObjStore(cfg.ObjStore, o.clk); err != nil {
+			return nil, err
+		}
+	}
 	engine := authz.NewEngine(authz.DefaultCatalog())
 	rules := authz.NewRules()
 	srv := edge.New(log,
@@ -114,7 +130,7 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled,
 		deps: Deps{
 			Config: cfg, Store: store.NewMemory(), Ops: ops, Clock: o.clk, IDs: ids, Log: log,
-			Authz: engine, Rules: rules,
+			Authz: engine, Rules: rules, ObjStore: objs,
 		},
 	}, nil
 }
@@ -177,6 +193,24 @@ func (s *Server) stopModules(ctx context.Context) {
 				s.log.ErrorContext(ctx, "stop module", "module", m.Name(), "error", err)
 			}
 		}
+	}
+}
+
+// newObjStore builds the configured object-storage backend.
+func newObjStore(cfg config.ObjStoreConfig, clk clock.Clock) (objstore.Store, error) {
+	switch cfg.Backend {
+	case config.ObjStoreMemory:
+		return objmemory.New(clk), nil
+	case config.ObjStoreRustFS:
+		c, err := objrustfs.New(objrustfs.Config{
+			Endpoint: cfg.Endpoint, AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, Region: cfg.Region,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("objstore: %w", err)
+		}
+		return c, nil
+	default:
+		return nil, fmt.Errorf("objstore: unknown backend %d", cfg.Backend)
 	}
 }
 

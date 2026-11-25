@@ -48,3 +48,27 @@ func TestFromLookupErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestFromLookupObjStore(t *testing.T) {
+	t.Parallel()
+	if got := Default().ObjStore.Backend; got != ObjStoreMemory {
+		t.Fatalf("default objstore backend = %v, want memory", got)
+	}
+	c, err := FromLookup(lookup(map[string]string{
+		"NEBIUS_MOCKER_OBJSTORE":            "rustfs",
+		"NEBIUS_MOCKER_OBJSTORE_ENDPOINT":   "http://rustfs:9000",
+		"NEBIUS_MOCKER_OBJSTORE_ACCESS_KEY": "ak",
+		"NEBIUS_MOCKER_OBJSTORE_SECRET_KEY": "sk",
+		"NEBIUS_MOCKER_OBJSTORE_REGION":     "eu-north1",
+	}))
+	if err != nil {
+		t.Fatalf("FromLookup: %v", err)
+	}
+	want := ObjStoreConfig{Backend: ObjStoreRustFS, Endpoint: "http://rustfs:9000", AccessKey: "ak", SecretKey: "sk", Region: "eu-north1"}
+	if c.ObjStore != want {
+		t.Fatalf("ObjStore = %+v, want %+v", c.ObjStore, want)
+	}
+	if _, err := FromLookup(lookup(map[string]string{"NEBIUS_MOCKER_OBJSTORE": "s3"})); err == nil {
+		t.Error("FromLookup(OBJSTORE=s3) succeeded, want error")
+	}
+}
