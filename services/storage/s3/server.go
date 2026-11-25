@@ -62,7 +62,10 @@ type BucketOps interface {
 	DeleteFromS3(ctx context.Context, id string) error
 	UpdateSpecFromS3(ctx context.Context, id string, mutate func(*storagepb.BucketSpec)) error
 	CheckCapacity(ctx context.Context, b *storagepb.Bucket, incoming int64) error
+	// ObjectSize takes the object-store bucket (Backend), not the Nebius name.
 	ObjectSize(ctx context.Context, bucket, key, versionID string) (int64, error)
+	// Backend is the object-store bucket that holds a bucket's objects.
+	Backend(ctx context.Context, b *storagepb.Bucket) (string, error)
 }
 
 // Config configures a Server.
@@ -235,13 +238,23 @@ func (s *Server) handle(w *responseWriter, r *http.Request, t target) error {
 	if op.action == domain.ActDeleteObjects {
 		return s.deleteObjects(ctx, w, r, t, principal, b)
 	}
-	acc, err := s.authorize(ctx, principal, t.Bucket, op)
+	acc, src, err := s.authorize(ctx, principal, t.Bucket, op)
 	if err != nil {
+		return err
+	}
+	if err := checkFilesystemAction(acc.Bucket, op.action); err != nil {
 		return err
 	}
 	if h, ok := configHandlers[op.action]; ok {
 		return h(ctx, s, configReq{w: w, b: acc.Bucket, bd: b})
 	}
+	if t.store, err = s.buckets.Backend(ctx, acc.Bucket); err != nil {
+		return err
+	}
+	if err := s.resolveCopySource(ctx, r, op.copy, src); err != nil {
+		return err
+	}
+	w.filesystem(acc.Bucket, t)
 	return s.forward(w, r, t, op, acc.Bucket, b)
 }
 
@@ -257,20 +270,23 @@ func (s *Server) listBuckets(ctx context.Context, w http.ResponseWriter, princip
 	return nil
 }
 
-func (s *Server) authorize(ctx context.Context, principal, bucket string, op operation) (domain.Access, error) {
+// authorize authorizes the request and, for a copy, reading the source; it
+// returns the source bucket of a copy (else nil).
+func (s *Server) authorize(ctx context.Context, principal, bucket string, op operation) (domain.Access, *storagepb.Bucket, error) {
 	acc, err := s.gate.Authorize(ctx, domain.S3Request{Principal: principal, Bucket: bucket, Action: op.action, Target: op.target})
 	if err != nil {
-		return acc, err
+		return acc, nil, err
 	}
 	s.auditLog(ctx, principal, acc)
-	if op.copy != nil {
-		src, err := s.gate.Authorize(ctx, domain.S3Request{Principal: principal, Bucket: op.copy.Bucket, Action: domain.ActGetObject, Target: op.copy.Key})
-		if err != nil {
-			return acc, err
-		}
-		s.auditLog(ctx, principal, src)
+	if op.copy == nil {
+		return acc, nil, nil
 	}
-	return acc, nil
+	src, err := s.gate.Authorize(ctx, domain.S3Request{Principal: principal, Bucket: op.copy.Bucket, Action: domain.ActGetObject, Target: op.copy.Key})
+	if err != nil {
+		return acc, nil, err
+	}
+	s.auditLog(ctx, principal, src)
+	return acc, src.Bucket, nil
 }
 
 func (s *Server) auditLog(ctx context.Context, principal string, acc domain.Access) {
@@ -284,20 +300,20 @@ func (s *Server) auditLog(ctx context.Context, principal string, acc domain.Acce
 func (s *Server) forward(w *responseWriter, r *http.Request, t target, op operation, b *storagepb.Bucket, bd body) error {
 	ctx := r.Context()
 	if slices.Contains(classedUploads, op.action) {
-		class, err := effectiveClass(b.GetSpec(), r.Header.Get("X-Amz-Storage-Class"))
+		class, err := effectiveClass(b, r.Header.Get("X-Amz-Storage-Class"))
 		if err != nil {
 			return err
 		}
 		r.Header.Set("X-Amz-Storage-Class", domain.BackendClass(class))
 	}
-	w.rewriteBody = slices.Contains(classListings, op.action)
+	w.rewriteBody = slices.Contains(classListings, op.action) || w.names != nil && slices.Contains(namedResponses, op.action)
 	if op.action.AddsBytes() {
 		if err := s.checkCapacity(ctx, b, t, op, bd.length); err != nil {
 			return err
 		}
 	}
 	s.upstream.Forward(w, rustfs.ForwardRequest{
-		In: r, Bucket: t.Bucket, Key: t.Key, Body: bd.r, ContentLength: bd.length, PayloadHash: bd.hash,
+		In: r, Bucket: t.storeBucket(), Key: t.Key, Body: bd.r, ContentLength: bd.length, PayloadHash: bd.hash,
 	})
 	return nil
 }
@@ -310,8 +326,16 @@ var (
 )
 
 // effectiveClass is the storage class of an upload: the bucket default when
-// forced or when the request names none, else the request's class.
-func effectiveClass(spec *storagepb.BucketSpec, header string) (storagepb.StorageClass, error) {
+// forced or when the request names none, else the request's class. Objects of
+// filesystem buckets are always in the FILESYSTEM class.
+func effectiveClass(b *storagepb.Bucket, header string) (storagepb.StorageClass, error) {
+	if domain.IsFilesystemBucket(b) {
+		if header != "" && header != domain.S3ClassName(storagepb.StorageClass_FILESYSTEM) {
+			return 0, coded("InvalidStorageClass", http.StatusBadRequest, "objects of filesystem buckets are stored in the FILESYSTEM class, not "+header)
+		}
+		return storagepb.StorageClass_FILESYSTEM, nil
+	}
+	spec := b.GetSpec()
 	def := spec.GetDefaultStorageClass()
 	if def == storagepb.StorageClass_STORAGE_CLASS_UNSPECIFIED {
 		def = storagepb.StorageClass_STANDARD
@@ -323,7 +347,7 @@ func effectiveClass(spec *storagepb.BucketSpec, header string) (storagepb.Storag
 }
 
 func (s *Server) checkCapacity(ctx context.Context, b *storagepb.Bucket, t target, op operation, length int64) error {
-	if b.GetSpec().GetMaxSizeBytes() == 0 {
+	if b.GetSpec().GetMaxSizeBytes() == 0 && !domain.IsFilesystemBucket(b) {
 		return nil
 	}
 	incoming := length
@@ -337,10 +361,11 @@ func (s *Server) checkCapacity(ctx context.Context, b *storagepb.Bucket, t targe
 		}
 		incoming = n
 	}
-	// An overwrite in a never-versioned bucket replaces the old bytes.
+	// An overwrite in a never-versioned bucket (filesystem buckets are never
+	// versioned) replaces the old bytes.
 	if (op.action == domain.ActPutObject || op.action == domain.ActCopyObject) &&
 		b.GetSpec().GetVersioningPolicy() == storagepb.VersioningPolicy_DISABLED {
-		if old, err := s.buckets.ObjectSize(ctx, t.Bucket, t.Key, ""); err == nil {
+		if old, err := s.buckets.ObjectSize(ctx, t.storeBucket(), t.Key, ""); err == nil {
 			incoming -= old
 		}
 	}
@@ -352,7 +377,7 @@ func (s *Server) copySize(ctx context.Context, cs *copySource) (int64, error) {
 	if cs.Length >= 0 {
 		return cs.Length, nil
 	}
-	return s.buckets.ObjectSize(ctx, cs.Bucket, cs.Key, cs.VersionID)
+	return s.buckets.ObjectSize(ctx, cs.storeBucket(), cs.Key, cs.VersionID)
 }
 
 // createBucket serves S3 CreateBucket (aws s3 mb): a Nebius bucket with

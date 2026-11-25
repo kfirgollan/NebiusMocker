@@ -81,6 +81,9 @@ func (s *Server) deleteObjects(ctx context.Context, w *responseWriter, r *http.R
 		return err
 	}
 	s.auditLog(ctx, principal, acc)
+	if t.store, err = s.buckets.Backend(ctx, acc.Bucket); err != nil {
+		return err
+	}
 	out := &bulkDeleteOutcome{Errors: map[string]string{}}
 	w.bulkDelete = out
 	var permitted []deleteObject
@@ -117,7 +120,7 @@ func (s *Server) relayDelete(w *responseWriter, r *http.Request, t target, req d
 	}
 	rec := &recorder{header: http.Header{}}
 	s.upstream.Forward(rec, rustfs.ForwardRequest{
-		In: r, Bucket: t.Bucket, Body: bytes.NewReader(body), ContentLength: int64(len(body)), PayloadHash: hex.EncodeToString(sha[:]),
+		In: r, Bucket: t.storeBucket(), Body: bytes.NewReader(body), ContentLength: int64(len(body)), PayloadHash: hex.EncodeToString(sha[:]),
 	})
 	result := rec.body.Bytes()
 	if rec.status == http.StatusOK {

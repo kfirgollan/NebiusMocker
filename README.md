@@ -174,6 +174,7 @@ make hooks   # once: install the pre-commit gate
 make check   # lint (layering rules included) + unit/contract/architecture tests with -race
 make e2e     # real terraform + official nebius provider against the mock
 make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
+make e2e-filesystems  # shared filesystems on RustFS mounted with rclone (FUSE in Docker) via a filesystem bucket
 make e2e-registry  # Harbor + nebius CLI + docker push/pull (needs Docker; Harbor is started and removed)
 make e2e-storage  # Object Storage with RustFS in Docker: Terraform (nebius + aws providers), gosdk + AWS SDK, nebius + aws CLIs
 ```

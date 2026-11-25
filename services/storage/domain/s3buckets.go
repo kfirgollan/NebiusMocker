@@ -122,17 +122,27 @@ func (s *BucketService) await(ctx context.Context, op *operations.Operation) err
 	return op.Err
 }
 
-// CheckCapacity enforces spec.max_size_bytes: a write of incoming bytes is
+// CheckCapacity enforces the filesystem size of a filesystem bucket (see
+// checkFilesystemCapacity) and spec.max_size_bytes: a write of incoming bytes is
 // refused with errs.KindQuotaExceeded when the bucket's stored bytes (current
 // and noncurrent versions plus uploaded multipart parts) would exceed it.
 // Concurrent writes are not serialized, so — as Nebius documents — the size
 // can end up slightly above the limit.
 func (s *BucketService) CheckCapacity(ctx context.Context, b *storagepb.Bucket, incoming int64) error {
+	if IsFilesystemBucket(b) {
+		if err := s.checkFilesystemCapacity(ctx, b, incoming); err != nil {
+			return err
+		}
+	}
 	limit := b.GetSpec().GetMaxSizeBytes()
 	if limit == 0 {
 		return nil
 	}
-	cs, err := ComputeCounters(ctx, s.content, b.GetMetadata().GetName())
+	name, err := s.Backend(ctx, b)
+	if err != nil {
+		return err
+	}
+	cs, err := ComputeCounters(ctx, s.content, name)
 	if err != nil {
 		return fmt.Errorf("bucket %s size: %w", b.GetMetadata().GetName(), err)
 	}

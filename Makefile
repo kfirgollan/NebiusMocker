@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-registry docker-image check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-filesystems e2e-registry docker-image check hooks run tidy clean
 
 all: check
 
@@ -22,7 +22,7 @@ test: ## Unit, contract and architecture tests with the race detector
 	$(GO) test -race -shuffle=on -count=1 ./...
 
 e2e: ## End-to-end tests: real terraform + official nebius provider, official nebius CLI
-	$(GO) test -tags e2e -count=1 -v ./test/terraform/... ./test/internal/nebiuscli/... ./test/kms/... ./test/cli/... ./test/computedisk/... ./test/computeinstance/... ./test/computegpucluster/... ./test/audit/...
+	$(GO) test -tags e2e -count=1 -v ./test/terraform/... ./test/internal/nebiuscli/... ./test/kms/... ./test/cli/... ./test/computedisk/... ./test/computeinstance/... ./test/computegpucluster/... ./test/computefilesystem/... ./test/audit/...
 
 # RustFS containers started by test/rustfsfixture carry this label. Running
 # ones may belong to a concurrent suite (the fixture itself reaps containers of
@@ -39,6 +39,15 @@ e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (need
 	@$(RUSTFS_CLEANUP)
 	@status=0; $(GO) test -tags e2e_images -count=1 -v ./test/compute/... ./test/terraform/compute/... || status=$$?; \
 	$(RUSTFS_CLEANUP); exit $$status
+
+# e2e-filesystems mounts a shared filesystem with the official rclone image
+# (FUSE in a container) through a filesystem bucket on the S3 front.
+RCLONE_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=rclone | xargs docker rm -f -v >/dev/null 2>&1 || true
+
+e2e-filesystems: ## Shared filesystems on RustFS mounted with rclone via a filesystem bucket (needs Docker)
+	@$(RUSTFS_CLEANUP); $(RCLONE_CLEANUP)
+	@status=0; $(GO) test -tags e2e_filesystems -count=1 -v ./test/filesystems/... || status=$$?; \
+	$(RCLONE_CLEANUP); $(RUSTFS_CLEANUP); exit $$status
 
 IMAGE ?= nebius-mocker:dev
 

@@ -80,6 +80,9 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err != nil {
 		return err
 	}
+	if err := registerFilesystems(reg, deps); err != nil {
+		return err
+	}
 	platforms, err := registerPlatforms(reg, deps, regions)
 	if err != nil {
 		return err

@@ -242,3 +242,24 @@ type FilesystemAttachments interface {
 	// filesystem or attachment is not an error.
 	Detach(ctx context.Context, fsID, instanceID string) error
 }
+
+// FilesystemData is the data plane of shared filesystems: the object-store
+// bucket that holds a filesystem's files, one object per file. Satisfied by
+// backend/fsstore.
+type FilesystemData interface {
+	// Bucket returns the name of the bucket that holds the filesystem's files.
+	Bucket(fsID string) string
+	// Provision creates the filesystem's bucket. It is idempotent.
+	Provision(ctx context.Context, fsID string) error
+	// Purge deletes the bucket and every object in it. A missing bucket is
+	// not an error.
+	Purge(ctx context.Context, fsID string) error
+}
+
+// FilesystemBucketUsers lists the Object Storage filesystem buckets that
+// expose a filesystem (satisfied through peer.FilesystemBuckets, provided by
+// the storage module when it is enabled).
+type FilesystemBucketUsers interface {
+	// BucketsOf returns the names of the buckets exposing fsID (none: empty).
+	BucketsOf(ctx context.Context, fsID string) ([]string, error)
+}

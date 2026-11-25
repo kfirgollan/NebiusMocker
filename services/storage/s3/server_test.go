@@ -169,6 +169,10 @@ type opsFake struct {
 	used     int64
 	sizes    map[string]int64
 	updateFn func(*storagepb.BucketSpec) error
+	// capErr, when set, is returned by CheckCapacity whatever the bucket's
+	// own limit (a filesystem that is full); capCalls counts the calls.
+	capErr   error
+	capCalls int
 }
 
 func (o *opsFake) CreateFromS3(_ context.Context, projectID, name string) (*storagepb.Bucket, error) {
@@ -205,6 +209,10 @@ func (o *opsFake) UpdateSpecFromS3(_ context.Context, id string, mutate func(*st
 func (o *opsFake) CheckCapacity(_ context.Context, b *storagepb.Bucket, incoming int64) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.capCalls++
+	if o.capErr != nil {
+		return o.capErr
+	}
 	if limit := b.GetSpec().GetMaxSizeBytes(); limit > 0 && o.used+incoming > limit {
 		return &errs.Error{Kind: errs.KindQuotaExceeded, Message: "full"}
 	}
@@ -218,6 +226,14 @@ func (o *opsFake) ObjectSize(_ context.Context, bucket, key, _ string) (int64, e
 		return n, nil
 	}
 	return 0, objstore.ErrNotFound
+}
+
+// Backend maps filesystem buckets to "fs-store-<filesystem_id>".
+func (o *opsFake) Backend(_ context.Context, b *storagepb.Bucket) (string, error) {
+	if fb := b.GetSpec().GetFilesystemBucket(); fb != nil {
+		return "fs-store-" + fb.GetFilesystemId(), nil
+	}
+	return b.GetMetadata().GetName(), nil
 }
 
 func startFrontWith(t *testing.T, up Upstream, ops BucketOps, buckets ...*storagepb.Bucket) *httptest.Server {

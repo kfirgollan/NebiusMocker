@@ -23,6 +23,10 @@ type responseWriter struct {
 	cors        *domain.CORSMatch
 	vary        bool
 	rewriteBody bool
+	// fsClass reports objects in the FILESYSTEM class (filesystem buckets);
+	// names maps the store's bucket name back to the Nebius one in bodies.
+	fsClass bool
+	names   *strings.Replacer
 	// bulkDelete is the per-key outcome of a DeleteObjects request (nil otherwise).
 	bulkDelete *bulkDeleteOutcome
 
@@ -50,6 +54,9 @@ func (w *responseWriter) WriteHeader(code int) {
 	}
 	if c := h.Get("X-Amz-Storage-Class"); c != "" {
 		h.Set("X-Amz-Storage-Class", domain.BackendToS3Class(c))
+		if w.fsClass {
+			h.Set("X-Amz-Storage-Class", domain.S3ClassName(storagepb.StorageClass_FILESYSTEM))
+		}
 	}
 	if w.rewriteBody {
 		w.status = code
@@ -79,7 +86,11 @@ func (w *responseWriter) finish() {
 	if !w.rewriteBody || !w.wroteHeader {
 		return
 	}
-	out := []byte(classElements.Replace(w.buf.String()))
+	body := classElements.Replace(w.buf.String())
+	if w.names != nil {
+		body = w.names.Replace(body)
+	}
+	out := []byte(body)
 	w.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	w.ResponseWriter.WriteHeader(w.status)
 	_, _ = w.ResponseWriter.Write(out) // a gone client needs no handling

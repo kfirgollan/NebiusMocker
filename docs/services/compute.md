@@ -33,9 +33,14 @@
 | Instance/platform authorization: `compute.instances.{get,list,create,update,delete,start,stop}`, `compute.platforms.{get,list}` on the project | ✅ |
 | `nebius_compute_v1_instance` resource and data source (CPU and GPU platforms, GPU cluster) with the official Terraform provider | ✅ e2e: `test/terraform/compute/instance_test.go` (`make e2e`) |
 | `nebius compute instance …` / `nebius compute platform list` CLI flows | ✅ e2e: `test/computeinstance` (`make e2e`, no Docker) |
-| Filesystems, NVL groups, maintenance, nodes | Planned |
+| `nebius.compute.v1.FilesystemService`: Get, GetByName, List (paged; deprecated `filter` rejected), Create, Update (reset mask, `resource_version`, grow-only hot resize; name, type and block size immutable), Delete (`FAILED_PRECONDITION` while `forbid_deletion`, attached to instances or exposed by filesystem buckets), ListOperationsByParent | ✅ T2, with a real data plane: every filesystem is an object-store bucket (RustFS) |
+| Filesystem attachment port (`domain.FilesystemAttachments`: Attach/Detach) for InstanceService `spec.filesystems`: exists, same project, `READY`, `READ_WRITE` only; recorded in `status.read_write_attachments` in the same store transaction as the checks, so Attach and filesystem Delete never both win | ✅ (domain + DAL tests incl. an Attach-vs-Delete race; used by InstanceService) |
+| Mounting: Object Storage **filesystem buckets** (`storage.v1` `spec.filesystem_bucket`) expose a filesystem through the S3 front; users mount them with rclone (FUSE). Writes beyond the filesystem size fail | ✅ e2e: `test/filesystems` (`make e2e-filesystems`, Docker: RustFS + `rclone/rclone`) |
+| `nebius_compute_v1_filesystem` resource + data source (with a `nebius_storage_v1_bucket` filesystem bucket in the same config) with the official Terraform provider | ✅ e2e: `test/terraform/compute/filesystem_test.go` (`make e2e`) |
+| `nebius compute filesystem create/get/get-by-name/list/update/delete` CLI flows | ✅ e2e: `test/computefilesystem` (`make e2e`, no Docker) |
+| NVL groups, maintenance, nodes | Planned |
 
-Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (filesystems: RustFS 1.0.6, rclone 1.71.2, nebius CLI 0.12.312).
 
 Tests: domain unit tests with fakes (`services/compute/domain`, incl. a fuzzed payload inspector and the disk size/type/state rules), DAL tests on the
 memory store, the blob adapter on the memory object store, gosdk contract tests (`test/contract/compute_image_test.go`,
@@ -106,6 +111,16 @@ object-storage/objects/upload-download); they never write into the object store,
   capacity reservations, spot pricing policies and local disk passthrough are not implemented (their spec fields are
   rejected by name, see above).
 - Platform presets, GPU memory, quota type names and region availability are illustrative.
+- Filesystems:
+  - no VM mounts (virtiofs with the `mount_tag`): there are no VMs; mounts go through filesystem buckets and rclone;
+  - no IOPS/throughput limits, no inode or max-file-size limits, no encryption settings (always on upstream);
+  - no quotas (`compute.filesystem.size.<type>`);
+  - `READ_ONLY` attachments (upstream supports only `READ_WRITE`);
+  - filesystem buckets: only the root `directory` and default `uid`/`gid`/`file_mode`/`directory_mode` (POSIX
+    ownership and permissions are not emulated), and only in the filesystem's project. Versioning, lifecycle rules,
+    object tagging and anonymous access are refused for filesystem buckets, as the Nebius S3 compatibility page lists
+    them as unsupported; checksums and ETags behave like regular buckets (RustFS);
+  - `NETWORK_HDD`, `WEKA`, `VAST` types (undocumented limits).
 - GPU clusters: no fabric or topology simulation (`infiniband_topology_path` is synthetic), no capacity modeling, no
   quota (upstream: 5 GPU clusters per region). The exact upstream error for an instance whose platform does not match
   the cluster's fabric is undocumented; the mock answers `INVALID_ARGUMENT` on `spec.gpu_cluster.id`.
@@ -302,7 +317,105 @@ Management APIs only: a disk is a record with a lifecycle. No storage is allocat
   concurrent delete. The operations engine only serializes per resource ID.
 - `DiskReader` (`domain/ports.go`, `dal.NewDiskReader`) gives images read access for image-from-disk/snapshot.
 
-Filesystems (planned) will follow the same size rules.
+### Shared filesystems (implemented)
+
+Rules from https://docs.nebius.com/compute/storage/types and /compute/storage/manage (read 2026-11-25):
+- **Types**: only `NETWORK_SSD` is documented. `NETWORK_HDD`, `WEKA` and `VAST` are in the proto enum ("the list of
+  available types will be clarified later") but have no documented limits, so they are `INVALID_ARGUMENT` ("not
+  available") rather than given invented ones.
+- **Size**: 1 GiB to 100 PiB (104,857,600 GiB), any unit of the `size` oneof. The docs give no size multiple, so none is
+  enforced. `status.size_bytes` is the normalized size. Sizes only grow; a grow is a hot resize (`UPDATING`, then
+  `READY` with the new `status.size_bytes`).
+- **Block size**: a power of two from 4 KiB to 128 KiB, default 4096 in `status.block_size_bytes`; `spec` echoes what
+  was sent (no drift).
+- **Immutable**: type and block size (Terraform replaces), and the name (docs: "cannot be changed"; an Update with a
+  different name is `INVALID_ARGUMENT`). Labels and `forbid_deletion` are mutable.
+- **Delete** is `FAILED_PRECONDITION` while `forbid_deletion` is set, while instances are attached
+  (`status.read_write_attachments`), and while an Object Storage filesystem bucket exposes it (the docs don't say what
+  upstream does; refusing keeps the bucket from silently pointing at nothing). The operation then purges every file.
+- **Attachments** (docs: compute/storage/use): one filesystem attaches to many VMs of its project, `READ_WRITE` only.
+  InstanceService checks that the VM is stopped and that `mount_tag` is unique per VM, then calls
+  `FilesystemAttachments.Attach`. Instance delete detaches.
+
+#### Data plane design
+
+- Each filesystem is backed by its own internal object-store bucket `nebius-mocker-fs-<filesystem-id>` (the
+  `nebius-mocker-` prefix is reserved for internal buckets; `services/compute/backend/fsstore`). The Create operation
+  provisions it in its `Work` (a failure leaves the filesystem `ERROR` with `state_description`); the Delete operation
+  removes it with every file. A file is one object keyed by its path. With `NEBIUS_MOCKER_OBJSTORE=rustfs` this is
+  RustFS; the default memory store keeps the same semantics for Docker-free tests.
+- **Access path**: Nebius exposes a filesystem over S3 with **filesystem buckets**
+  (https://docs.nebius.com/object-storage/buckets/filesystem-buckets: "the Object Storage interface to an existing
+  shared filesystem", used with "AWS CLI, rclone, or s5cmd"). The mocker implements exactly that: a `storage.v1`
+  bucket with `spec.filesystem_bucket.filesystem_id` is a view of the filesystem's store bucket. The S3 front
+  (`:4580`) authenticates and authorizes it like any bucket (SigV4 with an iam.v2 access key, `storage.*` permits), then
+  relays to the store bucket; response bodies name the Nebius bucket and report the `FILESYSTEM` storage class.
+  Storage reaches compute only through `peer.FilesystemsKey` and compute reaches storage through
+  `peer.FilesystemBucketsKey` (`pkg/peer/filesystems.go`).
+- **Capacity**: every write that adds bytes (PutObject, CopyObject, UploadPart, UploadPartCopy) is refused with S3
+  `QuotaExceeded` when the stored bytes of the filesystem (all files plus in-flight multipart parts, shared by every
+  bucket of the filesystem) plus the request would exceed `status.size_bytes`. An overwrite counts only the size
+  difference, and deletes free space immediately (the store bucket is never versioned). Concurrent writes are not
+  serialized, so the limit can be overshot by in-flight requests, as for `max_size_bytes`.
+- Deleting a filesystem bucket is immediate (no delayed deletion or restore) and keeps the files; a new filesystem
+  bucket on the same filesystem shows them.
+
+#### Mounting a shared filesystem (user guide)
+
+There are no VMs, so you mount the filesystem from your machine or a container with rclone, through a filesystem
+bucket. The mocker must run with `NEBIUS_MOCKER_OBJSTORE=rustfs` (the S3 front needs RustFS).
+
+1. Create the filesystem and a filesystem bucket (Terraform, or `nebius compute filesystem create --parent-id <project>
+   --name shared --type network_ssd --size-gibibytes 1` and `nebius storage bucket create --parent-id <project> --name
+   shared-fs --filesystem-bucket-filesystem-id <filesystem-id>`):
+
+   ```hcl
+   resource "nebius_compute_v1_filesystem" "shared" {
+     name             = "shared"
+     type             = "NETWORK_SSD"
+     size_gibibytes   = 1
+     block_size_bytes = 4096
+   }
+
+   resource "nebius_storage_v1_bucket" "shared" {
+     name              = "shared-fs"
+     filesystem_bucket = { filesystem_id = nebius_compute_v1_filesystem.shared.id }
+   }
+   ```
+
+   Only the filesystem root with default ownership can be exposed: `directory` may be empty or `"/"`, `uid` and `gid`
+   0, `file_mode` empty or `"644"`, `directory_mode` empty or `"755"` (other values are `INVALID_ARGUMENT`, see Not
+   yet). The filesystem must be `READY` and in the bucket's project, and the caller needs
+   `compute.filesystems.useViaObjectStorage` on it (the `editor` role or `compute.use-via-object-storage`).
+2. Create a service account in the project's `editors` group and an access key (`nebius iam service-account create`,
+   `nebius iam group-membership create --parent-id <editors-group-id> --member-id <sa-id>`, `nebius iam v2 access-key
+   create --parent-id <project> --account-service-account-id <sa-id>`), and read the secret with `nebius iam v2
+   access-key get-secret --id <key-id>` (or `secret_delivery_mode = "EXPLICIT"` in Terraform and the
+   `nebius_iam_v2_access_key_secret` ephemeral resource).
+3. Configure rclone (`~/.config/rclone/rclone.conf`; in the official image `/config/rclone/rclone.conf`):
+
+   ```ini
+   [nebius]
+   type = s3
+   provider = Other
+   access_key_id = <aws_access_key_id>
+   secret_access_key = <secret>
+   endpoint = http://localhost:4580          # from a container on Docker Desktop: http://host.docker.internal:4580
+   region = eu-north1
+   force_path_style = true
+   ```
+
+4. Mount:
+   - in a container (any host with Docker; this is what `make e2e-filesystems` runs):
+     `docker run --rm -it --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor:unconfined -v
+     ~/.config/rclone:/config/rclone --entrypoint sh rclone/rclone:1.71.2 -c 'mkdir -p /mnt/fs && rclone mount
+     nebius:shared-fs /mnt/fs --daemon && sh'`. Unmount with `umount /mnt/fs` before the container exits so pending
+     writes finish;
+   - on a Linux host with FUSE: `rclone mount nebius:shared-fs /mnt/fs` (same remote; not covered by the e2e suite);
+   - on macOS, rclone documents `rclone nfsmount` as the variant that needs no macFUSE (not covered by the e2e suite).
+
+   Files written through any mount (or with `aws s3 cp` to the bucket) are visible to every other mount. A write that
+   would exceed the filesystem size fails (`QuotaExceeded` from the S3 front; an I/O error in the mount).
 
 ### GPU clusters (implemented)
 
@@ -341,7 +454,7 @@ fabrics:
 - `ListInstancesByNVLInstanceGroup` and `BatchGet` (up to the documented max IDs; missing IDs are omitted) are index queries.
 
 ### Permissions and quotas
-- Permissions: `compute.instances.*` (+ `start`, `stop`), `compute.disks.*`, `compute.disksnapshots.*` (implemented), `compute.filesystems.*`,
+- Permissions: `compute.instances.*` (+ `start`, `stop`), `compute.disks.*`, `compute.disksnapshots.*`, `compute.filesystems.*` (implemented; plus `compute.filesystems.useViaObjectStorage` for filesystem buckets),
   `compute.images.*`, `compute.gpuClusters.*`, `compute.nvlInstanceGroups.*`, `compute.platforms.get/list`.
 - Quotas: `compute.instance.count`, `compute.vcpu`, `compute.memory`, `compute.gpu.<gpu_count_quota_type>`,
   `compute.disk.count`, `compute.disk.size.<type>`, `compute.filesystem.size.<type>`. vCPU/memory/GPU are charged while

@@ -13,6 +13,17 @@ import (
 type target struct {
 	Bucket string
 	Key    string
+	// store is the object-store bucket that holds Bucket's objects, once
+	// resolved; it differs from Bucket for filesystem buckets.
+	store string
+}
+
+// storeBucket is the object-store bucket to relay to.
+func (t target) storeBucket() string {
+	if t.store != "" {
+		return t.store
+	}
+	return t.Bucket
 }
 
 // parseTarget reads the bucket from a virtual-hosted host name
@@ -44,6 +55,15 @@ type copySource struct {
 	Bucket, Key, VersionID string
 	// Length is the x-amz-copy-source-range length, or -1 for the whole object.
 	Length int64
+	// store is the object-store bucket of Bucket, once resolved.
+	store string
+}
+
+func (cs *copySource) storeBucket() string {
+	if cs.store != "" {
+		return cs.store
+	}
+	return cs.Bucket
 }
 
 // otherBucketReads are bucket sub-resources relayed to the backend as reads.

@@ -37,6 +37,11 @@ const (
 	VerbRestart = "restart"
 )
 
+// VerbUseViaObjectStorage exposes a compute shared filesystem through an
+// Object Storage filesystem bucket (Nebius: editor or the
+// compute.use-via-object-storage role).
+const VerbUseViaObjectStorage = "useViaObjectStorage"
+
 // Perm builds a permission from its parts.
 func Perm(service, resources, verb string) Permission {
 	return Permission(service + "." + resources + "." + verb)
@@ -94,6 +99,9 @@ const (
 	// RoleAuditor reads everything a viewer reads plus the audit log, and
 	// runs audit exports.
 	RoleAuditor = "auditor"
+	// RoleComputeUseViaObjectStorage gives access to shared filesystems
+	// through Object Storage filesystem buckets.
+	RoleComputeUseViaObjectStorage = "compute.use-via-object-storage"
 )
 
 // permMysteryBoxPayloadRead reads decrypted secret payloads. Its verb is not
@@ -132,7 +140,8 @@ func DefaultCatalog() *Catalog {
 				// docs: crypto operations need the editor role). Viewers can
 				// read keys and public keys but cannot encrypt, decrypt or sign.
 				"kms.*.encrypt", "kms.*.decrypt", "kms.*.sign", "kms.*.rotate", "kms.*.undelete",
-				"*.*."+VerbStart, "*.*."+VerbStop, "*.*."+VerbRestart),
+				"*.*."+VerbStart, "*.*."+VerbStop, "*.*."+VerbRestart,
+				"compute.filesystems."+VerbUseViaObjectStorage),
 			// Editors manage resources, not who may access them.
 			Excludes: []string{
 				"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete",
@@ -142,6 +151,7 @@ func DefaultCatalog() *Catalog {
 		Role{Name: RoleAdmin, Grants: []string{"*"}},
 		Role{Name: RoleMysteryBoxPayloadViewer, Grants: []string{permMysteryBoxPayloadRead}},
 		Role{Name: RoleAuditor, Grants: append(slices.Clone(read), auditPermissions)},
+		Role{Name: RoleComputeUseViaObjectStorage, Grants: []string{"compute.filesystems." + VerbUseViaObjectStorage}},
 	)
 }
 

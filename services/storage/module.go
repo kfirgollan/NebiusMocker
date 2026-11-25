@@ -80,7 +80,8 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
 		Buckets: buckets, Backend: deps.ObjStore, Content: content, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
-		Settings: domain.Settings{Region: cfg.Region, Domain: cfg.S3Domain, PurgeGrace: cfg.PurgeGrace},
+		Settings:    domain.Settings{Region: cfg.Region, Domain: cfg.S3Domain, PurgeGrace: cfg.PurgeGrace},
+		Filesystems: peerFilesystems{deps.Peers}, Access: deps.Authz, Mode: deps.Config.Authz, Log: deps.Log,
 	})
 	if err != nil {
 		return fmt.Errorf("storage: %w", err)
@@ -91,6 +92,9 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	})
 	api.RegisterAuthzRules(deps.Rules)
 	if err := peer.Provide[peer.BucketResolver](deps.Peers, peer.BucketResolverKey, svc); err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	if err := peer.Provide[peer.FilesystemBuckets](deps.Peers, peer.FilesystemBucketsKey, svc); err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
 	storagepb.RegisterBucketServiceServer(reg, api.NewBucketHandler(svc))
@@ -132,6 +136,20 @@ func (p peerAccessKeys) ResolveAccessKey(ctx context.Context, id string) (peer.A
 		return peer.AccessKey{}, errs.Unauthenticated("no access-key source (the iam module is not enabled)")
 	}
 	return keys.ResolveAccessKey(ctx, id)
+}
+
+// peerFilesystems resolves filesystem-bucket filesystems through the compute
+// module's capability, looked up per call (compute may be disabled).
+type peerFilesystems struct{ d *peer.Directory }
+
+func (p peerFilesystems) Filesystem(ctx context.Context, id string) (peer.Filesystem, error) {
+	fs, ok := peer.Lookup(p.d, peer.FilesystemsKey)
+	if !ok {
+		return peer.Filesystem{}, errs.BadRequest(errs.Violation{
+			Field: "spec.filesystem_bucket.filesystem_id", Message: "filesystem buckets need the compute module, which is not enabled",
+		})
+	}
+	return fs.Filesystem(ctx, id)
 }
 
 // upstreamFor picks the S3 relay for the configured object store.

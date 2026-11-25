@@ -24,7 +24,7 @@
 | Objects with the unmodified `hashicorp/aws` provider (`aws_s3_object` + data source) against the S3 front | ✅ e2e: `test/terraform/storage` (`make e2e-storage`) |
 | Go SDK: buckets with `gosdk`, objects with the AWS SDK for Go v2 | ✅ e2e: `test/storage` (`make e2e-storage`) |
 | Documented CLI flows: `nebius storage bucket …`, the quick start (`nebius iam …` service account + access key, `aws configure set …`, `aws s3 mb/cp/ls/sync/mv/rm/rb`, `aws s3api put/get-bucket-lifecycle-configuration`) | ✅ e2e: `test/storage/cli_e2e_test.go` (`make e2e-storage`; pinned CLIs installed into the user cache, never system-wide) |
-| Filesystem buckets (`spec.filesystem_bucket`) | ❌ rejected with `INVALID_ARGUMENT` |
+| Filesystem buckets (`spec.filesystem_bucket`): a view of a compute shared filesystem (READY, same project, `compute.filesystems.useViaObjectStorage` on it); `status.bucket_type` `FILESYSTEM`; objects relayed to the filesystem's store bucket with the filesystem size as capacity; `FILESYSTEM` storage class; immediate delete that keeps the files; `ListWithFilter` by type and `filesystem_id`. Refused by name: non-root `directory`, non-default `uid`/`gid`/`file_mode`/`directory_mode`, versioning, lifecycle rules, anonymous policies, delayed deletion, S3 PutBucketVersioning/PutBucketLifecycleConfiguration/object tagging (501) | ✅ e2e: `test/filesystems` (`make e2e-filesystems`), `test/terraform/compute/filesystem_test.go`. See [compute.md](compute.md#shared-filesystems-implemented) |
 | `InventoryService`, `TransferService` (v1, v1alpha1) | Not yet (UNIMPLEMENTED) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (hashicorp/aws 6.70.0, RustFS 1.0.6, nebius CLI 0.12.312, AWS CLI 2.42.3).

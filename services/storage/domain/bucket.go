@@ -1,9 +1,11 @@
 package domain
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	storagepb "github.com/nebius/gosdk/proto/nebius/storage/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
@@ -48,6 +51,11 @@ type BucketService struct {
 	ids     IDGenerator
 	clk     clock.Clock
 	set     Settings
+
+	filesystems Filesystems
+	access      AccessChecker
+	mode        authz.Mode
+	log         *slog.Logger
 }
 
 // BucketDeps are the dependencies of a BucketService. All are required.
@@ -61,6 +69,15 @@ type BucketDeps struct {
 	IDs       IDGenerator
 	Clock     clock.Clock
 	Settings  Settings
+	// Filesystems resolves the compute filesystems of filesystem buckets;
+	// nil rejects filesystem buckets.
+	Filesystems Filesystems
+	// Access and Mode authorize exposing a filesystem through a filesystem
+	// bucket (PermFilesystemViaObjectStorage); a nil Access skips the check.
+	Access AccessChecker
+	Mode   authz.Mode
+	// Log receives audit-mode authorization warnings; nil discards them.
+	Log *slog.Logger
 }
 
 // NewBucketService wires a BucketService.
@@ -73,6 +90,7 @@ func NewBucketService(d BucketDeps) (*BucketService, error) {
 	}
 	return &BucketService{
 		buckets: d.Buckets, backend: d.Backend, content: d.Content, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, set: d.Settings,
+		filesystems: d.Filesystems, access: d.Access, mode: d.Mode, log: cmp.Or(d.Log, slog.New(slog.DiscardHandler)),
 	}, nil
 }
 
@@ -106,13 +124,14 @@ func (s *BucketService) Get(ctx context.Context, id string) (*storagepb.Bucket, 
 }
 
 // BackendBucket implements peer.BucketResolver: the object-store bucket that
-// holds a Nebius bucket's objects (names map 1:1).
+// holds a Nebius bucket's objects (names map 1:1, except for filesystem
+// buckets, whose objects are the filesystem's files).
 func (s *BucketService) BackendBucket(ctx context.Context, id string) (string, error) {
 	b, err := s.buckets.Get(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	return b.GetMetadata().GetName(), nil
+	return s.Backend(ctx, b)
 }
 
 // GetByName returns a bucket by project and name.
@@ -143,14 +162,39 @@ func (s *BucketService) List(ctx context.Context, parentID string, pageSize int6
 	return page, nil
 }
 
-// ListWithFilter is List restricted by bucket type and filesystem. The
-// mocker has only regular buckets, so a FILESYSTEM or filesystem_id filter
-// matches nothing.
+// ListWithFilter is List restricted by bucket type and filesystem: it walks
+// the project's buckets in creation order and keeps those that match.
 func (s *BucketService) ListWithFilter(ctx context.Context, parentID string, pageSize int64, pageToken string, f *storagepb.ListBucketsWithFilterRequest_Filters) (BucketPage, error) {
-	if f.GetFilesystemId() != "" || f.GetBucketType() == storagepb.BucketStatus_FILESYSTEM {
-		return BucketPage{}, nil
+	if f.GetBucketType() == storagepb.BucketStatus_BUCKET_TYPE_UNSPECIFIED && f.GetFilesystemId() == "" {
+		return s.List(ctx, parentID, pageSize, pageToken)
 	}
-	return s.List(ctx, parentID, pageSize, pageToken)
+	if pageSize < 0 || pageSize > maxPageSize {
+		return BucketPage{}, errs.BadRequest(errs.Violation{Field: "page_size", Message: fmt.Sprintf("must be between 0 and %d", maxPageSize)})
+	}
+	want := int(pageSize)
+	if want == 0 {
+		want = defaultPageSize
+	}
+	var out BucketPage
+	for token := pageToken; ; {
+		page, err := s.List(ctx, parentID, 1, token)
+		if err != nil {
+			return BucketPage{}, err
+		}
+		for _, b := range page.Items {
+			if matchesFilter(b, f) {
+				out.Items = append(out.Items, b)
+			}
+		}
+		token = page.NextPageToken
+		if token == "" {
+			return out, nil
+		}
+		if len(out.Items) == want {
+			out.NextPageToken = token
+			return out, nil
+		}
+	}
 }
 
 // Create validates the request, reserves the name and creates the backing
@@ -177,6 +221,10 @@ func (s *BucketService) provision(ctx context.Context, id string) error {
 	b, err := s.buckets.Get(ctx, id)
 	if err != nil {
 		return err
+	}
+	if IsFilesystemBucket(b) { // the files live in the filesystem's own bucket
+		b.Status.State = storagepb.BucketStatus_ACTIVE
+		return s.buckets.Update(ctx, b)
 	}
 	name := b.GetMetadata().GetName()
 	err = s.backend.EnsureBucket(ctx, name)
@@ -271,7 +319,10 @@ func (s *BucketService) patch(stored *storagepb.Bucket, cmd UpdateBucketCmd) (*s
 	if v := md.GetResourceVersion(); v != 0 && v != smd.GetResourceVersion() {
 		return nil, errs.Conflict(smd.GetId(), fmt.Sprintf("resource_version %d does not match current version %d", v, smd.GetResourceVersion()))
 	}
-	if cmd.Spec.GetBucketType() != nil {
+	// The bucket type is immutable: an update may repeat it (Terraform sends
+	// the whole spec) but not change it.
+	if t := cmd.Spec.GetBucketType(); t != nil && !proto.Equal(
+		&storagepb.BucketSpec{BucketType: t}, &storagepb.BucketSpec{BucketType: stored.GetSpec().GetBucketType()}) {
 		return nil, errs.BadRequest(errs.Violation{Field: "spec.filesystem_bucket", Message: "field is immutable"})
 	}
 	resetMask := cmd.ResetMask
@@ -336,6 +387,9 @@ func (s *BucketService) prepareDelete(ctx context.Context, cmd DeleteBucketCmd, 
 	}
 	if st := b.GetStatus().GetState(); st != storagepb.BucketStatus_ACTIVE {
 		return time.Time{}, errs.BadState(cmd.ID, "bucket is "+st.String()+", only ACTIVE buckets can be deleted")
+	}
+	if IsFilesystemBucket(b) {
+		return now, checkFilesystemBucketDelete(cmd, now)
 	}
 	empty, err := s.backend.BucketEmpty(ctx, b.GetMetadata().GetName())
 	if err != nil && !errors.Is(err, objstore.ErrBucketNotFound) {
@@ -419,6 +473,9 @@ func (s *BucketService) purge(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if IsFilesystemBucket(b) { // the files belong to the filesystem and stay
+		return s.buckets.Delete(ctx, id)
+	}
 	if err := s.backend.DeleteBucket(ctx, b.GetMetadata().GetName()); err != nil {
 		return fmt.Errorf("delete backing bucket %s: %w", b.GetMetadata().GetName(), err)
 	}
@@ -464,14 +521,18 @@ func (s *BucketService) newBucket(ctx context.Context, cmd CreateBucketCmd) (*st
 	if spec == nil {
 		spec = &storagepb.BucketSpec{}
 	}
-	if spec.GetBucketType() != nil {
-		return nil, errs.BadRequest(errs.Violation{Field: "spec.filesystem_bucket", Message: "filesystem buckets are not supported by NebiusMocker"})
-	}
 	if spec.GetVersioningPolicy() == storagepb.VersioningPolicy_VERSIONING_POLICY_UNSPECIFIED {
 		spec.VersioningPolicy = storagepb.VersioningPolicy_DISABLED // NON_EMPTY_DEFAULT
 	}
 	if err := validateSpec(spec); err != nil {
 		return nil, err
+	}
+	bucketType := storagepb.BucketStatus_REGULAR
+	if spec.GetFilesystemBucket() != nil {
+		if err := s.checkNewFilesystemBucket(ctx, md.GetParentId(), spec); err != nil {
+			return nil, err
+		}
+		bucketType = storagepb.BucketStatus_FILESYSTEM
 	}
 	id, err := s.ids.New(KindBucket)
 	if err != nil {
@@ -489,7 +550,7 @@ func (s *BucketService) newBucket(ctx context.Context, cmd CreateBucketCmd) (*st
 			SuspensionState:        storagepb.BucketStatus_NOT_SUSPENDED,
 			DomainName:             md.GetName() + "." + s.set.Domain,
 			Region:                 s.set.Region,
-			BucketType:             storagepb.BucketStatus_REGULAR,
+			BucketType:             bucketType,
 			AnonymousAccessEnabled: AnonymousAccess(spec.GetBucketPolicy()),
 		},
 	}, nil
@@ -539,7 +600,11 @@ func validateSpec(spec *storagepb.BucketSpec) error {
 	if spec.GetMaxSizeBytes() < 0 {
 		return errs.BadRequest(errs.Violation{Field: "spec.max_size_bytes", Message: "must not be negative"})
 	}
-	if err := checkStorageClass("spec.default_storage_class", spec.GetDefaultStorageClass()); err != nil {
+	if spec.GetFilesystemBucket() != nil {
+		if err := checkFilesystemSpec(spec); err != nil {
+			return err
+		}
+	} else if err := checkStorageClass("spec.default_storage_class", spec.GetDefaultStorageClass()); err != nil {
 		return err
 	}
 	if len(spec.GetLastAccess().GetConditions()) > 0 {
@@ -564,7 +629,11 @@ func (s *BucketService) withCounters(ctx context.Context) func(*storagepb.Bucket
 		if err != nil || !usable(b) {
 			return b, err
 		}
-		cs, err := ComputeCounters(ctx, s.content, b.GetMetadata().GetName())
+		name, err := s.Backend(ctx, b)
+		if err != nil {
+			return b, nil //nolint:nilerr // a filesystem bucket whose filesystem is unusable reports no counters; reading the bucket still works
+		}
+		cs, err := ComputeCounters(ctx, s.content, name)
 		if errors.Is(err, objstore.ErrBucketNotFound) {
 			return b, nil
 		}

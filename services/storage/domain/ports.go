@@ -71,6 +71,13 @@ type Hierarchy interface {
 	Parent(ctx context.Context, id string) (string, error)
 }
 
+// Filesystems resolves the compute shared filesystems that filesystem buckets
+// expose (the compute module's peer.Filesystems). Filesystem returns
+// errs.NotFound for unknown IDs.
+type Filesystems interface {
+	Filesystem(ctx context.Context, id string) (peer.Filesystem, error)
+}
+
 // AccessChecker evaluates permissions (satisfied by *authz.Engine).
 type AccessChecker interface {
 	Check(ctx context.Context, principalID string, perm authz.Permission, target string) (authz.Decision, error)
