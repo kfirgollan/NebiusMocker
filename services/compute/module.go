@@ -66,7 +66,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	})
 	api.RegisterAuthzRules(deps.Rules, svc)
 	computepb.RegisterImageServiceServer(reg, api.NewImageHandler(svc))
-	return nil
+	return registerDisks(reg, deps, svc)
 }
 
 // loadCatalog returns the built-in catalog, or the one in path when set.

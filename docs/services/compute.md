@@ -11,16 +11,21 @@
 | Public image catalog per region in `project-<routing code>public-images`, seeded from a built-in or file catalog, payloads in the object store | ✅ |
 | Custom images imported from Object Storage (`spec.source_storage`), payload copied into the object store; size, checksum, format and minimum disk size derived from the bytes | ✅ |
 | `spec.source_disk_id` / `spec.source_disk_snapshot_id` | ✅ domain (unit tests): the source must exist, be `READY` and be in the image's project. `min_disk_size_bytes` = disk `size_bytes` (snapshot: its source disk's size if that still exists, else `content_size_bytes`), rounded up to a GiB. `cpu_architecture` defaults to the source's. The payload is a 64 KiB qcow2 declaring that size (disks keep no data). SDK/CLI/Terraform coverage lands with the DiskService RPCs (svc-compute-disks) |
+| `nebius.compute.v1.DiskService`: Get, GetByName, List (paged; deprecated `filter` rejected), Create, Update (reset mask, `resource_version`, grow-only size, immutable type/block size/source/encryption), Delete, ListOperationsByParent | ✅ T2 (control plane only: no storage is allocated, nothing is attached) |
+| `nebius.compute.v1.DiskSnapshotService`: Get, GetByName, List, ListByDisk (paged), Create, Update, Delete | ✅ T2 (no data is copied) |
+| Disk/snapshot authorization: `compute.disks.*`, `compute.disksnapshots.*` on the project; `ListByDisk` checks `compute.disksnapshots.list` on the disk's project | ✅ |
+| `nebius_compute_v1_disk`, `nebius_compute_v1_disk_snapshot` resources and data sources with the official Terraform provider | ✅ e2e: `test/terraform/compute/disk_test.go` (`make e2e`) |
+| `nebius compute disk …` / `nebius compute disk-snapshot …` CLI flows from the storage docs | ✅ e2e: `test/computedisk` (`make e2e`, no Docker) |
 | Authorization: public images readable by any authenticated principal; custom images by project roles (`compute.images.*`) | ✅ |
 | `nebius_compute_v1_image` data source (the provider has no image resource) with the official Terraform provider | ✅ e2e: public images in `test/terraform/compute` (`make e2e`); custom images in the same package under `make e2e-images` |
 | `nebius compute image …` CLI flows (list-public, get, get-by-name, get-latest-by-family, create from a bucket, list, update, list-operations-by-parent, delete) on RustFS | ✅ e2e: `test/compute` (`make e2e-images`) |
-| Instances, disks, snapshots, filesystems, GPU clusters, NVL groups, platforms, maintenance, nodes | Planned |
+| Instances, filesystems, GPU clusters, NVL groups, platforms, maintenance, nodes | Planned |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
-Tests: domain unit tests with fakes (`services/compute/domain`, incl. a fuzzed payload inspector), DAL tests on the
+Tests: domain unit tests with fakes (`services/compute/domain`, incl. a fuzzed payload inspector and the disk size/type/state rules), DAL tests on the
 memory store, the blob adapter on the memory object store, gosdk contract tests (`test/contract/compute_image_test.go`,
-memory object store, in `make check`), the Terraform data-source suites, and the same gosdk scenarios plus the nebius
+memory object store, in `make check`; disks and snapshots in `test/contract/compute_disk*_test.go`), the Terraform suites, and the same gosdk scenarios plus the nebius
 CLI against RustFS (`make e2e-images`, Docker).
 
 The e2e suites put image files in the way users do (docs: compute/storage/import-image, object-storage/quickstart,
@@ -78,6 +83,8 @@ object-storage/objects/upload-download); they never write into the object store,
 - The routing codes of regions other than `eu-north1` (`e00`) are placeholders.
 - Payloads are never booted or converted; only their headers are read.
 - No quota accounting for image storage.
+- Disks and snapshots: no quotas (`compute.disk.count`, `compute.disk.size.<type>`), no attachments until instances
+  exist, and no `ERROR`/`BROKEN` states, because nothing can fail without a data plane.
 
 ## Overview
 
@@ -152,20 +159,60 @@ catalog (CPU/GPU types and presets), host **maintenance** events and bare-metal 
   simulated through the capacity pools ([architecture/09](../architecture/09-quotas-limits-faults.md#capacity-simulation)).
 - `cloud_init_user_data` is stored (sensitive, redacted in logs) and never executed in `mock` mode.
 
-### Disks, snapshots and filesystems
-- Size is given in exactly one unit field (`size_bytes|kibibytes|mebibytes|gibibytes`). `status.size_bytes` holds the
-  normalized value. The size must be a multiple of `block_size_bytes` (default 4096), and may only **grow** on Update.
-- The source (`source_image_id`, `source_image_family`, `source_snapshot_id`) is immutable. Family resolution is recorded
-  in `status.source_image_id`.
-- `forbid_deletion=true` → Delete returns `FAILED_PRECONDITION`.
-- `DiskSnapshot` requires a `READY` source disk. `ListByDisk` uses the reference index.
+### Disks and snapshots (implemented)
+
+Management APIs only: a disk is a record with a lifecycle. No storage is allocated, and there are no instances yet, so
+`status.read_write_attachment` / `read_only_attachments` / `managed_by` stay empty (the delete-while-attached rule
+exists and is unit-tested in the domain). Rules come from docs `compute/storage/types`, `compute/storage/manage` and
+`compute/storage/disk-snapshots`, and from the proto comments:
+
+- **Types**: `NETWORK_SSD` 1–8192 GiB; `NETWORK_SSD_NON_REPLICATED` and `NETWORK_SSD_IO_M3` 93–262,074 GiB in multiples
+  of 93 GiB. `NETWORK_HDD` is in the enum, but the docs list no HDD disk type, so it is rejected with `INVALID_ARGUMENT`
+  ("not available") rather than given invented limits. `UNSPECIFIED` is `INVALID_ARGUMENT`.
+- **Size**: exactly one of `size_bytes|kibibytes|mebibytes|gibibytes`, normalized into `status.size_bytes`. The spec is
+  echoed as sent, so Terraform round-trips without drift. Sizes are multiples of 4 MiB and of the block size. A disk
+  holds at most 2^32 blocks (16 TiB with 4 KiB blocks). Boot disks (from an image) are at most 30,720 GiB. Size only
+  grows on Update (`INVALID_ARGUMENT` otherwise). A grow runs as `UPDATING` → `READY`.
+- **Block size**: a power of two from 4 KiB to 128 KiB. It is immutable. If unset, `spec.block_size_bytes` stays 0 and
+  `status.block_size_bytes` is 4096.
+- **Encryption**: `DISK_ENCRYPTION_MANAGED` is accepted for NRD and IO M3 only (proto). Network SSD is always encrypted
+  by the platform, so `MANAGED` on it is `INVALID_ARGUMENT`. The setting is stored, echoed and immutable.
+- **Sources** (immutable):
+  - `source_image_id` must exist (`NOT_FOUND`), be `READY` (`FAILED_PRECONDITION`) and be public or in the disk's
+    project (`INVALID_ARGUMENT`).
+  - `source_image_family` resolves through `ImageService.GetLatestByFamily` (default parent: the first region's
+    public-images project). A deprecated family is `FAILED_PRECONDITION`.
+  - `source_snapshot_id` must exist, be in the same project (docs: snapshots are usable only within their project) and
+    be `READY`.
+  - The size must be at least the image's `min_disk_size_bytes` or the snapshot's `content_size_bytes`.
+  - `status.source_image_id` and `status.source_image_cpu_architecture` record the image used.
+  - While a disk is `CREATING` from a snapshot, the snapshot's `status.lock_state.disks` holds the disk, and the
+    snapshot can't be deleted.
+- **Delete**: `FAILED_PRECONDITION` with `disk cannot be deleted because forbid_deletion is set` (the docs' wording), or
+  while the disk is attached, managed by an instance, or locked (`status.lock_state.images|snapshots`). Deleting a disk
+  that has snapshots is **allowed**, and the snapshots stay `READY` with a stale `source_disk_id`. The proto says this
+  ID "may become stale if the disk is deleted", and the docs describe no cascade or block.
+- **forbid_deletion** can be changed only on a standalone disk (docs). A disk with `managed_by` is `FAILED_PRECONDITION`.
+- **Snapshots**:
+  - `source_disk_id` must exist (`NOT_FOUND`) and be `READY` (`FAILED_PRECONDITION`).
+  - `parent_id` must be the disk's project (docs). A tenant parent is therefore `INVALID_ARGUMENT`.
+  - While `CREATING`, the disk's `status.lock_state.snapshots` holds the snapshot, and the disk can't be deleted.
+  - Status: `content_size_bytes = storage_size_bytes =` the disk's `status.size_bytes` (no incremental snapshots), and
+    `source_cpu_architecture` comes from the disk. The proto has no type field to copy.
+  - Name, labels and `description` (≤ 1024 characters) are mutable.
+  - `ListByDisk` needs an existing disk and lists its snapshots in the disk's project.
+- Cross-resource checks and locks run in one store transaction (`Mutate` in the DAL), so they don't race with a
+  concurrent delete. The operations engine only serializes per resource ID.
+- `DiskReader` (`domain/ports.go`, `dal.NewDiskReader`) gives images read access for image-from-disk/snapshot.
+
+Filesystems (planned) will follow the same size rules.
 
 ### Integrity
 - An attached disk cannot be deleted. An instance in a GPU cluster blocks deletion of the cluster.
 - `ListInstancesByNVLInstanceGroup` and `BatchGet` (up to the documented max IDs; missing IDs are omitted) are index queries.
 
 ### Permissions and quotas
-- Permissions: `compute.instances.*` (+ `start`, `stop`), `compute.disks.*`, `compute.diskSnapshots.*`, `compute.filesystems.*`,
+- Permissions: `compute.instances.*` (+ `start`, `stop`), `compute.disks.*`, `compute.disksnapshots.*` (implemented), `compute.filesystems.*`,
   `compute.images.*`, `compute.gpuClusters.*`, `compute.nvlInstanceGroups.*`, `compute.platforms.get/list`.
 - Quotas: `compute.instance.count`, `compute.vcpu`, `compute.memory`, `compute.gpu.<gpu_count_quota_type>`,
   `compute.disk.count`, `compute.disk.size.<type>`, `compute.filesystem.size.<type>`. vCPU/memory/GPU are charged while
