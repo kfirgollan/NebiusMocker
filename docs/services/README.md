@@ -16,7 +16,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, T1 rest | S3 data plane (T3, M3) |
 | Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |
 | MysteryBox (secrets) | [mysterybox.md](mysterybox.md) | 3 | 14 | 3 / 7 | **T2** | — |
-| KMS | [kms.md](kms.md) | 4 | 23 | 2 / 4 | T1 | real crypto (T3, M3) |
+| KMS | [kms.md](kms.md) | 4 | 23 | 2 / 4 | **T3** | — |
 | DNS | [dns.md](dns.md) | 2 | 13 | 2 / 4 | T1 | T2 |
 | Quotas | [quotas.md](quotas.md) | 1 | 6 | 1 / 2 | T1 (+ live usage) | — |
 | Billing | [billing.md](billing.md) | 5 | 14 | 1 / 2 | T1 pricing policy, T0 rest | T1 calculator (M4) |

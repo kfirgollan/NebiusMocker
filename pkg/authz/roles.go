@@ -102,8 +102,12 @@ func DefaultCatalog() *Catalog {
 	return NewCatalog(
 		Role{Name: RoleViewer, Grants: read},
 		Role{
-			Name:   RoleEditor,
-			Grants: append(slices.Clone(read), "*.*."+VerbCreate, "*.*."+VerbUpdate, "*.*."+VerbDelete),
+			Name: RoleEditor,
+			Grants: append(slices.Clone(read), "*.*."+VerbCreate, "*.*."+VerbUpdate, "*.*."+VerbDelete,
+				// Editors use KMS keys and manage their lifecycle (Nebius KMS
+				// docs: crypto operations need the editor role). Viewers can
+				// read keys and public keys but cannot encrypt, decrypt or sign.
+				"kms.*.encrypt", "kms.*.decrypt", "kms.*.sign", "kms.*.rotate", "kms.*.undelete"),
 			// Editors manage resources, not who may access them.
 			Excludes: []string{"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete"},
 		},

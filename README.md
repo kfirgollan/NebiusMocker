@@ -11,6 +11,9 @@ CI with no Nebius account.
 > [docs/services/compute.md](docs/services/compute.md#implementation-status) and the [roadmap](docs/architecture/13-milestones.md).
 > **Container Registry** works with Terraform, the Go SDK, the `nebius` CLI and `docker push/pull` (images stored in
 > [Harbor](https://goharbor.io)); see [docs/services/registry.md](docs/services/registry.md#implementation-status).
+> **KMS** symmetric and asymmetric keys work with real crypto (AES-256-GCM, ECDSA, RSA-OAEP), plus rotation and
+> delayed deletion, through Terraform, the Go SDK and the `nebius kms` CLI; see
+> [docs/services/kms.md](docs/services/kms.md#implementation-status).
 
 ## Quick start
 
