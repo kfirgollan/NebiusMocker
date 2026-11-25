@@ -4,6 +4,12 @@ A local emulator of the [Nebius AI Cloud](https://nebius.com) API, in the spirit
 gRPC services as the real cloud, so the **official** Nebius Terraform provider, CLI and SDKs run against your laptop or
 CI with no Nebius account.
 
+> [!IMPORTANT]
+> **This is not an official Nebius project.** It is not affiliated with, endorsed by or supported by Nebius. I develop
+> it as a side project to support my other work. I hope it benefits the community and helps others, but don't assume
+> it is production grade. Its coverage and behavior will keep changing, driven by how I use Nebius. Issues and
+> contributions are welcome.
+
 > Status: early. **IAM groups, memberships and access permits, with enforced authorization,** work end to end with the
 > official Terraform provider. **Compute images** (public catalog per region, custom images imported from Object
 > Storage) work with the provider's image data source, the Go SDK and the `nebius` CLI. See
