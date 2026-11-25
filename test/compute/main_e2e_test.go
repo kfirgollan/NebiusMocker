@@ -36,12 +36,12 @@ type env struct {
 	s3Addr string
 }
 
-func startOnRustFS(t *testing.T) *env {
+func startOnRustFS(t *testing.T, opts ...testkit.Option) *env {
 	t.Helper()
 	srv := rustfsfixture.Start(t)
 	st := storage.New(storage.WithS3Listen("127.0.0.1:0"))
 	e := imagescenario.Start(t, srv.Client(t), []mocker.Module{st},
-		testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce), testkit.WithOperationDelay(100*time.Millisecond))
+		append([]testkit.Option{testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce), testkit.WithOperationDelay(100 * time.Millisecond)}, opts...)...)
 	e.BucketPrefix = s3upload.Unique("img") + "-"
 	e.Upload = s3upload.New(t, e.Inst, st.S3Addr()).Upload
 	return &env{Env: e, s3Addr: st.S3Addr()}

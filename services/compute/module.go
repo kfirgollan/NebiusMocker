@@ -52,10 +52,14 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := domain.SeedPublicCatalog(ctx, domain.SeedDeps{Images: images, Blobs: blobs, Clock: deps.Clock}, catalog, regions); err != nil {
 		return fmt.Errorf("compute: %w", err)
 	}
+	locks, err := domain.NewDiskLocks(dal.NewDiskRepo(deps.Store))
+	if err != nil {
+		return fmt.Errorf("compute: %w", err)
+	}
 	svc, err := domain.NewImageService(domain.ImageDeps{
 		Images: images, OpIndex: dal.NewOpIndex(deps.Store), Blobs: blobs, Projects: deps.Authz,
-		Disks: dal.NewDiskReader(deps.Store),
-		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Regions: regions,
+		Disks: dal.NewDiskReader(deps.Store), DiskLocks: locks,
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Regions: regions,
 	})
 	if err != nil {
 		return fmt.Errorf("compute: %w", err)

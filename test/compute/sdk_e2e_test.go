@@ -4,9 +4,11 @@ package compute
 
 import (
 	"testing"
+	"time"
 
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
 	"github.com/kfirgollan/NebiusMocker/services/compute/backend/blobstore"
 	"github.com/kfirgollan/NebiusMocker/services/compute/domain"
 	"github.com/kfirgollan/NebiusMocker/test/internal/imagescenario"
@@ -25,6 +27,10 @@ func TestSDKCustomImagesOnRustFS(t *testing.T) {
 
 func TestSDKErrorsOnRustFS(t *testing.T) {
 	imagescenario.Errors(t, startOnRustFS(t).Env)
+}
+
+func TestSDKImageFromDiskOnRustFS(t *testing.T) {
+	imagescenario.FromDiskAndSnapshot(t, startOnRustFS(t, testkit.WithOperationDelay(700*time.Millisecond)).Env)
 }
 
 // TestCatalogSurvivesRestart: a second mocker on the same RustFS finds the

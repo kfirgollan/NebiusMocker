@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
@@ -38,6 +39,11 @@ func TestImageCustomLifecycle(t *testing.T) {
 func TestImageErrors(t *testing.T) {
 	t.Parallel()
 	imagescenario.Errors(t, startImages(t))
+}
+
+func TestImageFromDiskAndSnapshot(t *testing.T) {
+	t.Parallel()
+	imagescenario.FromDiskAndSnapshot(t, startImages(t, testkit.WithOperationDelay(700*time.Millisecond)))
 }
 
 // TestImageCatalogOverride replaces the catalog through

@@ -28,6 +28,7 @@ type ImageService struct {
 	blobs    Blobs
 	projects Projects
 	disks    DiskReader
+	locks    DiskLocker
 	ops      Operations
 	ids      IDGenerator
 	clk      clock.Clock
@@ -38,20 +39,21 @@ type ImageService struct {
 // ImageDeps are the dependencies of an ImageService. All are required;
 // Regions must not be empty and its first entry is the default region.
 type ImageDeps struct {
-	Images   ImageRepository
-	OpIndex  OperationIndex
-	Blobs    Blobs
-	Projects Projects
-	Disks    DiskReader
-	Ops      Operations
-	IDs      IDGenerator
-	Clock    clock.Clock
-	Regions  []Region
+	Images    ImageRepository
+	OpIndex   OperationIndex
+	Blobs     Blobs
+	Projects  Projects
+	Disks     DiskReader
+	DiskLocks DiskLocker
+	Ops       Operations
+	IDs       IDGenerator
+	Clock     clock.Clock
+	Regions   []Region
 }
 
 // NewImageService wires an ImageService.
 func NewImageService(d ImageDeps) (*ImageService, error) {
-	if d.Images == nil || d.OpIndex == nil || d.Blobs == nil || d.Projects == nil || d.Disks == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.Images == nil || d.OpIndex == nil || d.Blobs == nil || d.Projects == nil || d.Disks == nil || d.DiskLocks == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("compute: image service dependencies must not be nil")
 	}
 	if len(d.Regions) == 0 {
@@ -62,7 +64,7 @@ func NewImageService(d ImageDeps) (*ImageService, error) {
 		public[PublicProjectID(r.RoutingCode)] = r.Name
 	}
 	return &ImageService{
-		images: d.Images, opIndex: d.OpIndex, blobs: d.Blobs, projects: d.Projects, disks: d.Disks,
+		images: d.Images, opIndex: d.OpIndex, blobs: d.Blobs, projects: d.Projects, disks: d.Disks, locks: d.DiskLocks,
 		ops: d.Ops, ids: d.IDs, clk: d.Clock, regions: slices.Clone(d.Regions), public: public,
 	}, nil
 }
@@ -268,6 +270,13 @@ func (s *ImageService) Delete(ctx context.Context, id string, request proto.Mess
 			if err := s.blobs.DeleteImage(ctx, id); err != nil {
 				return fmt.Errorf("delete payload of %s: %w", id, err)
 			}
+			// An image that is gone holds no lock on its source disk (the lock is
+			// normally released when creation finishes; this covers a failed one).
+			if diskID := stored.GetSpec().GetSourceDiskId(); diskID != "" {
+				if err := s.locks.UnlockForImage(ctx, diskID, id); err != nil {
+					return fmt.Errorf("unlock disk %s: %w", diskID, err)
+				}
+			}
 			return s.images.Delete(ctx, id)
 		},
 	})
@@ -389,13 +398,17 @@ func (s *ImageService) checkParent(ctx context.Context, parentID string) error {
 // disk or snapshot must be READY), the family/version pair must be free, then
 // the CREATING image is stored.
 func (s *ImageService) prepareCreate(ctx context.Context, img *computepb.Image, src *imageSource) error {
-	if err := s.resolveSource(ctx, img, src); err != nil {
-		return err
-	}
 	if err := s.checkFamilyVersion(ctx, img); err != nil {
 		return err
 	}
-	return s.images.Create(ctx, img)
+	if err := s.resolveSource(ctx, img, src); err != nil {
+		return err
+	}
+	if err := s.images.Create(ctx, img); err != nil {
+		// No image, so no lock: release what resolveSource took.
+		return errors.Join(err, s.unlockSource(ctx, img.GetMetadata().GetId(), src))
+	}
+	return nil
 }
 
 func (s *ImageService) checkFamilyVersion(ctx context.Context, img *computepb.Image) error {

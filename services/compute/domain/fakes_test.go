@@ -130,6 +130,7 @@ type fakeBlobs struct {
 	sources map[string][]byte // "bucket/object" → bytes
 	opens   int
 	mutate  func(opens int, sources map[string][]byte)
+	putHook func(imageID string) // called before PutImage stores, outside the lock
 }
 
 func newFakeBlobs() *fakeBlobs {
@@ -137,6 +138,9 @@ func newFakeBlobs() *fakeBlobs {
 }
 
 func (f *fakeBlobs) PutImage(_ context.Context, id string, r io.Reader, size int64, meta map[string]string) (BlobInfo, error) {
+	if f.putHook != nil {
+		f.putHook(id)
+	}
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return BlobInfo{}, err
@@ -270,7 +274,7 @@ func newFixture(t *testing.T) *fixture {
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	svc, err := NewImageService(ImageDeps{
-		Images: f.images, OpIndex: &fakeOpIndex{}, Blobs: f.blobs, Projects: fakeProjects{testProject: true}, Disks: f.disks,
+		Images: f.images, OpIndex: &fakeOpIndex{}, Blobs: f.blobs, Projects: fakeProjects{testProject: true}, Disks: f.disks, DiskLocks: f.disks,
 		Ops: f.ops, IDs: &fakeIDs{}, Clock: f.clk, Regions: testRegions,
 	})
 	if err != nil {

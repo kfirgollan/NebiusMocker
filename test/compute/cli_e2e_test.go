@@ -219,3 +219,32 @@ func TestCLICustomImage(t *testing.T) {
 		t.Fatalf("list after delete = %v", names(list.GetItems()))
 	}
 }
+
+// TestCLIImageFromDiskAndSnapshot: `nebius compute disk create`, `nebius
+// compute disk-snapshot create`, then `nebius compute image create
+// --source-disk-id` / `--source-disk-snapshot-id`.
+func TestCLIImageFromDiskAndSnapshot(t *testing.T) {
+	env := startOnRustFS(t)
+	cli := nebiuscli.New(t, nebiuscli.Profile{Addr: env.Inst.Addr, Token: env.Inst.Token, ParentID: env.Inst.ProjectID, TenantID: env.Inst.TenantID})
+
+	var disk computepb.Disk
+	cliJSON(t, cli, &disk, "compute", "disk", "create", "--name", "cli-disk", "--size-gibibytes", "25", "--type", "network_ssd")
+	var snap computepb.DiskSnapshot
+	cliJSON(t, cli, &snap, "compute", "disk-snapshot", "create", "--name", "cli-snap", "--source-disk-id", disk.GetMetadata().GetId())
+
+	for _, tc := range []struct{ name, flag, id string }{
+		{"from-disk", "--source-disk-id", disk.GetMetadata().GetId()},
+		{"from-snapshot", "--source-disk-snapshot-id", snap.GetMetadata().GetId()},
+	} {
+		var created computepb.Image
+		cliJSON(t, cli, &created, "compute", "image", "create", "--name", tc.name, tc.flag, tc.id)
+		img, err := env.Images.Get(t.Context(), &computepb.GetImageRequest{Id: created.GetMetadata().GetId()})
+		if err != nil {
+			t.Fatalf("%s: image not in the mock: %v", tc.name, err)
+		}
+		if img.GetStatus().GetState() != computepb.ImageStatus_READY || img.GetStatus().GetMinDiskSizeBytes() != 25<<30 {
+			t.Fatalf("%s: image = %v", tc.name, img)
+		}
+		imagescenario.AssertBlob(t, env.Store, img)
+	}
+}
