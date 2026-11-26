@@ -34,7 +34,7 @@ AZURITE_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=azurite --fil
 
 e2e-storage: ## RustFS/Azurite-backed tests (needs Docker); the containers are started and removed by the tests
 	@$(RUSTFS_CLEANUP); $(AZURITE_CLEANUP)
-	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./services/storage/backend/... ./test/... || status=$$?; \
+	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./services/storage/... ./test/... || status=$$?; \
 	$(RUSTFS_CLEANUP); $(AZURITE_CLEANUP); exit $$status
 
 e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (needs Docker)
