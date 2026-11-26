@@ -66,15 +66,23 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 		t.Errorf("agent env = %v, want the cluster join token", spec.Env)
 	}
 
-	// Labels the kubelet may not set are applied through the API; GPUs are advertised.
-	labels, gpus, _ := h.kube.snapshot()
-	wantLabels := []labelCall{
-		{"n1", map[string]string{"node-role.kubernetes.io/gpu": "true"}},
-		{"n2", map[string]string{"node-role.kubernetes.io/gpu": "true"}},
-		{"n3", map[string]string{"node-role.kubernetes.io/gpu": "true"}},
+	// Labels the kubelet may not set are applied through the API, with the
+	// bookkeeping annotations; GPUs are advertised.
+	updates, gpus, _ := h.kube.snapshot()
+	taints := []kubeTaint{{Key: "dedicated", Value: "gpu", Effect: "NoSchedule"}, {Key: "spot", Effect: "PreferNoSchedule"}}
+	var wantUpdates []updateCall
+	for _, n := range []string{"n1", "n2", "n3"} {
+		wantUpdates = append(wantUpdates, updateCall{n, nodePatch{
+			Labels: map[string]*string{"node-role.kubernetes.io/gpu": ptr("true")},
+			Annotations: map[string]string{
+				annotationLabels: `["kubernetes.io/os","node-role.kubernetes.io/gpu","team"]`,
+				annotationTaints: `[{"key":"dedicated","value":"gpu","effect":"NoSchedule"},{"key":"spot","effect":"PreferNoSchedule"}]`,
+			},
+			Taints: taints,
+		}})
 	}
-	if diff := cmp.Diff(wantLabels, labels); diff != "" {
-		t.Errorf("LabelNode calls mismatch (-want +got):\n%s", diff)
+	if diff := cmp.Diff(wantUpdates, updates); diff != "" {
+		t.Errorf("UpdateNode calls mismatch (-want +got):\n%s", diff)
 	}
 	if want := []gpuCall{{"n1", "nvidia.com/gpu", 8}}; !slices.Equal(gpus, want) {
 		t.Errorf("SetExtendedResource calls = %v, want %v", gpus, want)
@@ -127,16 +135,14 @@ func TestEnsureNodesScaleDown(t *testing.T) {
 	}
 }
 
-func TestEnsureNodesTemplateChangeRecreates(t *testing.T) {
+// Only the image and the GPU count need a new agent; labels and taints are
+// reconciled in place (nodemeta_test.go).
+func TestEnsureNodesAgentChangeRecreates(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*domain.BackendNodeGroup)
 	}{
-		{name: "labels", mutate: func(g *domain.BackendNodeGroup) { g.Labels = map[string]string{"team": "other"} }},
-		{name: "taints", mutate: func(g *domain.BackendNodeGroup) {
-			g.Taints = []domain.NodeTaint{{Key: "k", Value: "v", Effect: "NoExecute"}}
-		}},
 		{name: "gpus", mutate: func(g *domain.BackendNodeGroup) { g.Nodes[0].GPUs = 2 }},
 		{name: "version", mutate: func(g *domain.BackendNodeGroup) { g.Version = "1.36" }},
 	}
@@ -158,11 +164,10 @@ func TestEnsureNodesTemplateChangeRecreates(t *testing.T) {
 				t.Fatalf("EnsureNodes after the change = %+v, want both ready", got)
 			}
 			after := h.agents(t)
-			recreated := after["n1"].ID != before["n1"].ID
-			if !recreated {
+			if after["n1"].ID == before["n1"].ID {
 				t.Errorf("n1 was not recreated after a %s change", tt.name)
 			}
-			// Only n1 differs for the GPU change; the others change for the group-wide fields.
+			// Only n1 differs for the GPU change; the image is group-wide.
 			if tt.name == "gpus" && after["n2"].ID != before["n2"].ID {
 				t.Errorf("n2 was recreated by a change of n1's GPUs")
 			}
@@ -266,8 +271,8 @@ func TestEnsureNodesEmptyRemovesAgents(t *testing.T) {
 
 func TestEnsureNodesEmptyWithoutClusterState(t *testing.T) {
 	t.Parallel()
-	// The domain empties node groups before DeleteCluster, also after a mocker
-	// restart that lost the cluster's state: leftover agents are still removed.
+	// After a mocker restart that lost the cluster's state, leftover agents are
+	// still removed (undrained: there is no API client to drain with).
 	h := newHarness(t, nil)
 	h.ensureCluster(t, testCluster)
 	h.ensureNodes(t, testGroupSpec(testCluster, "n1"))
@@ -311,9 +316,10 @@ func TestEnsureNodesEmptyLabelValue(t *testing.T) {
 	g := testGroupSpec(testCluster, "n1")
 	g.Labels = map[string]string{"node-role.kubernetes.io/gpu": ""}
 	h.ensureNodes(t, g)
-	labels, _, _ := h.kube.snapshot()
-	want := []labelCall{{"n1", map[string]string{"node-role.kubernetes.io/gpu": ""}}}
-	if diff := cmp.Diff(want, labels); diff != "" {
-		t.Errorf("LabelNode calls mismatch (-want +got):\n%s", diff)
+	updates, _, _ := h.kube.snapshot()
+	if len(updates) != 1 || !cmp.Equal(updates[0].Patch.Labels, map[string]*string{"node-role.kubernetes.io/gpu": ptr("")}) {
+		t.Errorf("UpdateNode calls = %+v, want one setting the label to the empty string", updates)
 	}
 }
+
+func ptr(s string) *string { return &s }

@@ -265,7 +265,17 @@ the Docker Engine API (`pkg/dockerhost`, no `k3d` binary):
   not emulated (it is not observable through the Kubernetes API; `status` still reports the size).
 - **Approximated:** a Node's `cpu` and `memory` capacity are the Docker host's (the kubelet reads the host), not the
   preset's; the authoritative preset is the node's compute instance and the node group spec. `nvidia.com/gpu` is the
-  preset's GPU count. Removing a node (scale-down, recreation) removes its agent without draining it first.
+  preset's GPU count.
+- **Drain.** Before a node's agent is removed (scale-down, a rollout batch, a recreated agent), the node is drained like
+  `kubectl drain --ignore-daemonsets --delete-emptydir-data`: cordoned, then its pods evicted through the Eviction API,
+  which honours PodDisruptionBudgets (refused evictions are retried). The node group's `strategy.drain_timeout` bounds
+  it (0: no limit, so a PodDisruptionBudget that never allows an eviction blocks, as the provider documents); when it
+  runs out, the pods left are deleted and the node removed. Within one call new (surge) nodes start before old ones are
+  drained, so evicted pods have somewhere to go. Deleting a node group (or its cluster) drains its nodes the same way.
+- **Template labels and taints** are applied to the existing nodes in place (no rollout, as the service does): the
+  backend records the group's labels and taints in Node annotations (`nebius-mocker/node-group-labels`,
+  `nebius-mocker/node-group-taints`), so ones the group drops are removed and labels or taints others added stay. A new
+  version or a different GPU count recreates the agent.
 - **Nodes are node-group nodes only:** the server runs with `--disable-agent`, so `kubectl get nodes` lists exactly the
   node groups' compute instances, by name, and DaemonSets count only them.
 
@@ -351,7 +361,9 @@ compute instances, labels, taints, `nvidia.com/gpu`); a Deployment rolls out, a 
 schedules on the GPU node; host kubectl with the editor token can create Deployments but not ClusterRoleBindings; a
 viewer service account (key exchange from a CLI profile) is `nebius:viewer`, lists pods and cannot create; scaling past
 `NEBIUS_MOCKER_MK8S_K3S_MAX_AGENTS` leaves nodes not ready with the reason, scaling down removes agents, nodes and
-instances; `terraform destroy` leaves no container.
+instances; a template label and taint change updates the node in place (a user's own label stays); a preset change
+rolls the group onto a new node, and the Deployment's pods, under a PodDisruptionBudget, are evicted by their own
+kubelet (drained) and rescheduled there before the old agent goes; `terraform destroy` leaves no container.
 
 ## API surface
 

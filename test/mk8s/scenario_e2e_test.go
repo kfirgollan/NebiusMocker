@@ -16,9 +16,18 @@ import (
 	"github.com/kfirgollan/NebiusMocker/test/internal/tfharness"
 )
 
-// hcl is the scenario's Terraform configuration; cpuNodes is the CPU node
-// group's fixed_node_count.
-func hcl(project string, cpuNodes int) string {
+// cpuGroup is what the scenario changes in the CPU node group.
+type cpuGroup struct {
+	nodes int
+	// workload is a template label and the value of its taint.
+	workload string
+	preset   string
+}
+
+var cpuStart = cpuGroup{nodes: 2, workload: "batch", preset: "4vcpu-16gb"}
+
+// hcl is the scenario's Terraform configuration.
+func hcl(project string, cpu cpuGroup) string {
 	return fmt.Sprintf(`
 resource "nebius_vpc_v1_network" "net" {
   parent_id = %[1]q
@@ -46,10 +55,17 @@ resource "nebius_mk8s_v1_node_group" "cpu" {
   parent_id        = nebius_mk8s_v1_cluster.k.id
   name             = "cpu"
   fixed_node_count = %[2]d
+  # Surge first, so drained pods have a node to move to; a drain blocked by
+  # a PodDisruptionBudget falls back to pod deletion after a minute.
+  strategy = {
+    max_surge       = { count = 1 }
+    max_unavailable = { count = 0 }
+    drain_timeout   = "1m"
+  }
   template = {
-    metadata  = { labels = { "team" = "e2e", "workload" = "batch" } }
-    taints    = [{ key = "dedicated", value = "batch", effect = "PREFER_NO_SCHEDULE" }]
-    resources = { platform = "cpu-d3", preset = "4vcpu-16gb" }
+    metadata  = { labels = { "team" = "e2e", "workload" = %[3]q } }
+    taints    = [{ key = "dedicated", value = %[3]q, effect = "PREFER_NO_SCHEDULE" }]
+    resources = { platform = "cpu-d3", preset = %[4]q }
     boot_disk = { type = "NETWORK_SSD", size_gibibytes = 64 }
     network_interfaces = [{ subnet_id = nebius_vpc_v1_subnet.sub.id }]
   }
@@ -67,7 +83,7 @@ resource "nebius_mk8s_v1_node_group" "gpu" {
   }
 }
 
-`, project, cpuNodes)
+`, project, cpu.nodes, cpu.workload, cpu.preset)
 }
 
 // kubeNodes is `kubectl get nodes -o json`, trimmed.
@@ -104,7 +120,7 @@ func TestK3sScenario(t *testing.T) {
 	e := startEnv(t)
 	tf := tfharness.New(t, e.addr, e.inst.Token)
 	tf.UseTLSWithoutVerify()
-	tf.Write(t, hcl(e.inst.ProjectID, 2))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuStart))
 	tf.Init(t)
 	tf.ExpectPlan(t, map[string]string{
 		"nebius_vpc_v1_network.net": "create", "nebius_vpc_v1_subnet.sub": "create", "nebius_mk8s_v1_cluster.k": "create",
@@ -150,6 +166,8 @@ func TestK3sScenario(t *testing.T) {
 	workloads(t, e, len(want), gpuNames)
 	viewer(t, e, clusterID)
 	scale(t, e, tf, cpuID, clusterID)
+	inPlace(t, e, tf, cpuID)
+	rollout(t, e, tf, cpuID)
 
 	tf.Destroy(t)
 	if left := e.d.k3sContainers(t, "nebius-mocker.cluster="+clusterID); len(left) > 0 {

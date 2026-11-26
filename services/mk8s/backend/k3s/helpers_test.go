@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +63,10 @@ type recDocker struct {
 	specs   map[string]dockerhost.ContainerSpec // by container name, last created
 	byID    map[string]dockerhost.ContainerSpec
 	creates int
+	// events is the ordered log of agent creations and removals ("create:n",
+	// "remove:n") and of what the fake kube sees ("ready:n", "cordon:n",
+	// "evict:n:ns/pod").
+	events []string
 	// exitServer, when set, exits the server right after it starts.
 	exitServer *exitScript
 	// exitAgents maps a node name to the logs of its agent, which exits right after it starts.
@@ -86,8 +93,47 @@ func (d *recDocker) CreateContainer(ctx context.Context, spec dockerhost.Contain
 	d.mu.Lock()
 	d.specs[spec.Name], d.byID[id] = spec, spec
 	d.creates++
+	if spec.Labels[LabelRole] == roleAgent {
+		d.events = append(d.events, "create:"+spec.Labels[LabelNode])
+	}
 	d.mu.Unlock()
 	return id, nil
+}
+
+func (d *recDocker) RemoveContainer(ctx context.Context, id string) error {
+	d.mu.Lock()
+	spec := d.byID[id]
+	if spec.Labels[LabelRole] == roleAgent {
+		d.events = append(d.events, "remove:"+spec.Labels[LabelNode])
+	}
+	d.mu.Unlock()
+	return d.Fake.RemoveContainer(ctx, id)
+}
+
+func (d *recDocker) record(event string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.events = append(d.events, event)
+}
+
+// eventIndex is the position of event in the ordered log, -1 when absent.
+func (d *recDocker) eventIndex(event string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Index(d.events, event)
+}
+
+// eventsWithPrefix lists the logged events starting with prefix, in order.
+func (d *recDocker) eventsWithPrefix(prefix string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []string
+	for _, e := range d.events {
+		if strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (d *recDocker) StartContainer(ctx context.Context, id string) error {
@@ -144,9 +190,16 @@ func testKubeconfig() []byte {
 		"    client-certificate-data: " + b64("CERT") + "\n    client-key-data: " + b64("KEY") + "\n")
 }
 
-type labelCall struct {
-	Node   string
-	Labels map[string]string
+type updateCall struct {
+	Node  string
+	Patch nodePatch
+}
+
+// fakeNode is a Node's mutable metadata in the fake API server.
+type fakeNode struct {
+	Labels      map[string]string
+	Annotations map[string]string
+	Taints      []kubeTaint
 }
 
 type gpuCall struct {
@@ -160,21 +213,24 @@ type gpuCall struct {
 type fakeKube struct {
 	docker *recDocker
 
-	mu         sync.Mutex
-	version    string
-	readyErr   error
-	hold       map[string]bool
-	extra      map[string]map[string]string // labels applied through LabelNode
-	capacity   map[string]map[string]string
-	labelCalls []labelCall
-	gpuCalls   []gpuCall
-	deleted    []string
+	mu        sync.Mutex
+	version   string
+	readyErr  error
+	hold      map[string]bool
+	nodes     map[string]*fakeNode // registered nodes
+	capacity  map[string]map[string]string
+	updates   []updateCall
+	gpuCalls  []gpuCall
+	deleted   []string
+	pods      map[string][]kubePod // by node
+	blocked   map[string]int       // "ns/name" -> evictions a PDB still refuses; negative: forever
+	seenReady map[string]bool
 }
 
 func newFakeKube(d *recDocker) *fakeKube {
 	return &fakeKube{
-		docker: d, version: "1.35.10", hold: map[string]bool{}, extra: map[string]map[string]string{},
-		capacity: map[string]map[string]string{},
+		docker: d, version: "1.35.10", hold: map[string]bool{}, nodes: map[string]*fakeNode{},
+		capacity: map[string]map[string]string{}, pods: map[string][]kubePod{}, blocked: map[string]int{}, seenReady: map[string]bool{},
 	}
 }
 
@@ -203,32 +259,84 @@ func (k *fakeKube) Nodes(ctx context.Context) (map[string]kubeNode, error) {
 		if !c.Running || k.hold[name] {
 			continue
 		}
-		labels := map[string]string{"kubernetes.io/hostname": name}
-		for _, a := range k.docker.spec(c.Name).Cmd {
-			if kv, ok := strings.CutPrefix(a, "--node-label="); ok {
-				key, v, _ := strings.Cut(kv, "=")
-				labels[key] = v
-			}
+		n := k.register(name, k.docker.spec(c.Name).Cmd)
+		if !k.seenReady[name] {
+			k.seenReady[name] = true
+			k.docker.record("ready:" + name)
 		}
-		for key, v := range k.extra[name] {
-			labels[key] = v
+		out[name] = kubeNode{
+			Ready: true, Labels: maps.Clone(n.Labels), Annotations: maps.Clone(n.Annotations), Taints: slices.Clone(n.Taints),
+			Capacity: k.capacity[name],
 		}
-		out[name] = kubeNode{Ready: true, Labels: labels, Capacity: k.capacity[name]}
 	}
 	return out, nil
 }
 
-func (k *fakeKube) LabelNode(_ context.Context, name string, labels map[string]string) error {
+// register returns the node of an agent, creating it from the agent's
+// --node-label and --node-taint flags the first time, like a kubelet
+// registering. Callers hold k.mu.
+func (k *fakeKube) register(name string, cmd []string) *fakeNode {
+	if n, ok := k.nodes[name]; ok {
+		return n
+	}
+	n := &fakeNode{Labels: map[string]string{"kubernetes.io/hostname": name}, Annotations: map[string]string{}}
+	for _, a := range cmd {
+		if kv, ok := strings.CutPrefix(a, "--node-label="); ok {
+			key, v, _ := strings.Cut(kv, "=")
+			n.Labels[key] = v
+		}
+		if kv, ok := strings.CutPrefix(a, "--node-taint="); ok {
+			kvPart, effect, _ := strings.Cut(kv, ":")
+			key, v, _ := strings.Cut(kvPart, "=")
+			n.Taints = append(n.Taints, kubeTaint{Key: key, Value: v, Effect: effect})
+		}
+	}
+	k.nodes[name] = n
+	return n
+}
+
+// UpdateNode applies p with JSON merge-patch semantics: a nil label removes
+// it, annotations merge, taints (when non-nil) replace the list.
+func (k *fakeKube) UpdateNode(_ context.Context, name string, p nodePatch) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.labelCalls = append(k.labelCalls, labelCall{name, labels})
-	if k.extra[name] == nil {
-		k.extra[name] = map[string]string{}
+	k.updates = append(k.updates, updateCall{name, p})
+	n, ok := k.nodes[name]
+	if !ok {
+		return fmt.Errorf("node %s not found", name)
 	}
-	for key, v := range labels {
-		k.extra[name][key] = v
+	for key, v := range p.Labels {
+		if v == nil {
+			delete(n.Labels, key)
+			continue
+		}
+		n.Labels[key] = *v
+	}
+	maps.Copy(n.Annotations, p.Annotations)
+	if p.Taints != nil {
+		n.Taints = slices.Clone(p.Taints)
 	}
 	return nil
+}
+
+// n1 returns a copy of the metadata of node n1, the one the metadata tests use.
+func (k *fakeKube) n1() fakeNode {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := k.nodes["n1"]
+	if n == nil {
+		return fakeNode{}
+	}
+	return fakeNode{Labels: maps.Clone(n.Labels), Annotations: maps.Clone(n.Annotations), Taints: slices.Clone(n.Taints)}
+}
+
+// addForeign adds a label and a taint someone else (kubectl, a controller) set.
+func (k *fakeKube) addForeign(name, label, value string, taint kubeTaint) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := k.nodes[name]
+	n.Labels[label] = value
+	n.Taints = append(n.Taints, taint)
 }
 
 func (k *fakeKube) SetExtendedResource(_ context.Context, node, resource string, count int) error {
@@ -246,7 +354,79 @@ func (k *fakeKube) DeleteNode(_ context.Context, name string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.deleted = append(k.deleted, name)
+	delete(k.nodes, name)
+	delete(k.capacity, name)
+	delete(k.seenReady, name)
 	return nil
+}
+
+func (k *fakeKube) Cordon(_ context.Context, name string) error {
+	k.docker.record("cordon:" + name)
+	return nil
+}
+
+func (k *fakeKube) PodsOn(_ context.Context, node string) ([]kubePod, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.pods[node]), nil
+}
+
+func (k *fakeKube) Evict(_ context.Context, namespace, name string) error {
+	key := namespace + "/" + name
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var node string
+	for n, ps := range k.pods {
+		if slices.ContainsFunc(ps, func(p kubePod) bool { return p.Namespace == namespace && p.Name == name }) {
+			node = n
+		}
+	}
+	k.docker.record("evict:" + node + ":" + key)
+	if k.blocked[key] != 0 {
+		if k.blocked[key] > 0 {
+			k.blocked[key]--
+		}
+		return errEvictionBlocked
+	}
+	k.pods[node] = slices.DeleteFunc(k.pods[node], func(p kubePod) bool { return p.Namespace == namespace && p.Name == name })
+	return nil
+}
+
+func (k *fakeKube) DeletePod(_ context.Context, namespace, name string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for node, ps := range k.pods {
+		if slices.ContainsFunc(ps, func(p kubePod) bool { return p.Namespace == namespace && p.Name == name }) {
+			k.docker.record("delete:" + node + ":" + namespace + "/" + name)
+			k.pods[node] = slices.DeleteFunc(ps, func(p kubePod) bool { return p.Namespace == namespace && p.Name == name })
+		}
+	}
+	return nil
+}
+
+// addPods schedules pods on a node.
+func (k *fakeKube) addPods(node string, pods ...kubePod) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.pods[node] = append(k.pods[node], pods...)
+}
+
+// blockEvictions makes a PodDisruptionBudget refuse the next n evictions of
+// the pod (n < 0: all of them).
+func (k *fakeKube) blockEvictions(namespace, name string, n int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.blocked[namespace+"/"+name] = n
+}
+
+func (k *fakeKube) podNames(node string) []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var out []string
+	for _, p := range k.pods[node] {
+		out = append(out, p.Namespace+"/"+p.Name)
+	}
+	return out
 }
 
 func (k *fakeKube) setHold(node string) {
@@ -261,10 +441,10 @@ func (k *fakeKube) setReadyErr(err error) {
 	k.readyErr = err
 }
 
-func (k *fakeKube) snapshot() (labels []labelCall, gpus []gpuCall, deleted []string) {
+func (k *fakeKube) snapshot() (updates []updateCall, gpus []gpuCall, deleted []string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return append([]labelCall(nil), k.labelCalls...), append([]gpuCall(nil), k.gpuCalls...), append([]string(nil), k.deleted...)
+	return append([]updateCall(nil), k.updates...), append([]gpuCall(nil), k.gpuCalls...), append([]string(nil), k.deleted...)
 }
 
 type kubeBuild struct {

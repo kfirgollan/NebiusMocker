@@ -144,7 +144,7 @@ nebius --profile admin iam auth-public-key generate --service-account-id %s --ou
 func scale(t *testing.T, e *env, tf *tfharness.Run, cpuID, clusterID string) {
 	t.Helper()
 	// 2 CPU + 1 GPU agents run; 4 CPU nodes would make 5 > maxAgents.
-	tf.Write(t, hcl(e.inst.ProjectID, 4))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{4, "batch", "4vcpu-16gb"}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -162,7 +162,7 @@ func scale(t *testing.T, e *env, tf *tfharness.Run, cpuID, clusterID string) {
 	}
 	waitNodes(t, e, "", maxAgents)
 
-	tf.Write(t, hcl(e.inst.ProjectID, 1))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "batch", "4vcpu-16gb"}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -207,4 +207,126 @@ func (e *env) nodeGroup(t *testing.T, id string, ok func(*mk8spb.NodeGroupStatus
 func mentions(ng *mk8spb.NodeGroup, s string) bool {
 	b, _ := json.Marshal(ng.GetStatus()) //nolint:errchkjson // a proto struct always marshals
 	return strings.Contains(string(b), s)
+}
+
+const pdbYAML = `
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: web}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: web}}
+`
+
+type podList struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			NodeName string `json:"nodeName"`
+		} `json:"spec"`
+	} `json:"items"`
+}
+
+// rollout changes the CPU group's preset, which replaces its nodes in
+// batches. Before an old node's agent goes, the backend drains
+// it: the web pods (under a PodDisruptionBudget) are evicted and rescheduled
+// onto the new node. Evidence that the drain came first: the old pods were
+// stopped by their own kubelet ("Killing" events from the old node), which
+// cannot happen once the agent is gone.
+func rollout(t *testing.T, e *env, tf *tfharness.Run, cpuID string) {
+	t.Helper()
+	e.user.sh(t, "cat <<'EOF' | kubectl apply -f -\n"+pdbYAML+"EOF")
+	e.user.sh(t, "kubectl rollout status deployment/web --timeout=240s")
+	oldNodes := e.nodeNames(t, cpuID)
+	var before podList
+	kubectlJSON(t, e, &before, "get pods -l app=web")
+	for _, p := range before.Items {
+		if !slices.Contains(oldNodes, p.Spec.NodeName) {
+			t.Fatalf("web pod %s runs on %s, want a CPU node %v before the rollout", p.Metadata.Name, p.Spec.NodeName, oldNodes)
+		}
+	}
+
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "2vcpu-8gb"}))
+	tf.ExpectPlan(t, scalePlan)
+	tf.Apply(t)
+	tf.ExpectNoChanges(t)
+	e.nodeGroup(t, cpuID, func(s *mk8spb.NodeGroupStatus) bool {
+		return s.GetNodeCount() == 1 && s.GetReadyNodeCount() == 1 && s.GetOutdatedNodeCount() == 0
+	})
+	newNodes := e.nodeNames(t, cpuID)
+	if len(newNodes) != 1 || slices.Contains(oldNodes, newNodes[0]) {
+		t.Fatalf("CPU nodes after the rollout = %v, want one new node (old %v)", newNodes, oldNodes)
+	}
+	e.user.sh(t, "kubectl rollout status deployment/web --timeout=240s")
+	var after podList
+	kubectlJSON(t, e, &after, "get pods -l app=web")
+	for _, p := range after.Items {
+		if p.Spec.NodeName != newNodes[0] {
+			t.Errorf("web pod %s runs on %q after the rollout, want the new node %s", p.Metadata.Name, p.Spec.NodeName, newNodes[0])
+		}
+	}
+	for _, p := range before.Items {
+		var ev struct {
+			Items []struct {
+				Reason string `json:"reason"`
+				Source struct {
+					Host string `json:"host"`
+				} `json:"source"`
+			} `json:"items"`
+		}
+		kubectlJSON(t, e, &ev, "get events --field-selector involvedObject.name="+p.Metadata.Name)
+		drained := false
+		for _, it := range ev.Items {
+			if it.Reason == "Killing" && it.Source.Host == p.Spec.NodeName {
+				drained = true
+			}
+		}
+		if !drained {
+			t.Errorf("old web pod %s on %s has no Killing event from its kubelet: it was not drained before the node went (events %+v)",
+				p.Metadata.Name, p.Spec.NodeName, ev.Items)
+		}
+	}
+	if label := e.user.sh(t, "kubectl get node "+newNodes[0]+" -o jsonpath='{.metadata.labels.workload}'"); strings.TrimSpace(label) != "stream" {
+		t.Errorf("new node label workload = %q, want stream", label)
+	}
+}
+
+// inPlace changes the CPU group's template label and taint: Nebius applies
+// them to the existing nodes, so the node, its agent and its pods stay.
+func inPlace(t *testing.T, e *env, tf *tfharness.Run, cpuID string) {
+	t.Helper()
+	nodes := e.nodeNames(t, cpuID)
+	agents := e.d.k3sContainers(t, "nebius-mocker.node-group="+cpuID)
+	e.user.sh(t, "kubectl label node "+nodes[0]+" team.example.com/owner=alice") // a user's own label stays
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "4vcpu-16gb"}))
+	tf.ExpectPlan(t, scalePlan)
+	tf.Apply(t)
+	tf.ExpectNoChanges(t)
+	if got := e.nodeNames(t, cpuID); !slices.Equal(got, nodes) {
+		t.Fatalf("CPU nodes after a label change = %v, want the same %v (no rollout)", got, nodes)
+	}
+	if got := e.d.k3sContainers(t, "nebius-mocker.node-group="+cpuID); !slices.Equal(got, agents) {
+		t.Fatalf("CPU agents after a label change = %v, want the same %v", got, agents)
+	}
+	var node struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Spec struct {
+			Taints []struct{ Key, Value, Effect string } `json:"taints"`
+		} `json:"spec"`
+	}
+	eventually(t, time.Minute, func() error {
+		kubectlJSON(t, e, &node, "get node "+nodes[0])
+		l := node.Metadata.Labels
+		if l["workload"] != "stream" || l["team.example.com/owner"] != "alice" {
+			return fmt.Errorf("labels = %v, want workload=stream and the user's team.example.com/owner=alice", l)
+		}
+		if len(node.Spec.Taints) != 1 || node.Spec.Taints[0].Key != "dedicated" || node.Spec.Taints[0].Value != "stream" {
+			return fmt.Errorf("taints = %+v, want dedicated=stream:PreferNoSchedule only", node.Spec.Taints)
+		}
+		return nil
+	})
 }

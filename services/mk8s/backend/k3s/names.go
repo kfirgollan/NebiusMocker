@@ -77,8 +77,10 @@ func mac(secret []byte, s string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// agentSpec is what an agent container is started with; specHash of it is
-// stored on the container.
+// agentSpec is what an agent container is started with. specHash covers
+// what needs a new agent (image, GPUs); labels and taints are reconciled on
+// the Node in place, as a template's metadata and taints change nodes
+// without recreating them.
 type agentSpec struct {
 	Image  string             `json:"image"`
 	Labels map[string]string  `json:"labels"`
@@ -87,7 +89,10 @@ type agentSpec struct {
 }
 
 func specHash(s agentSpec) string {
-	b, _ := json.Marshal(s) //nolint:errchkjson // plain strings, maps and ints always marshal
+	b, _ := json.Marshal(struct {
+		Image string `json:"image"`
+		GPUs  int    `json:"gpus"`
+	}{s.Image, s.GPUs}) //nolint:errchkjson // plain strings, maps and ints always marshal
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
 }

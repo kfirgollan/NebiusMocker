@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -50,22 +49,15 @@ func (b *Backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 	for _, n := range g.Nodes {
 		want[n.Name] = agentSpec{Image: image, Labels: g.Labels, Taints: g.Taints, GPUs: n.GPUs}
 	}
-	have := map[string]dockerhost.Container{}
-	for _, c := range existing {
-		name := c.Labels[LabelNode]
-		spec, wanted := want[name]
-		if wanted && c.Running && c.Labels[labelSpec] == specHash(spec) {
-			have[name] = c
-			continue
-		}
-		// Not wanted any more, stopped, or started with another image,
-		// labels, taints or GPU count: remove it (a recreated one follows).
-		if err := b.removeAgent(ctx, st, c); err != nil {
-			return nil, err
-		}
-	}
+	have, stale, unwanted := classifyAgents(existing, want)
 	if len(g.Nodes) == 0 {
-		return nil, nil
+		// A rollout batch that removes before it adds (max_surge 0), a
+		// group scaled to zero or deleted: the nodes are still drained, as
+		// pods may have somewhere to go and PodDisruptionBudgets apply.
+		return nil, b.removeNodes(ctx, st, append(stale, unwanted...), g.DrainTimeout)
+	}
+	if err := b.removeNodes(ctx, st, stale, g.DrainTimeout); err != nil {
+		return nil, err
 	}
 
 	reasons, err := b.startAgents(ctx, g, want, have)
@@ -75,11 +67,37 @@ func (b *Backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 	if err := b.waitAgents(ctx, st, g, reasons); err != nil {
 		return nil, err
 	}
+	// Nodes that left the group go last, drained, so their pods can move
+	// to the nodes started above (a rollout's surge nodes).
+	if err := b.removeNodes(ctx, st, unwanted, g.DrainTimeout); err != nil {
+		return nil, err
+	}
 	out := make([]domain.NodeReadiness, len(g.Nodes))
 	for i, n := range g.Nodes {
 		out[i] = domain.NodeReadiness{Name: n.Name, Ready: reasons[n.Name] == "", Reason: reasons[n.Name]}
 	}
 	return out, nil
+}
+
+// classifyAgents sorts the group's agent containers: have are running with
+// the wanted spec; stale are wanted nodes stopped or started with another
+// image, labels, taints or GPU count (recreated under the same name);
+// unwanted are nodes that left the group.
+func classifyAgents(existing []dockerhost.Container, want map[string]agentSpec) (have map[string]dockerhost.Container, stale, unwanted []dockerhost.Container) {
+	have = map[string]dockerhost.Container{}
+	for _, c := range existing {
+		name := c.Labels[LabelNode]
+		spec, wanted := want[name]
+		switch {
+		case wanted && c.Running && c.Labels[labelSpec] == specHash(spec):
+			have[name] = c
+		case wanted:
+			stale = append(stale, c)
+		default:
+			unwanted = append(unwanted, c)
+		}
+	}
+	return have, stale, unwanted
 }
 
 func (b *Backend) removeAgent(ctx context.Context, st *clusterState, c dockerhost.Container) error {
@@ -252,7 +270,7 @@ func (b *Backend) waitAgents(ctx context.Context, st *clusterState, g domain.Bac
 		if reasons[n.Name] != "" || !ok {
 			continue
 		}
-		if err := b.applyNode(ctx, st, n, kn, g.Labels); err != nil {
+		if err := b.applyNode(ctx, st, n, kn, g); err != nil {
 			return err
 		}
 	}
@@ -307,26 +325,6 @@ func (*Backend) pendingAgents(g domain.BackendNodeGroup, nodes map[string]kubeNo
 		}
 	}
 	return pending
-}
-
-func (*Backend) applyNode(ctx context.Context, st *clusterState, n domain.BackendNode, kn kubeNode, labels map[string]string) error {
-	missing := map[string]string{}
-	for k, v := range labels {
-		if got, ok := kn.Labels[k]; !ok || got != v {
-			missing[k] = v
-		}
-	}
-	if len(missing) > 0 {
-		if err := st.kube.LabelNode(ctx, n.Name, missing); err != nil {
-			return fmt.Errorf("label node %s: %w", n.Name, err)
-		}
-	}
-	if n.GPUs > 0 && kn.Capacity[gpuResource] != strconv.Itoa(n.GPUs) {
-		if err := st.kube.SetExtendedResource(ctx, n.Name, gpuResource, n.GPUs); err != nil {
-			return fmt.Errorf("advertise GPUs of node %s: %w", n.Name, err)
-		}
-	}
-	return nil
 }
 
 func (b *Backend) agentFailure(ctx context.Context, clusterID, node, cause string) string {

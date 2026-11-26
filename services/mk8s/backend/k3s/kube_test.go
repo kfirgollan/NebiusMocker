@@ -92,7 +92,7 @@ func TestKubeletLabel(t *testing.T) {
 }
 
 type recordedRequest struct {
-	Method, Path, ContentType, Body string
+	Method, Path, Query, ContentType, Body string
 }
 
 // kubeServer is a TLS API server stand-in: it records requests and answers
@@ -114,7 +114,7 @@ func newKubeServer(t *testing.T, responses map[string]cannedResponse) (*kubeServ
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		ks.mu.Lock()
-		ks.requests = append(ks.requests, recordedRequest{r.Method, r.URL.Path, r.Header.Get("Content-Type"), string(body)})
+		ks.requests = append(ks.requests, recordedRequest{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Content-Type"), string(body)})
 		resp, ok := ks.responses[r.Method+" "+r.URL.Path]
 		ks.mu.Unlock()
 		if !ok {
@@ -183,19 +183,6 @@ func TestRestKubeVersionAndNodes(t *testing.T) {
 	if diff := cmp.Diff(want, nodes); diff != "" {
 		t.Fatalf("Nodes() mismatch (-want +got):\n%s", diff)
 	}
-}
-
-func TestRestKubeLabelNode(t *testing.T) {
-	t.Parallel()
-	ks, k := newKubeServer(t, nil)
-	if err := k.LabelNode(t.Context(), "n1", map[string]string{"node-role.kubernetes.io/gpu": "true"}); err != nil {
-		t.Fatalf("LabelNode: %v", err)
-	}
-	got := ks.last(t)
-	if got.Method != http.MethodPatch || got.Path != "/api/v1/nodes/n1" || got.ContentType != "application/merge-patch+json" {
-		t.Fatalf("LabelNode request = %+v, want a merge patch of /api/v1/nodes/n1", got)
-	}
-	assertJSON(t, got.Body, `{"metadata":{"labels":{"node-role.kubernetes.io/gpu":"true"}}}`)
 }
 
 func TestRestKubeSetExtendedResource(t *testing.T) {
