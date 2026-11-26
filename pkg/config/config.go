@@ -104,6 +104,8 @@ type Config struct {
 	Audit AuditConfig
 	// IAM configures the IAM module's seed (NEBIUS_MOCKER_IAM_*).
 	IAM IAMConfig
+	// Billing configures the billing module's price list (NEBIUS_MOCKER_BILLING_*).
+	Billing BillingConfig
 	// Auth configures issued access tokens and the service-account token
 	// exchange (NEBIUS_MOCKER_TOKEN_*, NEBIUS_MOCKER_IAM_JWT_MAX_TTL).
 	Auth AuthConfig
@@ -299,6 +301,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, registryParsers(&c.Registry)...)
 	parsers = append(parsers, vpcParsers(&c.VPC)...)
 	parsers = append(parsers, dnsParsers(&c.DNS)...)
+	parsers = append(parsers, billingParsers(&c.Billing)...)
 	parsers = append(parsers, mk8sParsers(&c.MK8s)...)
 	parsers = append(parsers, applicationsParsers(&c.Applications)...)
 	parsers = append(parsers, mk8sK3sParsers(&c.MK8sK3s)...)

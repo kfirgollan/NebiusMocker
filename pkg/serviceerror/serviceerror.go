@@ -40,13 +40,8 @@ var mappings = map[errs.Kind]mapping{
 			ResourceAlreadyExists: &commonpb.ResourceAlreadyExists{ResourceId: e.ResourceID},
 		}}
 	}},
-	errs.KindBadRequest: {codes.InvalidArgument, commonpb.ServiceError_NOTHING, func(_ context.Context, e *errs.Error) *commonpb.ServiceError {
-		br := &commonpb.BadRequest{}
-		for _, v := range e.Violations {
-			br.Violations = append(br.Violations, &commonpb.BadRequest_Violation{Field: v.Field, Message: v.Message})
-		}
-		return &commonpb.ServiceError{Details: &commonpb.ServiceError_BadRequest{BadRequest: br}}
-	}},
+	errs.KindBadRequest: {codes.InvalidArgument, commonpb.ServiceError_NOTHING, badRequestDetail},
+	errs.KindOutOfRange: {codes.OutOfRange, commonpb.ServiceError_NOTHING, badRequestDetail},
 	errs.KindBadState: {codes.FailedPrecondition, commonpb.ServiceError_NOTHING, func(_ context.Context, e *errs.Error) *commonpb.ServiceError {
 		return &commonpb.ServiceError{Details: &commonpb.ServiceError_BadResourceState{
 			BadResourceState: &commonpb.BadResourceState{ResourceId: e.ResourceID, Message: e.Message},
@@ -80,6 +75,14 @@ func quotaFailureDetail(_ context.Context, e *errs.Error) *commonpb.ServiceError
 		})
 	}
 	return &commonpb.ServiceError{Details: &commonpb.ServiceError_QuotaFailure{QuotaFailure: qf}}
+}
+
+func badRequestDetail(_ context.Context, e *errs.Error) *commonpb.ServiceError {
+	br := &commonpb.BadRequest{}
+	for _, v := range e.Violations {
+		br.Violations = append(br.Violations, &commonpb.BadRequest_Violation{Field: v.Field, Message: v.Message})
+	}
+	return &commonpb.ServiceError{Details: &commonpb.ServiceError_BadRequest{BadRequest: br}}
 }
 
 func internalDetail(ctx context.Context, _ *errs.Error) *commonpb.ServiceError {

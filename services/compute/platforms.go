@@ -29,6 +29,9 @@ func registerPlatforms(reg grpc.ServiceRegistrar, deps mocker.Deps, regions []do
 	if err != nil {
 		return nil, fmt.Errorf("compute: %w", err)
 	}
+	if err := peer.Provide[peer.ComputePlatforms](deps.Peers, peer.ComputePlatformsKey, platformPeer{svc: svc}); err != nil {
+		return nil, fmt.Errorf("compute: %w", err)
+	}
 	api.RegisterPlatformAuthzRules(deps.Rules)
 	computepb.RegisterPlatformServiceServer(reg, api.NewPlatformHandler(svc))
 	return svc, nil

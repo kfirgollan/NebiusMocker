@@ -28,6 +28,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | **Implemented**: InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](../services/compute.md#gpu-clusters-implemented)); replaces the built-in one |
 | `NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE` | built-in (`services/capacity/domain/catalog.yaml`) | **Implemented**: capacity block groups, their intervals (days relative to the start day, or RFC 3339) and the GPU presets of resource advice (YAML/JSON, [format](../services/capacity.md#behavior-notes)); replaces the built-in one |
 | `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in (`services/compute/domain/platforms.yaml`) | **Implemented**: platform/preset catalog per region (YAML/JSON, [format](../services/compute.md#catalogs-seed)); replaces the built-in one |
+| `NEBIUS_MOCKER_BILLING_PRICES_FILE` | built-in (`services/billing/domain/prices.yaml`) | **Implemented**: billing price list (YAML/JSON, [format](../services/billing.md#price-list)): calculator unit prices, spot markets and pricing-policy price ranges; replaces the built-in one |
 | `NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER` | `1h` | **Implemented**: how long a `STOPPED` instance keeps a dynamic public IP (`public_ip_address = {}`) before it is released (docs: more than one hour); a positive duration, on the mock clock ([compute](../services/compute.md)) |
 | `NEBIUS_MOCKER_PERSISTENCE` | `0` | Persist state across restarts |
 | `NEBIUS_MOCKER_DATA_DIR` | `/var/lib/nebius-mocker` | State and snapshot location |
@@ -116,6 +117,7 @@ Default catalogs that each module ships (all overridable):
 | Catalog | Module | Examples |
 |---|---|---|
 | Platforms and presets | compute | `cpu-e2`, `cpu-d3`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-b300-sxm`, `gpu-rtx6000`, `gpu-l40s-a`, `gpu-l40s-d`, … with presets such as `2vcpu-8gb`, `8gpu-128vcpu-1600gb`, per region (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) |
+| Price list and spot markets | billing | illustrative on-demand prices per GPU-hour / vCPU-hour / GiB-hour, spot prices per platform and region, `max_price` bounds (`NEBIUS_MOCKER_BILLING_PRICES_FILE`) |
 | Public images and families | compute | `ubuntu22.04-driverless`, `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-v-1-31-ubuntu22.04`, … |
 | InfiniBand fabrics of GPU clusters | compute | `fabric-3` (eu-north1, `gpu-h100-sxm`), `fabric-5` (eu-west1, `gpu-h200-sxm`), `us-central1-b` (us-central1, `gpu-b200-sxm`), … from the public docs; **implemented**, replaced with `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` ([format](../services/compute.md#gpu-clusters-implemented)) |
 | Capacity block groups | capacity | `eu-north1` `gpu-h100-sxm`/`fabric-2` (16 GPUs), `gpu-h200-sxm`/`fabric-7` (32), `us-central1` `gpu-b200-sxm` (64, scheduled) in the seeded tenant; **implemented**, replaced with `NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE` |

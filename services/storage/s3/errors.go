@@ -90,6 +90,8 @@ func toS3Error(err error) s3Error {
 			return s3Error{Code: "InvalidStorageClass", Message: de.Violations[0].Message, status: http.StatusBadRequest}
 		}
 		return s3Error{Code: "InvalidArgument", Message: domainMessage(err), status: http.StatusBadRequest}
+	case errs.KindOutOfRange:
+		return s3Error{Code: "InvalidArgument", Message: domainMessage(err), status: http.StatusBadRequest}
 	case errs.KindBadState:
 		return s3Error{Code: "InvalidBucketState", Message: domainMessage(err), status: http.StatusConflict}
 	case errs.KindUnknown, errs.KindConflict, errs.KindOperationConflict, errs.KindInternal:

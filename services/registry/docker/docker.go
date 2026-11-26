@@ -169,7 +169,7 @@ func (s *Server) deny(w http.ResponseWriter, r *http.Request, err error) {
 		status, code = http.StatusForbidden, "DENIED"
 	case errs.KindNotFound:
 		status, code = http.StatusNotFound, "NAME_UNKNOWN"
-	case errs.KindBadState, errs.KindBadRequest:
+	case errs.KindBadState, errs.KindBadRequest, errs.KindOutOfRange:
 		status, code = http.StatusBadRequest, "NAME_INVALID"
 	case errs.KindUnknown, errs.KindAlreadyExists, errs.KindConflict, errs.KindOperationConflict,
 		errs.KindQuotaExceeded, errs.KindInternal:

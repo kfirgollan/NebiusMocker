@@ -27,6 +27,9 @@ const (
 	KindUnauthenticated
 	KindQuotaExceeded
 	KindInternal
+	// KindOutOfRange is a request value outside its allowed range
+	// (gRPC OUT_OF_RANGE), e.g. a price outside the permitted bounds.
+	KindOutOfRange
 )
 
 var kindNames = map[Kind]string{
@@ -41,6 +44,7 @@ var kindNames = map[Kind]string{
 	KindUnauthenticated:   "unauthenticated",
 	KindQuotaExceeded:     "quota_exceeded",
 	KindInternal:          "internal",
+	KindOutOfRange:        "out_of_range",
 }
 
 // String returns the snake_case name of the kind.
@@ -143,6 +147,11 @@ func Unauthenticated(msg string) *Error {
 // QuotaExceeded reports that a request would exceed one or more quota allowances.
 func QuotaExceeded(msg string, violations ...QuotaViolation) *Error {
 	return &Error{Kind: KindQuotaExceeded, Message: msg, QuotaViolations: violations}
+}
+
+// OutOfRange reports request fields whose values are outside their allowed range.
+func OutOfRange(violations ...Violation) *Error {
+	return &Error{Kind: KindOutOfRange, Message: "value out of range", Violations: violations}
 }
 
 // Internal reports an unexpected failure. msg must not contain sensitive data.

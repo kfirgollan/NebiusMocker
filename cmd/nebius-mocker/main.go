@@ -11,6 +11,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/ai"
 	"github.com/kfirgollan/NebiusMocker/services/applications"
 	"github.com/kfirgollan/NebiusMocker/services/audit"
+	"github.com/kfirgollan/NebiusMocker/services/billing"
 	"github.com/kfirgollan/NebiusMocker/services/capacity"
 	"github.com/kfirgollan/NebiusMocker/services/compute"
 	"github.com/kfirgollan/NebiusMocker/services/dns"
@@ -25,5 +26,5 @@ import (
 )
 
 func main() {
-	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New(), audit.New(), dns.New(), mk8s.New(), applications.New(), tunnel.New(), capacity.New()))
+	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New(), audit.New(), dns.New(), mk8s.New(), applications.New(), tunnel.New(), capacity.New(), billing.New()))
 }

@@ -40,6 +40,9 @@ var exemptFromAuthn = []string{
 	"/grpc.health.v1.Health/",
 	"/grpc.reflection.",
 	"/nebius.iam.v1.TokenExchangeService/",
+	// Spot prices are public: "Authentication is not required"
+	// (nebius/billing/v1alpha1/spot_price_service.proto).
+	"/nebius.billing.v1alpha1.SpotPriceService/",
 }
 
 // RequestID assigns a request ID, stores it in the context and returns it in
@@ -163,7 +166,16 @@ func Validate() (grpc.UnaryServerInterceptor, error) {
 // as the request they preview (the CLI runs `nebius mk8s node-group update`'s
 // patch through PreflightCheck first), and the module reports problems as
 // diagnostics, so presence rules are skipped there too.
+//
+// The billing v1alpha1 calculator prices compute Create/Update requests that
+// are just as partial: the documented `nebius billing v1alpha1 calculator
+// estimate` names only the parent, platform, preset and preemptible policy,
+// with no boot disk or network interface. The calculator checks the fields it
+// prices itself, so presence rules are skipped there as well.
 func ruleFilter(ctx context.Context, method string, req proto.Message) func(ruleID string) bool {
+	if strings.HasPrefix(method, "/nebius.billing.v1alpha1.CalculatorService/") {
+		return isPresenceRule
+	}
 	if !strings.HasSuffix(method, "/Update") && !strings.HasSuffix(method, "/PreflightCheck") {
 		return func(string) bool { return false }
 	}

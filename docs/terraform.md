@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 45 | 0 | 1 (`nebius_hash`) | 4 |
-| Data sources | 62 | 57 | 0 | 1 (`nebius_parent_id`) | 4 |
+| Resources | 50 | 46 | 0 | 1 (`nebius_hash`) | 3 |
+| Data sources | 62 | 58 | 0 | 1 (`nebius_parent_id`) | 3 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **106** | **0** | **2** | **8** |
+| **Total** | **116** | **108** | **0** | **2** | **6** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -70,7 +70,7 @@ supply real credentials.
 |---|---|---|
 | `nebius_ai_v1_endpoint` | ✅ | Inventory only, and no container runs. The endpoint URL points at an HTTPS stub that answers `200 "endpoint was called"`. UDP ports are rejected ([ai.md](services/ai.md)) |
 | `nebius_applications_v1alpha1_k8s_release` | ✅ | Needs mk8s |
-| `nebius_billing_v1_pricing_policy` | ❌ Missing | |
+| `nebius_billing_v1_pricing_policy` | ✅ | Spot prices and `max_price` bounds come from an illustrative price list. No VM runs under a policy yet, so `running_vm_count` stays 0 ([billing.md](services/billing.md#not-yet)) |
 | `nebius_capacity_v1_capacity_allowance` | ✅ | Block groups are seeded from a catalog. A limit may exceed the group's size, and the effective limit is the smaller of the two ([capacity.md](services/capacity.md#behavior-notes)) |
 | `nebius_compute_v1_disk` | ✅ | From an image, an image family or a snapshot. No quotas ([compute.md](services/compute.md#disks-and-snapshots-implemented)) |
 | `nebius_compute_v1_disk_snapshot` | ✅ | |
@@ -125,7 +125,7 @@ supply real credentials.
 |---|---|---|
 | `nebius_ai_v1_endpoint` | ✅ | |
 | `nebius_applications_v1alpha1_k8s_release` | ✅ | |
-| `nebius_billing_v1_pricing_policy` | ❌ Missing | |
+| `nebius_billing_v1_pricing_policy` | ✅ | |
 | `nebius_capacity_v1_capacity_allowance` | ✅ | |
 | `nebius_capacity_v1_capacity_block_group` | ✅ | |
 | `nebius_compute_v1_disk` | ✅ | |
@@ -201,7 +201,7 @@ supply real credentials.
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |
-| Other | `applications_v1alpha1_k8s_release`, `billing_v1_pricing_policy`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [billing.md](services/billing.md), [quotas.md](services/quotas.md) |
+| Other | `applications_v1alpha1_k8s_release`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [quotas.md](services/quotas.md) |
 
 Across the supported objects, these are not modeled:
 - **Quotas:** nothing returns `RESOURCE_EXHAUSTED` for a quota.

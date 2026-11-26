@@ -48,6 +48,12 @@ func TestFromDomain(t *testing.T) {
 			},
 		},
 		{
+			"out of range", errs.OutOfRange(errs.Violation{Field: "spec.pricing.max_price_v1.max_price", Message: "x"}), codes.OutOfRange,
+			func(se *commonpb.ServiceError) bool {
+				return se.GetBadRequest().GetViolations()[0].GetField() == "spec.pricing.max_price_v1.max_price" && se.GetCode() == "out_of_range"
+			},
+		},
+		{
 			"op conflict is retryable", errs.OperationConflict("operation-1", "group-1"), codes.FailedPrecondition,
 			func(se *commonpb.ServiceError) bool { return se.GetRetryType() == commonpb.ServiceError_CALL },
 		},

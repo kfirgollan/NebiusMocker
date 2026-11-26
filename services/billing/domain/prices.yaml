@@ -1,0 +1,107 @@
+# Built-in price list of the billing module (calculator, spot prices, pricing policies).
+# Replace this whole file with NEBIUS_MOCKER_BILLING_PRICES_FILE (YAML or JSON).
+#
+# The prices are ILLUSTRATIVE, in the spirit of https://nebius.com/prices and
+# https://nebius.com/spot-prices, and are NOT the real Nebius prices. They are
+# per hour, in `currency`, as decimal strings:
+#   compute.gpu_hour         per GPU-hour, covering the vCPUs and RAM of a GPU preset;
+#   compute.vcpu_hour        per vCPU-hour (non-GPU platforms);
+#   compute.memory_gib_hour  per GiB-hour of RAM (non-GPU platforms);
+#   disks / filesystems      per GiB-hour of size.
+# compute.preemptible is the platform's spot market:
+#   spot       the current spot price per GPU-hour in each region (regions not
+#              configured in the mocker are ignored);
+#   min_price  the minimum price: a pricing policy's max_price must be at least this;
+#   max_price  the highest max_price a pricing policy accepts;
+#   both bounds otherwise fail with OUT_OF_RANGE.
+# SKU IDs are derived from the platform / type names, so they are stable.
+currency: usd
+compute:
+  - platform: gpu-h100-sxm
+    product_title: "NVIDIA® H100 NVLink"
+    gpu_hour: "2.95"
+    preemptible:
+      product_title: "Preemptible NVIDIA® H100 NVLink"
+      min_price: "0.500"
+      max_price: "50.000"
+      spot: { eu-north1: "1.250" }
+  - platform: gpu-h200-sxm
+    product_title: "NVIDIA® H200 NVLink"
+    gpu_hour: "3.50"
+    preemptible:
+      product_title: "Preemptible NVIDIA® H200 NVLink"
+      min_price: "0.600"
+      max_price: "50.000"
+      spot: { eu-north1: "2.890", eu-north2: "2.750", eu-west1: "2.950", us-central1: "3.100" }
+  - platform: gpu-b200-sxm
+    product_title: "NVIDIA® B200 NVLink"
+    gpu_hour: "5.50"
+    preemptible:
+      product_title: "Preemptible NVIDIA® B200 NVLink"
+      min_price: "1.000"
+      max_price: "80.000"
+      spot: { us-central1: "3.400" }
+  - platform: gpu-b200-sxm-a
+    product_title: "NVIDIA® B200 NVLink with AMD EPYC"
+    gpu_hour: "5.50"
+    preemptible:
+      product_title: "Preemptible NVIDIA® B200 NVLink with AMD EPYC"
+      min_price: "1.000"
+      max_price: "80.000"
+      spot: { me-west1: "3.300" }
+  - platform: gpu-b300-sxm
+    product_title: "NVIDIA® B300 NVLink"
+    gpu_hour: "6.10"
+    preemptible:
+      product_title: "Preemptible NVIDIA® B300 NVLink"
+      min_price: "1.200"
+      max_price: "90.000"
+      spot: { uk-south1: "4.100", eu-west2: "4.150", us-north1: "4.000" }
+  - platform: gpu-rtx6000
+    product_title: "NVIDIA® RTX PRO 6000 Blackwell"
+    gpu_hour: "1.80"
+    preemptible:
+      product_title: "Preemptible NVIDIA® RTX PRO 6000 Blackwell"
+      min_price: "0.300"
+      max_price: "30.000"
+      spot: { us-central1: "0.900" }
+  - platform: gpu-rtx6000-a
+    product_title: "NVIDIA® RTX PRO 6000 Blackwell with AMD EPYC"
+    gpu_hour: "1.80"
+    preemptible:
+      product_title: "Preemptible NVIDIA® RTX PRO 6000 Blackwell with AMD EPYC"
+      min_price: "0.300"
+      max_price: "30.000"
+      spot: { uk-south2: "0.950", eu-south1: "0.920" }
+  - platform: gpu-l40s-a
+    product_title: "NVIDIA® L40S PCIe with Intel Ice Lake"
+    gpu_hour: "1.55"
+    preemptible:
+      product_title: "Preemptible NVIDIA® L40S PCIe with Intel Ice Lake"
+      min_price: "0.250"
+      max_price: "25.000"
+      spot: { eu-north1: "0.700" }
+  - platform: gpu-l40s-d
+    product_title: "NVIDIA® L40S PCIe with AMD EPYC"
+    gpu_hour: "1.60"
+    preemptible:
+      product_title: "Preemptible NVIDIA® L40S PCIe with AMD EPYC"
+      min_price: "0.250"
+      max_price: "25.000"
+      spot: { eu-north1: "0.720" }
+  - platform: cpu-d3
+    product_title: "Non-GPU AMD EPYC Genoa"
+    vcpu_hour: "0.012"
+    memory_gib_hour: "0.0032"
+  - platform: cpu-e2
+    product_title: "Non-GPU Intel Ice Lake"
+    vcpu_hour: "0.010"
+    memory_gib_hour: "0.0027"
+disks:
+  NETWORK_SSD: { product_title: "Network SSD disk", gib_hour: "0.0000986" }
+  NETWORK_HDD: { product_title: "Network HDD disk", gib_hour: "0.0000417" }
+  NETWORK_SSD_NON_REPLICATED: { product_title: "Network SSD non-replicated disk", gib_hour: "0.0000694" }
+  NETWORK_SSD_IO_M3: { product_title: "Network SSD IO M3 disk", gib_hour: "0.0001319" }
+filesystems:
+  NETWORK_SSD: { product_title: "Network SSD shared filesystem", gib_hour: "0.0001111" }
+  NETWORK_HDD: { product_title: "Network HDD shared filesystem", gib_hour: "0.0000556" }

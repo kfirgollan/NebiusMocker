@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/nebius/gosdk/proto/fieldmask/grpcheader"
+	billingv1alpha1pb "github.com/nebius/gosdk/proto/nebius/billing/v1alpha1"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 	mk8spb "github.com/nebius/gosdk/proto/nebius/mk8s/v1"
@@ -75,6 +76,29 @@ func TestValidatePartialUpdates(t *testing.T) {
 				Spec:     &mk8spb.NodeGroupSpec{Size: &mk8spb.NodeGroupSpec_FixedNodeCount{FixedNodeCount: 1}},
 			},
 			want: codes.OK,
+		},
+		{
+			// The documented `nebius billing v1alpha1 calculator estimate`: no boot disk, no NIC.
+			name: "calculator estimate of a partial instance spec passes", method: "/nebius.billing.v1alpha1.CalculatorService/Estimate",
+			req: &billingv1alpha1pb.EstimateRequest{ResourceSpec: &billingv1alpha1pb.ResourceSpec{
+				ResourceSpec: &billingv1alpha1pb.ResourceSpec_ComputeInstanceSpec{ComputeInstanceSpec: &computepb.CreateInstanceRequest{
+					Metadata: &commonpb.ResourceMetadata{ParentId: "project-e00x"},
+					Spec: &computepb.InstanceSpec{
+						Resources: &computepb.ResourcesSpec{Platform: "gpu-h100-sxm", Size: &computepb.ResourcesSpec_Preset{Preset: "1gpu-16vcpu-200gb"}},
+					},
+				}},
+			}},
+			want: codes.OK,
+		},
+		{
+			name: "the same instance spec is rejected by compute's Create", method: "/nebius.compute.v1.InstanceService/Create",
+			req: &computepb.CreateInstanceRequest{
+				Metadata: &commonpb.ResourceMetadata{ParentId: "project-e00x", Name: "vm"},
+				Spec: &computepb.InstanceSpec{
+					Resources: &computepb.ResourcesSpec{Platform: "gpu-h100-sxm", Size: &computepb.ResourcesSpec_Preset{Preset: "1gpu-16vcpu-200gb"}},
+				},
+			},
+			want: codes.InvalidArgument,
 		},
 		{
 			name: "create without a name is rejected", method: "/nebius.vpc.v1alpha1.AllocationService/Create",
