@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -79,8 +81,19 @@ func grpcClient(ctx context.Context) client {
 	return c
 }
 
-func httpClient(r *http.Request) client {
-	return client{ip: hostOnly(r.RemoteAddr), userAgent: r.UserAgent()}
+func httpClient(r *http.Request, requestID string) client {
+	return client{ip: hostOnly(r.RemoteAddr), userAgent: r.UserAgent(), requestID: requestID}
+}
+
+// requestIDHeader carries the request ID of an HTTP exchange, as the gRPC
+// edge returns x-request-id.
+const requestIDHeader = "X-Request-Id"
+
+// newRequestID returns a random request ID in the edge's format (16 hex digits).
+func newRequestID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails on supported platforms
+	return hex.EncodeToString(b[:])
 }
 
 // hostOnly strips the port from "ip:port" (and brackets from IPv6).
@@ -164,21 +177,24 @@ type oauthError struct {
 // application/x-www-form-urlencoded body.
 func (h *TokenExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	rid := newRequestID()
+	w.Header().Set(requestIDHeader, rid)
+	c := httpClient(r, rid)
 	req, ferr := exchangeForm(w, r)
 	if ferr != nil {
-		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, ferr, oauthPayload(http.StatusBadRequest, domain.OAuthInvalidRequest))
+		h.recordFailure(ctx, exchangeSourceHTTP, c, req, ferr, oauthPayload(http.StatusBadRequest, domain.OAuthInvalidRequest))
 		writeOAuthError(w, http.StatusBadRequest, domain.OAuthInvalidRequest, ferr.Error())
 		return
 	}
 	res, err := h.svc.Exchange(ctx, req)
 	if xe, ok := errors.AsType[*domain.ExchangeError](err); ok {
-		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, err, oauthPayload(http.StatusBadRequest, xe.Code))
+		h.recordFailure(ctx, exchangeSourceHTTP, c, req, err, oauthPayload(http.StatusBadRequest, xe.Code))
 		writeOAuthError(w, http.StatusBadRequest, xe.Code, xe.Description())
 		return
 	}
 	if err != nil {
 		h.log.ErrorContext(ctx, "token exchange", "error", err)
-		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, err, oauthPayload(http.StatusInternalServerError, oauthServerError))
+		h.recordFailure(ctx, exchangeSourceHTTP, c, req, err, oauthPayload(http.StatusInternalServerError, oauthServerError))
 		writeOAuthError(w, http.StatusInternalServerError, oauthServerError, "internal error")
 		return
 	}

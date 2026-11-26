@@ -129,6 +129,9 @@ func postExchange(t *testing.T, addr string, form url.Values) int {
 		t.Fatalf("POST token exchange: %v", err)
 	}
 	_ = resp.Body.Close()
+	if resp.Header.Get("X-Request-Id") == "" {
+		t.Error("HTTP exchange response has no X-Request-Id")
+	}
 	return resp.StatusCode
 }
 
@@ -455,6 +458,11 @@ func TestAuditAuthnFailedExchanges(t *testing.T) {
 					secrets = append(secrets, signatureOf(x.token))
 				}
 				assertNotInEvent(t, ev, secrets...)
+			}
+			for _, ev := range []*auditv2pb.AuditEvent{grpcEv, httpEv} {
+				if ev.GetRequest().GetRequestId() == "" {
+					t.Errorf("%s event has no request_id", ev.GetSource())
+				}
 			}
 			if got := httpEv.GetRequest().GetUserAgent(); got != authnUserAgent {
 				t.Errorf("HTTP user_agent = %q, want %q", got, authnUserAgent)
