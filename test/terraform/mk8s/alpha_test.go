@@ -86,6 +86,10 @@ func waitAlphaOp(t *testing.T) func(*alphaops.Operation, error) string {
 	}
 }
 
+// TestV1alpha1ClusterAndNodeGroupLifecycle runs the lifecycle config with
+// {{.V}} = v1alpha1, i.e. resource "nebius_mk8s_v1alpha1_cluster",
+// resource "nebius_mk8s_v1alpha1_node_group", data "nebius_mk8s_v1alpha1_cluster"
+// and data "nebius_mk8s_v1alpha1_node_group".
 func TestV1alpha1ClusterAndNodeGroupLifecycle(t *testing.T) {
 	inst := startMK8s(t)
 	sdk := inst.SDK(t)

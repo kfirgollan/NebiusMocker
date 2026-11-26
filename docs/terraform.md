@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 37 | 0 | 1 (`nebius_hash`) | 12 |
-| Data sources | 62 | 48 | 0 | 1 (`nebius_parent_id`) | 13 |
+| Resources | 50 | 42 | 0 | 1 (`nebius_hash`) | 7 |
+| Data sources | 62 | 53 | 0 | 1 (`nebius_parent_id`) | 8 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **89** | **0** | **2** | **25** |
+| **Total** | **116** | **99** | **0** | **2** | **15** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -69,7 +69,7 @@ supply real credentials.
 | Resource | Status | Notes |
 |---|---|---|
 | `nebius_ai_v1_endpoint` | ✅ | Inventory only, and no container runs. The endpoint URL points at an HTTPS stub that answers `200 "endpoint was called"`. UDP ports are rejected ([ai.md](services/ai.md)) |
-| `nebius_applications_v1alpha1_k8s_release` | ❌ Missing | Needs mk8s |
+| `nebius_applications_v1alpha1_k8s_release` | ✅ | Needs mk8s |
 | `nebius_billing_v1_pricing_policy` | ❌ Missing | |
 | `nebius_capacity_v1_capacity_allowance` | ❌ Missing | |
 | `nebius_compute_v1_disk` | ✅ | From an image, an image family or a snapshot. No quotas ([compute.md](services/compute.md#disks-and-snapshots-implemented)) |
@@ -94,10 +94,10 @@ supply real credentials.
 | `nebius_iam_v2_project` | ✅ | |
 | `nebius_kms_v1_asymmetric_key` | ✅ | Real ECDSA and RSA keys. Key import is not supported ([kms.md](services/kms.md)) |
 | `nebius_kms_v1_symmetric_key` | ✅ | Real AES-256-GCM keys, with rotation and delayed deletion |
-| `nebius_mk8s_v1_cluster` | ❌ Missing | |
-| `nebius_mk8s_v1_node_group` | ❌ Missing | |
-| `nebius_mk8s_v1alpha1_cluster` | ❌ Missing | |
-| `nebius_mk8s_v1alpha1_node_group` | ❌ Missing | |
+| `nebius_mk8s_v1_cluster` | ✅ | |
+| `nebius_mk8s_v1_node_group` | ✅ | |
+| `nebius_mk8s_v1alpha1_cluster` | ✅ | |
+| `nebius_mk8s_v1alpha1_node_group` | ✅ | |
 | `nebius_msp_mlflow_v1alpha1_cluster` | ❌ Missing | |
 | `nebius_msp_postgresql_v1alpha1_cluster` | ❌ Missing | |
 | `nebius_mysterybox_v1_secret` | ✅ | No encryption with a customer KMS key ([mysterybox.md](services/mysterybox.md)) |
@@ -124,7 +124,7 @@ supply real credentials.
 | Data source | Status | Notes |
 |---|---|---|
 | `nebius_ai_v1_endpoint` | ✅ | |
-| `nebius_applications_v1alpha1_k8s_release` | ❌ Missing | |
+| `nebius_applications_v1alpha1_k8s_release` | ✅ | |
 | `nebius_billing_v1_pricing_policy` | ❌ Missing | |
 | `nebius_capacity_v1_capacity_allowance` | ❌ Missing | |
 | `nebius_capacity_v1_capacity_block_group` | ❌ Missing | |
@@ -154,10 +154,10 @@ supply real credentials.
 | `nebius_iam_v2_tenant` | ✅ | Reading by name needs `parent_id = <tenant ID>` |
 | `nebius_kms_v1_asymmetric_key` | ✅ | |
 | `nebius_kms_v1_symmetric_key` | ✅ | |
-| `nebius_mk8s_v1_cluster` | ❌ Missing | |
-| `nebius_mk8s_v1_node_group` | ❌ Missing | |
-| `nebius_mk8s_v1alpha1_cluster` | ❌ Missing | |
-| `nebius_mk8s_v1alpha1_node_group` | ❌ Missing | |
+| `nebius_mk8s_v1_cluster` | ✅ | |
+| `nebius_mk8s_v1_node_group` | ✅ | |
+| `nebius_mk8s_v1alpha1_cluster` | ✅ | |
+| `nebius_mk8s_v1alpha1_node_group` | ✅ | |
 | `nebius_msp_mlflow_v1alpha1_cluster` | ❌ Missing | |
 | `nebius_msp_postgresql_v1alpha1_cluster` | ❌ Missing | |
 | `nebius_mysterybox_v1_secret` | ✅ | |

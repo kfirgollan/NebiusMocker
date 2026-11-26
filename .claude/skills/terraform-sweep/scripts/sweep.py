@@ -169,21 +169,24 @@ def mock_surface(repo):
                   for a, p in imports.items() if "/gosdk/proto/nebius/" in p}
         for alias, svc in re.findall(r"\b(\w+)\.Register(\w+)Server\(", src):
             if alias in protos:
-                registered.add(protos[alias] + "." + svc)
+                # Go names may differ in case from the proto (K8SReleaseService
+                # vs K8sReleaseService), so names are compared lowercased.
+                registered.add((protos[alias] + "." + svc).lower())
         for rpc, alias, req in re.findall(
                 r"^func \(\w+ \*?\w+\) (\w+)\(\w+ context\.Context, \w+ \*(\w+)\.(\w+)\)", src, re.M):
             if alias in protos:
-                handlers.add((protos[alias], rpc, protos[alias] + "." + req))
+                handlers.add((protos[alias].lower(), rpc, (protos[alias] + "." + req).lower()))
     return registered, handlers
 
 
 def rpc_implemented(svc, rpc, protos, registered, handlers):
-    if svc not in registered:
+    if svc.lower() not in registered:
         return False
     req = protos.get(svc, {}).get(rpc, (None, None))[0]
-    pkg = svc.rsplit(".", 1)[0]
+    pkg = svc.rsplit(".", 1)[0].lower()
     if req is None:
         return False
+    req = req.lower()
     return (pkg, rpc, req) in handlers or any(h[1] == rpc and h[2] == req for h in handlers)
 
 
