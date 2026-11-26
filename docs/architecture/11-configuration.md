@@ -65,6 +65,25 @@ see [services/applications.md](../services/applications.md#configuration).
 DNS: `NEBIUS_MOCKER_DNS_LISTEN` (default `:4653`, UDP and TCP; `off` disables it) is the address of the DNS responder
 that answers from the mock's zones; see [services/dns.md](../services/dns.md#configuration).
 
+### Managed Kubernetes: k3s backend
+
+`NEBIUS_MOCKER_MK8S_BACKEND=k3s` runs a real k3s cluster per mk8s cluster in Docker
+([mk8s](../services/mk8s.md#k3s-backend-real-kubernetes)). It fails at startup, naming the setting, when Docker does not
+answer.
+
+| Env | Default | Description |
+|---|---|---|
+| `NEBIUS_MOCKER_MK8S_K3S_DOCKER_HOST` | `DOCKER_HOST`, else `/var/run/docker.sock`, else `~/.docker/run/docker.sock` | Docker Engine endpoint, `unix:///path` or `tcp://host:port` |
+| `NEBIUS_MOCKER_MK8S_K3S_IMAGES` | `1.33…1.37` → `rancher/k3s:v1.3x.y-k3s1` | `version=image,…`: the k3s image per control-plane version (entries replace the defaults of the same version). Every version of `NEBIUS_MOCKER_MK8S_VERSIONS` needs one |
+| `NEBIUS_MOCKER_MK8S_K3S_BIND_IP` | `127.0.0.1` | Host address the API server port is published on |
+| `NEBIUS_MOCKER_MK8S_K3S_ENDPOINT_HOST` | `127.0.0.1` | Host in `status.control_plane.endpoints` and in the API server certificate. `host.docker.internal` for kubectl in containers |
+| `NEBIUS_MOCKER_MK8S_K3S_WEBHOOK_URL` | `http(s)://host.docker.internal:<edge port>` | Where the k3s API servers reach the mocker's TokenReview webhook. Set it on Linux when the mocker is not reachable as `host.docker.internal` |
+| `NEBIUS_MOCKER_MK8S_K3S_SERVER_MEMORY` / `_AGENT_MEMORY` | `768Mi` / `384Mi` | Memory estimate of a cluster's server and of each node agent, for admission |
+| `NEBIUS_MOCKER_MK8S_K3S_AGENT_CPU` | `0.5` | CPU estimate per agent: at most `NCPU / AGENT_CPU` agents |
+| `NEBIUS_MOCKER_MK8S_K3S_MEMORY_RESERVE` | `1Gi` | Host memory admission always leaves free |
+| `NEBIUS_MOCKER_MK8S_K3S_MAX_AGENTS` | unlimited | Cap on agents across all clusters |
+| `NEBIUS_MOCKER_MK8S_K3S_START_TIMEOUT` | `3m` | How long a server or agent may take to become ready |
+
 ## Seed data
 
 Seed files are YAML documents, each holding a list of resources expressed as **the same JSON/YAML shape as the proto

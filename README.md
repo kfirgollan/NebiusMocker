@@ -194,6 +194,29 @@ docker push 127.0.0.1:4590/<registry ID without "registry-">/app:v1
 Run the mocker as a container for docker: Docker Desktop's daemon can reach published container ports but not a host
 process. The credential-helper flow (`nebius registry configure-helper`) and the details are in
 [docs/services/registry.md](docs/services/registry.md#running-it-the-documented-setup).
+
+### A real Kubernetes cluster (mk8s on k3s)
+
+With `NEBIUS_MOCKER_MK8S_BACKEND=k3s`, each mk8s cluster is a real k3s cluster in Docker and each node of a node group
+is a k3s agent container (as many as the Docker host fits). `nebius mk8s cluster get-credentials` writes the usual
+kubeconfig, and kubectl authenticates with your Nebius IAM token: viewers get `view`, editors `edit`, admins
+`cluster-admin`. The kubeconfig's exec plugin runs the CLI without `--insecure`, so serve TLS from a CA you trust and
+resolve the API names to the mocker:
+
+```bash
+mkcert -install && mkcert api.nebius.cloud '*.api.nebius.cloud' '*.iam.api.nebius.cloud' localhost
+echo '127.0.0.1 api.nebius.cloud cpl.iam.api.nebius.cloud tokens.iam.api.nebius.cloud mk8s.api.nebius.cloud compute.api.nebius.cloud vpc.api.nebius.cloud' | sudo tee -a /etc/hosts
+NEBIUS_MOCKER_MK8S_BACKEND=k3s NEBIUS_MOCKER_TLS_CERT_FILE=api.nebius.cloud+3.pem \
+  NEBIUS_MOCKER_TLS_KEY_FILE=api.nebius.cloud+3-key.pem make run
+
+nebius profile create mocker --endpoint api.nebius.cloud:4566 --token-file token --parent-id project-e00mock000000000default
+# create the network, cluster and node group (Terraform: address_options = { "*" = { no_tls_verify = true } })
+nebius mk8s cluster get-credentials --id <cluster ID> --external
+kubectl get nodes
+```
+
+Details, the IAM → Kubernetes group mapping, capacity limits and Linux notes are in
+[docs/services/mk8s.md](docs/services/mk8s.md#k3s-backend-real-kubernetes).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 | `NEBIUS_MOCKER_DNS_LISTEN` | `:4653` | DNS responder for the mock's zones, UDP and TCP (`off` disables it) |

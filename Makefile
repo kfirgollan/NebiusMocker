@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-filesystems e2e-registry docker-image check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-filesystems e2e-registry e2e-mk8s docker-image check hooks run tidy clean
 
 all: check
 
@@ -70,6 +70,17 @@ e2e-registry: ## Harbor-backed registry tests (needs Docker): CLI login + creden
 	$(MAKE) --no-print-directory docker-image IMAGE=$$image && \
 	./deploy/harbor/harbor.sh up "$$dir" && . "$$dir/env" && \
 	NEBIUS_MOCKER_E2E_IMAGE=$$image $(GO) test -tags e2e_registry -count=1 -v ./test/registry/...
+
+# e2e-mk8s runs Managed Kubernetes on the k3s backend: the in-process mocker
+# starts real k3s servers and agents in Docker; the user's tools (nebius CLI,
+# kubectl) run in a Linux container that trusts the mocker's TLS CA.
+# deploy/k3s/reap.sh removes k3s leftovers of mockers that are gone.
+MK8S_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=mk8s | xargs docker rm -f -v >/dev/null 2>&1 || true; ./deploy/k3s/reap.sh
+
+e2e-mk8s: ## Managed Kubernetes on k3s (needs Docker + terraform): Terraform, get-credentials, kubectl, IAM groups, capacity
+	@$(MK8S_CLEANUP)
+	@status=0; $(GO) test -tags e2e_mk8s -count=1 -timeout 60m -v ./test/mk8s/... || status=$$?; \
+	$(MK8S_CLEANUP); exit $$status
 
 check: lint test ## Everything the pre-commit hook runs
 

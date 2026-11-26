@@ -1,7 +1,7 @@
 # mk8s — Managed Service for Kubernetes
 
 > Module: `services/mk8s` · Image: `nebius-mocker-mk8s` · `NEBIUS_MOCKER_SERVICES=mk8s`
-> M1 tier: **T2** (`mock` backend) · **T3**: `k3s` backend (Phase B, in progress) · Endpoint: `mk8s.api.nebius.cloud`
+> M1 tier: **T2** (`mock` backend) · **T3**: `k3s` backend (real Kubernetes in Docker) · Endpoint: `mk8s.api.nebius.cloud`
 
 ## Implementation status
 
@@ -20,7 +20,7 @@
 | `nebius mk8s cluster get-credentials` kubeconfig and the `get-token` exec plugin | ✅ e2e: `test/cli/mk8s` (with the mock backend nothing serves the Kubernetes API) |
 | Authorization: rules for every RPC (`mk8s.clusters.*`, `mk8s.nodeGroups.*`); viewers read clusters, node groups and node instances | ✅ |
 | `nebius_mk8s_v1_{cluster,node_group}` and `nebius_mk8s_v1alpha1_{cluster,node_group}` resources and data sources with the official provider | ✅ e2e: `test/terraform/mk8s` |
-| A working Kubernetes API (`kubectl`, Helm, the Kubernetes provider) | `k3s` backend, Phase B |
+| A working Kubernetes API: `k3s` backend (a k3s server per cluster, a k3s agent per node, bounded by the Docker host), Nebius IAM tokens through a TokenReview webhook mapped to `nebius:viewer`/`editor`/`admin`, GPU capacity | ✅ e2e: `test/mk8s` (`make e2e-mk8s`), see [k3s backend](#k3s-backend-real-kubernetes) |
 | Rolling node replacement in batches that honour `strategy` (`max_surge`, `max_unavailable`), progress in `status` | ✅ |
 | Quotas, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, `max_pods`, container runtime | Not yet (see [Not yet](#not-yet)) |
 
@@ -28,7 +28,8 @@ Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v
 
 Covered by unit tests (`services/mk8s/{domain,dal,api,backend/mock}`, `services/compute/domain/nodes_test.go`), gosdk
 contract tests (`test/contract/mk8s_*`), the Terraform e2e suite
-(`test/terraform/mk8s`) and the CLI e2e suite (`test/cli/mk8s`), all run by `make e2e`.
+(`test/terraform/mk8s`) and the CLI e2e suite (`test/cli/mk8s`), all run by `make e2e`; the k3s backend by its unit tests (`services/mk8s/backend/k3s`, `pkg/dockerhost`,
+`services/iam/{domain,api}/k8swebhook_test.go`) and `make e2e-mk8s`.
 
 | Resource kind | Message | NID prefix | Parent | States |
 |---|---|---|---|---|
@@ -61,7 +62,7 @@ happens, the mock's choice is marked *(mock)*.
 - **Endpoints** *(mock)*: with the `mock` backend the private endpoint is
   `https://<cluster-id>.private.mk8s.mocker.localhost` and, when `endpoints.public_endpoint` is set, the public one is
   `https://<cluster-id>.mk8s.mocker.localhost`. `.localhost` names resolve to the loopback address and **nothing
-  listens**: use `NEBIUS_MOCKER_MK8S_BACKEND=k3s` (Phase B, in progress) for a working Kubernetes API. The CA is a
+  listens**: use `NEBIUS_MOCKER_MK8S_BACKEND=k3s` for a working Kubernetes API. The CA is a
   per-cluster self-signed certificate, stable for the process. The real endpoint and CA formats are undocumented.
 - **Delete** sets `DELETING`, then deletes every node group (and its node instances), the cluster's Applications releases,
   the backend control plane and the network binding.
@@ -126,7 +127,8 @@ the node group instead".
 context and user named `nebius-mk8s-<cluster name>-<ID suffix>` (the cluster ID without `mk8scluster-`), `server` the public
 (`--external`) or private (`--internal`) endpoint verbatim, the CA embedded, and an exec plugin
 (`client.authentication.k8s.io/v1beta1`) that runs `nebius mk8s v1 cluster get-token --profile <profile> --format json`.
-`get-token` returns an IAM token from the mock. With the mock backend `kubectl` cannot connect: the endpoint resolves to
+`get-token` returns an IAM token from the mock. With the `k3s` backend that kubeconfig works with `kubectl` as is
+([how](#using-it-from-your-machine)); with the mock backend `kubectl` cannot connect: the endpoint resolves to
 loopback and nothing listens. `test/cli/mk8s` checks the kubeconfig and runs the exec command as `kubectl` would.
 
 #### Backends
@@ -142,7 +144,7 @@ per cluster; every method is idempotent. `EnsureNodes` reports each node's readi
 | `NEBIUS_MOCKER_MK8S_BACKEND` | Behavior |
 |---|---|
 | `mock` (default) | No Kubernetes. Endpoints that resolve to loopback, a self-signed CA, every node ready at once. Operations do their work inside the request |
-| `k3s` | Accepted by the configuration, **not available yet**: the module fails to start with `backend "k3s" is not available` until Phase B lands |
+| `k3s` | A real k3s cluster per cluster and a k3s agent container per node, in Docker ([k3s backend](#k3s-backend-real-kubernetes)) |
 
 Every backend but `mock` starts containers, so its operations run **detached**: Create, Update and Delete return the
 operation at once and the work finishes on its own goroutine (`pkg/operations`, `Detached`) while clients poll it.
@@ -195,7 +197,9 @@ write (`test/contract/mk8s_authz_test.go`).
   `recovery_policy`); `auto_repair.conditions` is rejected.
 - Real node images and GPU drivers: nodes are management-plane compute instances (no VM boots), and Kubernetes nodes
   exist only with a Kubernetes backend.
-- The `k3s` backend and its Docker-backed tests (Phase B), and mocker-issued IAM tokens at the Kubernetes API.
+- k3s backend: `public_endpoint.allowed_cidrs` is rejected, `etcd_cluster_size` 3 runs one server, `max_pods` is
+  rejected by the control plane (the agents could take `--max-pods`), and the mocker must run on the Docker host (it
+  reaches each API server on its published port).
 
 ## Terraform
 
@@ -231,13 +235,123 @@ commands (see [applications.md](applications.md)).
 
 | Env | Default | Description |
 |---|---|---|
-| `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | `mock` \| `k3s` (`k3s` is not available yet) |
+| `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | `mock` \| `k3s` (needs Docker; fails at startup, naming the setting, without it) |
 | `NEBIUS_MOCKER_MK8S_ROLLOUT_STEP` | `0` | Pause between the batches of a node group rollout, on the mocker's clock |
+| `NEBIUS_MOCKER_MK8S_K3S_*` | | k3s backend: Docker host, images per version, endpoint host, webhook URL, capacity estimates and limits, start timeout ([configuration](../architecture/11-configuration.md#managed-kubernetes-k3s-backend)) |
 | `NEBIUS_MOCKER_MK8S_VERSIONS` | `1.34,1.35,1.36` | Control-plane version catalog, `<major>.<minor>`, comma-separated; the newest is the default for new clusters |
 
-## k3s backend
+## k3s backend: real Kubernetes
 
-Documented by the k3s backend (Phase B).
+`NEBIUS_MOCKER_MK8S_BACKEND=k3s` gives every mk8s cluster a real Kubernetes API, the way LocalStack runs EKS
+(`MANAGED_K8S_PROVIDER`, one k3s container per cluster). The mock still owns the control plane (resources, validation,
+operations, nodes as compute instances); `services/mk8s/backend/k3s` runs Kubernetes on the local Docker host through
+the Docker Engine API (`pkg/dockerhost`, no `k3d` binary):
+
+| mk8s | Docker | Kubernetes |
+|---|---|---|
+| Cluster | `rancher/k3s:<tag>` server container `nebius-mocker-<cluster id>-server` (+ network and data volume of the same name) | API server, no kubelet (`--disable-agent`: like Nebius, the control plane is not a node) |
+| Node group node | `k3s agent` container `nebius-mocker-<cluster id>-<node name>` | Node named after the node's compute instance, with the group's labels and taints |
+
+- **Version.** `control_plane.version` picks the image (`NEBIUS_MOCKER_MK8S_K3S_IMAGES`, defaults for 1.33–1.37).
+  `status.control_plane.version` reports the running Kubernetes patch. An upgrade replaces the server container on the
+  same data volume and port; node group version changes recreate the agents.
+- **Endpoint and CA.** The API port is published on `NEBIUS_MOCKER_MK8S_K3S_BIND_IP` (`127.0.0.1`).
+  `public_endpoint` and `private_endpoint` are both `https://<ENDPOINT_HOST>:<port>` (one network: the private endpoint
+  is the same local address). `cluster_ca_certificate` is the k3s server CA, and the server certificate covers
+  `ENDPOINT_HOST`, so the kubeconfig `nebius mk8s cluster get-credentials` writes works as is.
+- **Service CIDR.** `kube_network.service_cidrs[0]` becomes `--service-cidr` (`/N` is carved from `10.43.0.0`).
+- **Not applied:** `public_endpoint.allowed_cidrs` is rejected (`InvalidArgument`): every client of a local API server
+  comes through the Docker host. `etcd_cluster_size` 3 runs one k3s server (embedded datastore): control-plane HA is
+  not emulated (it is not observable through the Kubernetes API; `status` still reports the size).
+- **Approximated:** a Node's `cpu` and `memory` capacity are the Docker host's (the kubelet reads the host), not the
+  preset's; the authoritative preset is the node's compute instance and the node group spec. `nvidia.com/gpu` is the
+  preset's GPU count. Removing a node (scale-down, recreation) removes its agent without draining it first.
+- **Nodes are node-group nodes only:** the server runs with `--disable-agent`, so `kubectl get nodes` lists exactly the
+  node groups' compute instances, by name, and DaemonSets count only them.
+
+### Authentication: Nebius IAM tokens, documented groups
+
+The kubeconfig from `get-credentials` runs `nebius mk8s v1 cluster get-token --profile <p> --format json`, which prints
+the profile's IAM access token. Each k3s API server is started with webhook token authentication pointing at the mocker
+(`POST /mk8s/v1/clusters/<id>/tokenreview` on the edge port, `NEBIUS_MOCKER_MK8S_K3S_WEBHOOK_URL`). The webhook accepts
+every token the gRPC edge accepts (dev tokens, tokens exchanged for service-account keys or federated credentials) and
+answers with:
+
+- username and uid: the principal ID (`tenantuseraccount-…`, `serviceaccount-…`);
+- one group, by the highest IAM role the principal holds on the cluster or its project/tenant:
+  `nebius:admin` (admin), `nebius:editor` (editor), `nebius:viewer` (viewer), none otherwise.
+
+Nebius documents these groups ([OIDC providers](https://docs.nebius.com/kubernetes/authentication/oidc-providers):
+"users who access the cluster with Nebius AI Cloud credentials … are in groups such as `nebius:viewer`,
+`nebius:editor`, and `nebius:admin`, and these groups already have permissions in the cluster"). The exact bindings are
+not documented; the mock installs ClusterRoleBindings `nebius:viewer` → `view`, `nebius:editor` → `edit`,
+`nebius:admin` → `cluster-admin`, plus `nebius:node-reader` (get, list, watch Nodes, which `view` and `edit` do not cover) for viewers and editors. So a viewer service account can list pods but not create them. Bind your own roles to
+these groups, or to the user names, for anything finer. Under `NEBIUS_MOCKER_AUTHZ=off` and `audit` (the default) every
+valid token gets `nebius:admin` (audit logs the group it would get), as the gRPC edge never blocks in those modes.
+
+### Nodes: bounded by the machine
+
+Each node of a node group is one agent container, admitted while the Docker host fits it: at most
+`NCPU / NEBIUS_MOCKER_MK8S_K3S_AGENT_CPU` agents, free memory (`docker info` MemTotal minus what running containers use,
+this backend's containers counted at least at their estimate) above `_MEMORY_RESERVE` plus `_AGENT_MEMORY`, and
+`_MAX_AGENTS` if set. A node that does not fit is never faked: it stays not ready, `ready_node_count < node_count`, and
+the node group status names the limit (for example "Docker host capacity: 3 of 3 k3s agents are running
+(NEBIUS_MOCKER_MK8S_K3S_MAX_AGENTS)"). Agents that exit or do not join within `_START_TIMEOUT` are reported the same
+way, with their last log lines.
+
+GPU presets: there are no GPUs, but each node of a GPU preset advertises the preset's GPU count as the extended resource
+`nvidia.com/gpu` (what the NVIDIA device plugin reports), so pods requesting GPUs and GPU DaemonSets schedule on them.
+Nothing runs on a GPU.
+
+### Lifecycle
+
+Every container, network and volume carries `nebius-mocker.backend=k3s`, `nebius-mocker.cluster=<id>`,
+`nebius-mocker.owner=<webhook URL>` (the mocker that made it) and, for agents, `nebius-mocker.node-group`,
+`nebius-mocker.node` and `nebius-mocker.instance`. They are removed when their cluster, node group or node goes, when
+the mocker shuts down, and at startup (leftovers of a killed mocker on the same port: LocalStack's orphan problem). A
+mocker only reaps its own owner's objects, so two mockers can share a Docker host; `deploy/k3s/reap.sh` removes objects
+whose owner port no longer answers. A cluster stays `PROVISIONING` until its API server answers `/readyz`; a server that exits or does not
+get ready within `_START_TIMEOUT` fails the operation with `FAILED_PRECONDITION` and the server's last log lines.
+With the k3s backend and no reachable Docker daemon the mocker refuses to start and names the setting.
+
+### Using it from your machine
+
+The kubeconfig's exec plugin runs the nebius CLI without `--insecure`, and a profile cannot store that flag, so the
+mocker must serve TLS from a CA your machine trusts (as for the registry credential helper):
+
+1. A certificate for `api.nebius.cloud`, `*.api.nebius.cloud` and `*.iam.api.nebius.cloud` (plus `localhost`), issued by
+   a local CA (`mkcert` works). Trust the CA: macOS Keychain (`security add-trusted-cert`, or `mkcert -install`);
+   Linux `/usr/local/share/ca-certificates` + `update-ca-certificates`.
+2. Resolve the API names to the mocker: `/etc/hosts` lines `127.0.0.1 api.nebius.cloud cpl.iam.api.nebius.cloud
+   tokens.iam.api.nebius.cloud mk8s.api.nebius.cloud compute.api.nebius.cloud vpc.api.nebius.cloud`.
+3. Start the mocker:
+   ```bash
+   NEBIUS_MOCKER_MK8S_BACKEND=k3s NEBIUS_MOCKER_AUTHZ=enforce \
+   NEBIUS_MOCKER_TLS_CERT_FILE=tls.crt NEBIUS_MOCKER_TLS_KEY_FILE=tls.key make run
+   ```
+4. `nebius profile create mocker --endpoint api.nebius.cloud:4566 --token-file token --parent-id <project>`, create the
+   cluster and a node group (Terraform: `address_options = { "*" = { no_tls_verify = true } }` or trust the CA), then
+   `nebius mk8s cluster get-credentials --id <cluster> --external` and use `kubectl`.
+
+Terraform's provider can use `no_tls_verify = true` instead of trusting the CA.
+
+- **Docker Desktop (macOS, Windows):** works as above. The API servers reach the mocker as `host.docker.internal`.
+- **Linux (Docker Engine):** containers reach the host through the bridge gateway, not loopback. Bind the mocker on
+  an address the containers can reach (`NEBIUS_MOCKER_LISTEN=0.0.0.0:4566`, or the `docker0` address), and set
+  `NEBIUS_MOCKER_MK8S_K3S_WEBHOOK_URL=http(s)://<docker0 IP>:4566` if `host.docker.internal` is not what you want
+  (the backend adds `host.docker.internal:host-gateway` to every k3s container, Docker 20.10+). The API servers are
+  published on `127.0.0.1` and reachable from the host as usual.
+- **kubectl in a container:** set `NEBIUS_MOCKER_MK8S_K3S_ENDPOINT_HOST=host.docker.internal` (the certificate covers
+  it) and give the container `--add-host` entries for the API names → `host-gateway`. `make e2e-mk8s` runs this way.
+- The mocker must run on the Docker host (not in a container): it reaches each API server on its published port.
+
+Tested by `make e2e-mk8s` (`test/mk8s`): Terraform creates a network, a cluster, a CPU node group (labels, a taint)
+and a GPU node group; `get-credentials` and kubectl in a Linux user-machine container see the nodes (named after their
+compute instances, labels, taints, `nvidia.com/gpu`); a Deployment rolls out, a DaemonSet lands on every node and a GPU pod
+schedules on the GPU node; host kubectl with the editor token can create Deployments but not ClusterRoleBindings; a
+viewer service account (key exchange from a CLI profile) is `nebius:viewer`, lists pods and cannot create; scaling past
+`NEBIUS_MOCKER_MK8S_K3S_MAX_AGENTS` leaves nodes not ready with the reason, scaling down removes agents, nodes and
+instances; `terraform destroy` leaves no container.
 
 ## API surface
 

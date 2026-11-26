@@ -93,6 +93,9 @@ type Config struct {
 	MK8s MK8sConfig
 	// Applications configures Nebius Applications (NEBIUS_MOCKER_APPLICATIONS_*).
 	Applications ApplicationsConfig
+	// MK8sK3s configures the k3s backend of Managed Kubernetes
+	// (NEBIUS_MOCKER_MK8S_K3S_*).
+	MK8sK3s MK8sK3sConfig
 	// VPC is the seeded VPC address space (NEBIUS_MOCKER_VPC_*).
 	VPC VPCConfig
 	// AI configures the AI endpoints area and its stub data plane.
@@ -227,6 +230,7 @@ func Default() Config {
 		DNS:          defaultDNS(),
 		MK8s:         defaultMK8s(),
 		Applications: defaultApplications(),
+		MK8sK3s:      defaultMK8sK3s(),
 		Auth:         defaultAuth(),
 	}
 }
@@ -295,6 +299,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, dnsParsers(&c.DNS)...)
 	parsers = append(parsers, mk8sParsers(&c.MK8s)...)
 	parsers = append(parsers, applicationsParsers(&c.Applications)...)
+	parsers = append(parsers, mk8sK3sParsers(&c.MK8sK3s)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
 	parsers = append(parsers, authParsers(&c.Auth)...)
@@ -307,6 +312,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		if err := p.apply(strings.TrimSpace(v)); err != nil {
 			return Config{}, fmt.Errorf("NEBIUS_MOCKER_%s: %w", p.name, err)
 		}
+	}
+	if err := applyDockerHost(lookup, &c.MK8sK3s); err != nil {
+		return Config{}, err
 	}
 	if _, err := c.SeededProjects(); err != nil {
 		return Config{}, fmt.Errorf("NEBIUS_MOCKER_IAM_PROJECTS: %w", err)

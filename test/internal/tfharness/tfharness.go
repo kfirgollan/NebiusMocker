@@ -34,7 +34,9 @@ type Run struct {
 	dir   string
 	addr  string
 	token string
-	out   bytes.Buffer
+	// addressOptions is the provider's address_options value for "*".
+	addressOptions string
+	out            bytes.Buffer
 }
 
 // New prepares a working directory whose provider talks to addr with token.
@@ -50,7 +52,7 @@ func New(t *testing.T, addr, token string) *Run {
 	if err != nil {
 		t.Fatalf("tfexec: %v", err)
 	}
-	r := &Run{tf: tf, dir: dir, addr: addr, token: token}
+	r := &Run{tf: tf, dir: dir, addr: addr, token: token, addressOptions: "{ insecure = true }"}
 	env := map[string]string{
 		"CHECKPOINT_DISABLE":         "1",
 		"TF_CLI_CONFIG_FILE":         writeCLIConfig(t, dir),
@@ -71,6 +73,11 @@ func New(t *testing.T, addr, token string) *Run {
 	return r
 }
 
+// UseTLSWithoutVerify points the provider at a mocker that serves TLS
+// (NEBIUS_MOCKER_TLS_CERT_FILE) through its documented no_tls_verify
+// address option, instead of plaintext.
+func (r *Run) UseTLSWithoutVerify() { r.addressOptions = "{ no_tls_verify = true }" }
+
 // Write renders main.tf: the provider block followed by body.
 func (r *Run) Write(t *testing.T, body string) {
 	t.Helper()
@@ -86,10 +93,10 @@ func (r *Run) Write(t *testing.T, body string) {
 # The official provider, pointed at NebiusMocker through its own settings.
 provider "nebius" {
   resolvers       = { "*" = %q }
-  address_options = { "*" = { insecure = true } }
+  address_options = { "*" = %s }
   token           = %q
 }
-`, ProviderVersion, r.addr, r.token) + body
+`, ProviderVersion, r.addr, r.addressOptions, r.token) + body
 	if err := os.WriteFile(filepath.Join(r.dir, "main.tf"), []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write main.tf: %v", err)
 	}

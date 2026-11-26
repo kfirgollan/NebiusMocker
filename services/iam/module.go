@@ -103,6 +103,9 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := registerFederations(reg, r, deps); err != nil {
 		return err
 	}
+	if err := registerK8sWebhook(deps); err != nil {
+		return err
+	}
 	iampb.RegisterGroupServiceServer(reg, api.NewGroupHandler(groups))
 	iampb.RegisterGroupMembershipServiceServer(reg, api.NewMembershipHandler(memberships))
 	iampb.RegisterAccessPermitServiceServer(reg, api.NewPermitHandler(permits))

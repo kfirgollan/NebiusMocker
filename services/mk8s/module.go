@@ -41,8 +41,8 @@ func (*Module) Name() string { return "mk8s" }
 
 // Register wires the cluster and node group services, their authorization,
 // the backend and the peer.MK8sClusters capability.
-func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
-	backend, err := newBackend(deps.Config, deps)
+func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps mocker.Deps) error {
+	backend, err := newBackend(ctx, deps.Config, deps)
 	if err != nil {
 		return err
 	}
