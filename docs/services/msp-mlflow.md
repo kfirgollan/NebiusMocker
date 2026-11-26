@@ -16,7 +16,8 @@
 | Authorization: rules for every RPC (`mlflow.clusters.*`, `stop`/`start` verbs) | ✅ |
 | `nebius_msp_mlflow_v1alpha1_cluster` resource and data source with the official provider | ✅ e2e: `test/terraform/msp` |
 | `nebius msp mlflow v1alpha1 cluster …` CLI flows | ✅ e2e: `test/cli/msp` |
-| Quotas, data export tooling | Not yet (see [Not yet](#not-yet)) |
+| Quotas: `msp.mlflow.cluster.count`, `.vcpu`, `.memory` (the size's resources) charged on Create, released on Delete ([quotas.md](quotas.md#catalog)) | ✅ |
+| Data export tooling, the disk quota | Not yet (see [Not yet](#not-yet)) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 
@@ -57,8 +58,10 @@ created by the service on the caller's behalf (no extra permission checks on the
 
 ### Not yet
 
-- Quotas (owned by the quotas area); the `mlflow-export-import` workflow is the user's own tool and works against the
-  docker backend like any tracking server.
+- The "Network SSD disks total size across clusters" quota: the API exposes no disk size for a cluster, so there is
+  nothing to charge it with; it is not in the catalog.
+- The `mlflow-export-import` workflow is the user's own tool and works against the docker backend like any tracking
+  server.
 
 ## Terraform
 

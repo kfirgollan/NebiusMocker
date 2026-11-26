@@ -137,6 +137,13 @@ type InternalsRepository interface {
 	Delete(ctx context.Context, clusterID string) error
 }
 
+// QuotaGate admits a quota claim and runs apply, the store write that makes
+// the consumption visible to the area's usage source (satisfied by
+// peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
+}
+
 // Hierarchy resolves IAM containers and resources (deps.Authz).
 type Hierarchy interface {
 	// Parent returns the parent ID of a resource, or errs.NotFound.

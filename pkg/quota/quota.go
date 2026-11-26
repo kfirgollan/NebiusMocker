@@ -61,6 +61,20 @@ const (
 	KMSAsymmetricKeyCount = "kms.asymmetrickey.count"
 )
 
+// Managed PostgreSQL and Managed MLflow quotas. The Nebius docs list them by
+// display name only ("Clusters", "Total vCPUs across clusters", "Total RAM
+// across clusters", "Network SSD disks total size across clusters"); the
+// names follow the API packages (nebius.msp.postgresql, nebius.msp.mlflow).
+const (
+	MSPPostgreSQLClusterCount = "msp.postgresql.cluster.count"
+	MSPPostgreSQLVCPU         = "msp.postgresql.vcpu"
+	MSPPostgreSQLMemory       = "msp.postgresql.memory"
+	MSPPostgreSQLDiskSize     = "msp.postgresql.disk.size"
+	MSPMLflowClusterCount     = "msp.mlflow.cluster.count"
+	MSPMLflowVCPU             = "msp.mlflow.vcpu"
+	MSPMLflowMemory           = "msp.mlflow.memory"
+)
+
 // GPUFamilies are the accelerator families of the GPU quotas listed by
 // default ("compute.instance.gpu.<family>"). Any other family a platform
 // uses is still enforced with the GPU default (see Catalog.Lookup).
@@ -125,6 +139,8 @@ const (
 	svcRegistry   = "registry"
 	svcMysteryBox = "mysterybox"
 	svcKMS        = "kms"
+	svcPostgreSQL = "msp-postgresql"
+	svcMLflow     = "msp-mlflow"
 )
 
 var serviceDescriptions = map[string]string{
@@ -136,6 +152,8 @@ var serviceDescriptions = map[string]string{
 	svcRegistry:   "Container Registry",
 	svcMysteryBox: "SecretStash",
 	svcKMS:        "Key Management Service",
+	svcPostgreSQL: "Managed Service for PostgreSQL®",
+	svcMLflow:     "Managed Service for MLflow",
 }
 
 // diskTypes and fsTypes are the size-quota suffixes of compute disk and
@@ -192,6 +210,13 @@ func defaultEntries() []Entry {
 		n(svcMysteryBox, MysteryBoxSecretCount, "Secrets"),
 		n(svcKMS, KMSSymmetricKeyCount, "Symmetric keys"),
 		n(svcKMS, KMSAsymmetricKeyCount, "Asymmetric keys"),
+		n(svcPostgreSQL, MSPPostgreSQLClusterCount, "Clusters"),
+		Entry{Name: MSPPostgreSQLVCPU, Service: svcPostgreSQL, Description: "Total vCPUs across clusters", Unit: UnitCount, Default: defaultVCPU},
+		Entry{Name: MSPPostgreSQLMemory, Service: svcPostgreSQL, Description: "Total RAM across clusters", Unit: UnitByte, Default: defaultBytes},
+		Entry{Name: MSPPostgreSQLDiskSize, Service: svcPostgreSQL, Description: "Network SSD disks total size across clusters", Unit: UnitByte, Default: defaultBytes},
+		n(svcMLflow, MSPMLflowClusterCount, "Clusters"),
+		Entry{Name: MSPMLflowVCPU, Service: svcMLflow, Description: "Total vCPUs across clusters", Unit: UnitCount, Default: defaultVCPU},
+		Entry{Name: MSPMLflowMemory, Service: svcMLflow, Description: "Total RAM across clusters", Unit: UnitByte, Default: defaultBytes},
 	)
 }
 

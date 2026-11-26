@@ -19,6 +19,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/msppostgresql/api"
 	"github.com/kfirgollan/NebiusMocker/services/msppostgresql/dal"
 	"github.com/kfirgollan/NebiusMocker/services/msppostgresql/domain"
@@ -62,7 +63,7 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	backups := dal.NewBackupRepo(deps.Store)
 	svc, err := domain.New(domain.Deps{
 		Clusters: clusters, Backups: backups, Bindings: dal.NewNetworkBindingRepo(deps.Store), Backend: backend,
-		Peers: peers{deps.Peers}, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Log: deps.Log,
+		Peers: peers{deps.Peers}, Hierarchy: deps.Authz, Quota: peer.QuotaGateFor(deps.Peers), Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Log: deps.Log,
 		Config: domain.Config{ProjectID: deps.Config.ProjectID, MSP: deps.Config.MSP, Detached: detached(backend)},
 	})
 	if err != nil {
@@ -91,6 +92,9 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 		}
 		return page.Items[0].ProjectID, nil
 	})
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey(m.Name()), dal.NewQuotaUsage(deps.Store)); err != nil {
+		return fmt.Errorf("msppostgresql: %w", err)
+	}
 	api.RegisterAuthzRules(deps.Rules)
 	pgpb.RegisterClusterServiceServer(reg, api.NewClusterHandler(svc))
 	pgpb.RegisterBackupServiceServer(reg, api.NewBackupHandler(svc))

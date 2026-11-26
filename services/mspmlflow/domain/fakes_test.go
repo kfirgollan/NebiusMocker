@@ -392,6 +392,7 @@ type env struct {
 	backend  *fakeBackend
 	peers    fakePeers
 	clk      *clock.Manual
+	quota    *fakeQuota
 }
 
 func newEnv(t *testing.T) *env {
@@ -403,13 +404,13 @@ func newEnv(t *testing.T) *env {
 func newEnvWith(t *testing.T, edit func(fakePeers) fakePeers) *env {
 	t.Helper()
 	e := &env{
-		clusters: &fakeClusters{}, internal: &fakeInternals{}, backend: &fakeBackend{}, clk: clock.NewManual(t0),
+		clusters: &fakeClusters{}, internal: &fakeInternals{}, backend: &fakeBackend{}, clk: clock.NewManual(t0), quota: &fakeQuota{},
 		peers: fakePeers{networks: &fakeNetworks{}, buckets: &fakeBuckets{}, keys: &fakeKeys{}},
 	}
 	e.peers = edit(e.peers)
 	svc, err := domain.New(domain.Deps{
 		Clusters: e.clusters, Internals: e.internal, Backend: e.backend, Peers: e.peers, Hierarchy: fakeHierarchy{},
-		Ops: inlineOps{}, IDs: &seqIDs{}, Clock: e.clk,
+		Quota: e.quota, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: e.clk,
 		Config: domain.Config{
 			ProjectID: projectID, MLflowVersion: "2.22.0",
 			Sizes: map[string]string{"medium": "8vcpu-32gb", "large": "16vcpu-64gb"}, SizeOrder: []string{"medium", "large"},

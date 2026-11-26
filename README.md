@@ -51,9 +51,9 @@ CI with no Nebius account.
 > Nebius tunnel agent speaks an undocumented protocol to the edge; see
 > [docs/services/tunnel.md](docs/services/tunnel.md#implementation-status).
 > **Quotas**: every tenant and project has a `QuotaAllowance` per quota with live usage, and creates across compute,
-> VPC, DNS, Object Storage, mk8s, Container Registry, MysteryBox and KMS that would exceed an allowance fail with
-> `RESOURCE_EXHAUSTED` + `QuotaFailure`, as in Nebius. Defaults are high; lower one with Terraform, the Go SDK or
-> `nebius quotas quota-allowance create`; see [docs/services/quotas.md](docs/services/quotas.md#implementation-status).
+> VPC, DNS, Object Storage, mk8s, Container Registry, MysteryBox, KMS, Managed PostgreSQL and Managed MLflow that would
+> exceed an allowance fail with `RESOURCE_EXHAUSTED` + `QuotaFailure`, as in Nebius. Defaults are high; lower one with
+> Terraform, the Go SDK or `nebius quotas quota-allowance create`; see [docs/services/quotas.md](docs/services/quotas.md#implementation-status).
 > **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
 > event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
 > `nebius audit`; see [docs/services/audit.md](docs/services/audit.md#implementation-status).

@@ -386,6 +386,7 @@ type env struct {
 	backups  *fakeBackups
 	vpc      *fakeVPC
 	backend  *backend
+	quota    *fakeQuota
 }
 
 func newEnv(t *testing.T, opts ...func(*domain.Deps)) *env {
@@ -395,10 +396,10 @@ func newEnv(t *testing.T, opts ...func(*domain.Deps)) *env {
 		t.Fatalf("nid.NewGenerator: %v", err)
 	}
 	clk := clock.NewManual(t0)
-	e := &env{clk: clk, clusters: newFakeClusters(), backups: newFakeBackups(), vpc: newFakeVPC(), backend: newBackend()}
+	e := &env{clk: clk, clusters: newFakeClusters(), backups: newFakeBackups(), vpc: newFakeVPC(), backend: newBackend(), quota: &fakeQuota{}}
 	deps := domain.Deps{
 		Clusters: e.clusters, Backups: e.backups, Bindings: &fakeBindings{}, Backend: e.backend,
-		Peers: fakePeers{vpc: e.vpc}, Hierarchy: fakeHierarchy{}, Ops: inlineOps{clk: clk}, IDs: ids, Clock: clk,
+		Peers: fakePeers{vpc: e.vpc}, Hierarchy: fakeHierarchy{}, Quota: e.quota, Ops: inlineOps{clk: clk}, IDs: ids, Clock: clk,
 		Config: domain.Config{ProjectID: projectID, MSP: config.Default().MSP},
 	}
 	for _, o := range opts {

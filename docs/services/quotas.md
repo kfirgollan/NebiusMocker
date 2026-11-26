@@ -20,7 +20,8 @@ Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v
 Tests: catalog and config unit tests (`pkg/quota`, `pkg/config`), domain tests with fakes including a 50-goroutine race
 on one limit (`services/quotas/domain`), DAL tests on the memory store, gosdk contract tests for every RPC, authz per
 role, enforcement and release, parallel creates and one create per wired area (`test/contract/quotas_*`), Terraform
-CRUD plus a lowered allowance that refuses a network (`make e2e`), and the CLI flows from the docs (`make e2e`).
+CRUD plus lowered allowances that refuse a network and a Managed PostgreSQL cluster (`make e2e`), and the CLI flows
+from the docs (`make e2e`).
 
 ## Overview
 
@@ -64,7 +65,10 @@ in its own region, a tenant in every emulated region (`NEBIUS_MOCKER_REGIONS`).
 
 Names are the identifiers Nebius uses in `metadata.name`. The Nebius docs list quotas by display name only (for example
 "Regular VMs"), plus the example `compute.disk.size.network-ssd`. The other names come from Nebius's own tooling
-(github.com/nebius/nebius-physical-ai), except those marked *inferred*, which follow the same pattern. Defaults are far
+(github.com/nebius/nebius-physical-ai), except those marked *inferred*, which follow the same pattern. The Managed
+PostgreSQL and MLflow docs list four quotas each by display name only ("Clusters", "Total vCPUs across clusters", "Total
+RAM across clusters", "Network SSD disks total size across clusters"; defaults 10, 80, 320 GiB, 2 TiB); their names are
+inferred from the API packages (`nebius.msp.postgresql`, `nebius.msp.mlflow`). Defaults are far
 above the documented default tier (2 VMs, 8 GPUs, …), so local work is unlimited until you lower an allowance:
 counts 1000, `compute.instance.non-gpu.vcpu` 100000, GPUs 4096, sizes 1 PiB. Override them with
 `NEBIUS_MOCKER_QUOTAS_LIMITS="compute.instance.count=2,compute.disk.size.network-ssd=4Ti"` (Ki…Pi suffixes).
@@ -88,6 +92,10 @@ counts 1000, `compute.instance.non-gpu.vcpu` 100000, GPUs 4096, sizes 1 PiB. Ove
 | registry | `registry.count` | count | registries |
 | mysterybox | `mysterybox.secret.count` | count | secrets, including ones scheduled for deletion (as in Nebius) |
 | kms | `kms.symmetrickey.count`, `kms.asymmetrickey.count` (*inferred*) | count | keys, including ones scheduled for deletion (as in Nebius) |
+| msp-postgresql | `msp.postgresql.cluster.count`, `msp.postgresql.vcpu` (*inferred*) | count | clusters (Create and Restore), whatever their state, stopped included; hosts × preset vCPUs, with the growth of an Update |
+| msp-postgresql | `msp.postgresql.memory`, `msp.postgresql.disk.size` (*inferred*) | byte | hosts × preset RAM; hosts × `disk.size_gibibytes` |
+| msp-mlflow | `msp.mlflow.cluster.count`, `msp.mlflow.vcpu` (*inferred*) | count | clusters, stopped included; the vCPUs of their `size` |
+| msp-mlflow | `msp.mlflow.memory` (*inferred*) | byte | the RAM of their `size` |
 
 ## Terraform
 
@@ -103,9 +111,10 @@ since Create is an upsert, keeps the same allowance ID.
 
 - Size quotas of Object Storage (`storage.bucket.size.standard`, `.enhanced-throughput`, `.intelligent`): enforcing them
   needs a check on every S3 upload. Images (`compute.image.count`, `compute.image.size`): the public API cannot create
-  images.
+  images. The MLflow disk quota ("Network SSD disks total size across clusters"): the API exposes no disk size for an
+  MLflow cluster.
 - Quotas the Nebius docs list for areas the mocker doesn't serve yet, or whose names aren't documented: IAM (projects,
-  service accounts), AI endpoints, Managed PostgreSQL and MLflow (`msp.postgres.*`, `msp.mlflow.*`), Soperator.
+  service accounts), AI endpoints, Soperator.
   These names aren't in the catalog, so they can't be set and silently ignored. (Tunnels have no quota allowances: their
   documented limits are traffic and connection rates, which "can't be changed".)
 - The `STATE_PROVISIONING` review flow and automatic quota reduction (the mocker applies changes at once).

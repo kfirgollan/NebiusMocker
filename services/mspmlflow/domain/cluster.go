@@ -254,7 +254,7 @@ func (s *Service) resolveNetwork(ctx context.Context, projectID, networkID strin
 }
 
 // storeNew checks the named bucket, binds the cluster to its network and
-// stores it.
+// stores it, charging its quotas.
 func (s *Service) storeNew(ctx context.Context, c *mlflowpb.Cluster, networkID string) error {
 	const bucketField = "spec.storage_bucket_name"
 	projectID, id := c.GetMetadata().GetParentId(), c.GetMetadata().GetId()
@@ -274,7 +274,7 @@ func (s *Service) storeNew(ctx context.Context, c *mlflowpb.Cluster, networkID s
 	if err := s.d.Internals.Put(ctx, id, Internals{NetworkID: networkID}); err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id))
 	}
-	if err := s.d.Clusters.Create(ctx, c); err != nil {
+	if err := s.createWithQuota(ctx, c); err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id), s.d.Internals.Delete(ctx, id))
 	}
 	return nil

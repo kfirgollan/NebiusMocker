@@ -46,6 +46,7 @@ type Deps struct {
 	Backend   Backend
 	Peers     Peers
 	Hierarchy Hierarchy
+	Quota     QuotaGate
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
@@ -70,7 +71,7 @@ type Service struct {
 
 // New wires the Managed PostgreSQL domain.
 func New(d Deps) (*Service, error) {
-	if d.Clusters == nil || d.Backups == nil || d.Bindings == nil || d.Backend == nil || d.Peers == nil || d.Hierarchy == nil ||
+	if d.Clusters == nil || d.Backups == nil || d.Bindings == nil || d.Backend == nil || d.Peers == nil || d.Hierarchy == nil || d.Quota == nil ||
 		d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("msppostgresql: service dependencies must not be nil")
 	}

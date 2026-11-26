@@ -16,7 +16,8 @@
 | Authorization: rules for every RPC (`postgresql.clusters.*`, `postgresql.backups.*`, `stop`/`start` verbs) | ✅ |
 | `nebius_msp_postgresql_v1alpha1_cluster` resource and data source with the official provider | ✅ e2e: `test/terraform/msp` |
 | `nebius msp postgresql v1alpha1 cluster …` / `backup …` CLI flows | ✅ e2e: `test/cli/msp` |
-| Cross-region backup replication, quotas, maintenance windows | Not yet (see [Not yet](#not-yet)) |
+| Quotas: `msp.postgresql.cluster.count`, `.vcpu`, `.memory`, `.disk.size` charged on Create and Restore, the growth on Update, released on Delete ([quotas.md](quotas.md#catalog)) | ✅ |
+| Cross-region backup replication, maintenance windows | Not yet (see [Not yet](#not-yet)) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 
@@ -73,7 +74,7 @@ deleted cluster stay readable: the cluster ID still resolves to its project for 
 ### Not yet
 
 - Cross-region backup replication (`replication_regions`, `replication_interval`): rejected, see above.
-- Quotas (owned by the quotas area), maintenance windows (`nebius maintenance`), metrics and logs.
+- Maintenance windows (`nebius maintenance`), metrics and logs.
 
 ## Terraform
 

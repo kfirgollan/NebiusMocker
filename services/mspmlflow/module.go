@@ -48,7 +48,7 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	msp := deps.Config.MSP
 	svc, err := domain.New(domain.Deps{
 		Clusters: clusters, Internals: dal.NewInternalsRepo(deps.Store), Backend: backend, Peers: peers{deps.Peers}, Hierarchy: deps.Authz,
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Log: deps.Log,
+		Quota: peer.QuotaGateFor(deps.Peers), Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Log: deps.Log,
 		Config: domain.Config{
 			ProjectID: deps.Config.ProjectID, MLflowVersion: msp.MLflowVersion, Sizes: msp.MLflowSizes, SizeOrder: msp.MLflowSizeOrder,
 			Detached: true, // Work creates a bucket through a nested operation, which the engine's own goroutine cannot await
@@ -64,6 +64,9 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 		c, err := clusters.Get(ctx, id)
 		return c.GetMetadata().GetParentId(), err
 	})
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey(m.Name()), dal.NewQuotaUsage(deps.Store, svc.QuotaAmounts)); err != nil {
+		return fmt.Errorf("msp-mlflow: %w", err)
+	}
 	api.RegisterAuthzRules(deps.Rules)
 	mlflowpb.RegisterClusterServiceServer(reg, api.NewClusterHandler(svc))
 	return nil

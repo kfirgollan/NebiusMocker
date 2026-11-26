@@ -132,7 +132,8 @@ func (s *Service) prepareNewCluster(ctx context.Context, id string, in *commonpb
 	return s.storeNewCluster(ctx, c, networkID)
 }
 
-// storeNewCluster binds the cluster to its network and stores it.
+// storeNewCluster binds the cluster to its network and stores it, charging
+// its quotas.
 func (s *Service) storeNewCluster(ctx context.Context, c *pgpb.Cluster, networkID string) error {
 	nets, ok := s.d.Peers.Networks()
 	if !ok {
@@ -147,7 +148,8 @@ func (s *Service) storeNewCluster(ctx context.Context, c *pgpb.Cluster, networkI
 	if err := s.d.Bindings.Set(ctx, id, networkID); err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id))
 	}
-	if err := s.d.Clusters.Create(ctx, c); err != nil {
+	create := func(ctx context.Context) error { return s.d.Clusters.Create(ctx, c) }
+	if err := s.admitQuota(ctx, c.GetMetadata().GetParentId(), QuotaAmounts(c.GetSpec()), create); err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id), s.d.Bindings.Delete(ctx, id))
 	}
 	return nil
@@ -250,7 +252,8 @@ func (s *Service) prepareUpdate(ctx context.Context, cmd UpdateClusterCmd) (bool
 		updated.Status.State = mspv1alpha1pb.ClusterStatus_STATE_IN_PROGRESS
 		updated.Status.PresetDetails = presetDetails(spec.GetConfig().GetTemplate().GetResources().GetPreset())
 	}
-	return specChanged, s.d.Clusters.Update(ctx, updated)
+	write := func(ctx context.Context) error { return s.d.Clusters.Update(ctx, updated) }
+	return specChanged, s.admitQuota(ctx, stored.GetMetadata().GetParentId(), resizeAmounts(stored.GetSpec(), spec), write)
 }
 
 // DeleteCluster deletes a cluster, its hosts and its data. Its backups stay

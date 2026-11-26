@@ -599,7 +599,7 @@ func TestNewRejectsBadDeps(t *testing.T) {
 	e := newEnv(t)
 	_, err := domain.New(domain.Deps{
 		Clusters: e.clusters, Internals: e.internal, Backend: e.backend, Peers: e.peers, Hierarchy: fakeHierarchy{},
-		Ops: inlineOps{}, IDs: &seqIDs{}, Clock: e.clk,
+		Quota: e.quota, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: e.clk,
 		Config: domain.Config{SizeOrder: []string{"medium"}, Sizes: map[string]string{"medium": "bogus"}},
 	})
 	if err == nil {
