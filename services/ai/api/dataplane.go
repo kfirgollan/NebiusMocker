@@ -159,8 +159,11 @@ func (d *DataPlane) Start(ctx context.Context, calls CallAuthorizer, cfg DataPla
 		_, _ = ln.Close(), tcpLn.Close()
 		return fmt.Errorf("ai data plane: %w", err)
 	}
+	// Each listener owns its tls.Config: ServeTLS writes the server's config
+	// (ALPN NextProtos for h2) while the TCP stub may already be handshaking,
+	// and the TCP stub speaks no HTTP, so it must not advertise h2 or http/1.1.
 	srv := &http.Server{
-		Handler: d, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsCfg,
+		Handler: d, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsCfg.Clone(),
 		// Handshake failures (clients that do not trust the CA) are routine.
 		ErrorLog: slog.NewLogLogger(d.log.Handler(), slog.LevelDebug),
 	}
