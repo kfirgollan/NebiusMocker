@@ -179,8 +179,8 @@ func TestPostgreSQLScenario(t *testing.T) {
 	}
 }
 
-// diskFull fills the 10 GiB disk (80 MiB with this suite's disk unit) past its
-// limit: writes are refused, reads still work, the cluster is DEGRADED. A 30
+// diskFull fills the 10 GiB disk (160 MiB with this suite's disk unit) past its
+// limit: writes are refused, reads still work, the cluster is DEGRADED. A 60
 // GiB disk through Terraform brings it back.
 func diskFull(t *testing.T, e *env, tf *tfharness.Run, u *userMachine, clusterID, rw string) {
 	t.Helper()
@@ -199,7 +199,13 @@ func diskFull(t *testing.T, e *env, tf *tfharness.Run, u *userMachine, clusterID
 		t.Fatalf("state before filling = %v", got)
 	}
 	mustPSQL(t, u, rw, pgPassTwo, "create table filler (id int, pad text)")
-	mustPSQL(t, u, rw, pgPassTwo, "insert into filler select g, repeat('x', 200) from generate_series(1, 200000) g")
+	// The periodic check may enforce the limit while this insert still runs:
+	// then the session is ended (as a full disk would fail the statement)
+	// and the insert is rolled back, but its WAL already filled the disk.
+	if out, err := psql(t.Context(), u, rw, pgPassTwo, "insert into filler select g, repeat('x', 200) from generate_series(1, 1000000) g"); err != nil &&
+		!strings.Contains(out, "terminating connection") && !strings.Contains(out, "read-only transaction") && !strings.Contains(out, "connection to server was lost") {
+		t.Fatalf("filling the disk: %v\n%s", err, out)
+	}
 
 	eventually(t, time.Minute, func() error {
 		out, err := psql(t.Context(), u, rw, pgPassTwo, "insert into filler values (-1, 'over the limit')")
@@ -211,8 +217,8 @@ func diskFull(t *testing.T, e *env, tf *tfharness.Run, u *userMachine, clusterID
 		}
 		return nil
 	})
-	if got := mustPSQL(t, u, rw, pgPassTwo, "select count(*) >= 200000 from filler"); got != "t" {
-		t.Errorf("at least 200000 rows readable on a full disk = %q, want t", got)
+	if got := mustPSQL(t, u, rw, pgPassTwo, "select count(*) from orders"); got != "4" {
+		t.Errorf("rows readable on a full disk = %q, want the 4 orders", got)
 	}
 	eventually(t, time.Minute, func() error {
 		if got := state(); got != mspv1alpha1pb.ClusterStatus_STATE_DEGRADED {
@@ -222,7 +228,7 @@ func diskFull(t *testing.T, e *env, tf *tfharness.Run, u *userMachine, clusterID
 	})
 
 	// Growing the disk through Terraform.
-	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassTwo, 30))
+	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassTwo, 60))
 	tf.ExpectPlan(t, map[string]string{"nebius_msp_postgresql_v1alpha1_cluster.pg": "update"})
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)

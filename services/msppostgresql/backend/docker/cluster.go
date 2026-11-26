@@ -144,7 +144,8 @@ func (b *Backend) newHostSpec(ctx context.Context, c domain.BackendCluster, n in
 	}
 	return hostSpec{
 		spec: dockerhost.ContainerSpec{
-			Name: b.hostName(c.ID, n), Image: image, Labels: labels, Env: env,
+			RestartPolicy: "on-failure", // a managed server comes back after a crash
+			Name:          b.hostName(c.ID, n), Image: image, Labels: labels, Env: env,
 			Entrypoint: []string{"sh", "-c", script, "nmock-pg"}, Cmd: flags,
 			Network: b.networkName(c.ID), Aliases: []string{hostAlias(n)},
 			Ports:  []dockerhost.PortBinding{{ContainerPort: pgPort, HostIP: b.cfg.BindIP}},

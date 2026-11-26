@@ -39,6 +39,10 @@ type ContainerSpec struct {
 	NanoCPUs   int64    // CPU limit in 1e-9 CPUs, 0 = unlimited
 	Binds      []string // HostConfig.Binds, e.g. "volume:/path"
 	Files      []File
+	// RestartPolicy is HostConfig.RestartPolicy.Name: "" (Docker's default,
+	// no restart), "on-failure", "unless-stopped" or "always". Docker does not
+	// restart a container that was stopped with StopContainer.
+	RestartPolicy string
 }
 
 type wireBinding struct {
@@ -72,6 +76,10 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 			"Binds":        spec.Binds,
 			"NetworkMode":  spec.Network,
 		},
+	}
+	if spec.RestartPolicy != "" {
+		hc, _ := payload["HostConfig"].(map[string]any)
+		hc["RestartPolicy"] = map[string]any{"Name": spec.RestartPolicy}
 	}
 	if spec.Network != "" {
 		payload["NetworkingConfig"] = map[string]any{

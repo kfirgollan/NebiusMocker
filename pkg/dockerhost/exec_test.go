@@ -197,14 +197,14 @@ func TestCreateContainerNewFields(t *testing.T) {
 		}
 	})
 	_, err := c.CreateContainer(t.Context(), dockerhost.ContainerSpec{
-		Name: "x", Entrypoint: []string{"sh", "-c"}, User: "70", NanoCPUs: 2e9,
+		Name: "x", Entrypoint: []string{"sh", "-c"}, User: "70", NanoCPUs: 2e9, RestartPolicy: "on-failure",
 		Files: []dockerhost.File{{Path: "/k", Content: []byte("1"), UID: 70, GID: 71}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	host, _ := payload["HostConfig"].(map[string]any)
-	if payload["User"] != "70" || host["NanoCpus"] != float64(2e9) {
+	if rp, _ := host["RestartPolicy"].(map[string]any); payload["User"] != "70" || host["NanoCpus"] != float64(2e9) || rp["Name"] != "on-failure" {
 		t.Errorf("payload = %v", payload)
 	}
 	if ep, _ := payload["Entrypoint"].([]any); len(ep) != 2 || ep[0] != "sh" {

@@ -51,7 +51,8 @@ func (b *Backend) ensurePooler(ctx context.Context, c domain.BackendCluster, pki
 	labels[LabelRole] = rolePooler
 	hs := hostSpec{
 		spec: dockerhost.ContainerSpec{
-			Name: b.poolerName(c.ID), Image: b.cfg.PgBouncerImage, Labels: labels,
+			RestartPolicy: "on-failure", // a managed server comes back after a crash
+			Name:          b.poolerName(c.ID), Image: b.cfg.PgBouncerImage, Labels: labels,
 			Network: b.networkName(c.ID), Aliases: []string{"pooler"},
 			Ports: []dockerhost.PortBinding{{ContainerPort: pgPort, HostIP: b.cfg.BindIP}},
 			Files: []dockerhost.File{

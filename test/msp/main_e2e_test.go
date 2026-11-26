@@ -84,7 +84,7 @@ func startEnv(t *testing.T) *env {
 			c.MSP.TLSDir = mspDir
 			// A "GiB" of disk holds 8 MiB, so a 10 GiB disk fills at 80 MiB,
 			// and a full disk is noticed within seconds.
-			c.MSP.PostgresDiskUnit = 8 << 20
+			c.MSP.PostgresDiskUnit = 16 << 20
 			c.MSP.PostgresDiskCheckInterval = 2 * time.Second
 		}))
 	addr := fmt.Sprintf("127.0.0.1:%d", port)

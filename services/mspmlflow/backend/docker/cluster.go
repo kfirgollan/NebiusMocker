@@ -29,7 +29,7 @@ const (
 	dataDir     = "/mlflow"
 	serverCmd   = `exec mlflow server --app-name basic-auth --host 0.0.0.0 --port 5000 --workers 2 ` +
 		`--backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination "s3://$1/" --serve-artifacts ` +
-		`--gunicorn-opts "--certfile=` + tlsCertPath + ` --keyfile=` + tlsKeyPath + `"`
+		`--gunicorn-opts "--timeout=120 --certfile=` + tlsCertPath + ` --keyfile=` + tlsKeyPath + `"`
 )
 
 // Names carry the owner tag: concurrent mockers on one Docker host allocate
@@ -136,7 +136,8 @@ func (b *Backend) spec(ctx context.Context, c domain.BackendCluster, creds crede
 	cmd := []string{"sh", "-c", serverCmd, "nmock-mlflow", c.Artifacts.Bucket}
 	labels := b.clusterLabels(c.ID)
 	spec = dockerhost.ContainerSpec{
-		Name: b.containerName(c.ID), Image: b.image, Labels: labels, Env: env, Cmd: cmd,
+		RestartPolicy: "on-failure", // a managed server comes back after a crash
+		Name:          b.containerName(c.ID), Image: b.image, Labels: labels, Env: env, Cmd: cmd,
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		Ports:      []dockerhost.PortBinding{{ContainerPort: serverPort, HostIP: b.cfg.BindIP}},
 		Memory:     c.MemoryBytes, NanoCPUs: nano,
