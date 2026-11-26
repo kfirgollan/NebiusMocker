@@ -114,6 +114,9 @@ type BackendNode struct {
 	PublicIP  string
 	Platform  string
 	Preset    string
+	// GPUs is the GPU count of the preset (compute platform catalog), 0 for
+	// CPU presets.
+	GPUs int
 }
 
 // NodeTaint is a Kubernetes Node taint; Effect is "NoSchedule",
