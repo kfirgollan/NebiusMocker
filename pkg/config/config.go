@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -303,20 +304,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		{"AI_TLS_DIR", func(v string) error { c.AI.TLSDir = v; return nil }},
 		{"AI_PLATFORMS", func(v string) error { return parseAIPlatforms(v, &c.AI.Platforms) }},
 	}
-	parsers = append(parsers, registryParsers(&c.Registry)...)
-	parsers = append(parsers, vpcParsers(&c.VPC)...)
-	parsers = append(parsers, dnsParsers(&c.DNS)...)
-	parsers = append(parsers, billingParsers(&c.Billing)...)
-	parsers = append(parsers, mk8sParsers(&c.MK8s)...)
-	parsers = append(parsers, applicationsParsers(&c.Applications)...)
-	parsers = append(parsers, mspParsers(&c.MSP)...)
-	parsers = append(parsers, mk8sK3sParsers(&c.MK8sK3s)...)
-	parsers = append(parsers, tlsParsers(&c.TLS)...)
-	parsers = append(parsers, iamParsers(&c.IAM)...)
-	parsers = append(parsers, quotasParsers(&c.Quotas)...)
-	parsers = append(parsers, authParsers(&c.Auth)...)
-	parsers = append(parsers, computeFabricsParsers(&c.ComputeFabricsFile)...)
-	parsers = append(parsers, capacityParsers(&c.Capacity)...)
+	parsers = append(parsers, areaParsers(&c)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {
@@ -333,6 +321,29 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("NEBIUS_MOCKER_IAM_PROJECTS: %w", err)
 	}
 	return c, nil
+}
+
+// areaParsers are the settings of the service areas, each in its own file.
+func areaParsers(c *Config) []struct {
+	name  string
+	apply func(string) error
+} {
+	return slices.Concat(
+		registryParsers(&c.Registry),
+		vpcParsers(&c.VPC),
+		dnsParsers(&c.DNS),
+		billingParsers(&c.Billing),
+		mk8sParsers(&c.MK8s),
+		applicationsParsers(&c.Applications),
+		mspParsers(&c.MSP),
+		mk8sK3sParsers(&c.MK8sK3s),
+		tlsParsers(&c.TLS),
+		iamParsers(&c.IAM),
+		quotasParsers(&c.Quotas),
+		authParsers(&c.Auth),
+		computeFabricsParsers(&c.ComputeFabricsFile),
+		capacityParsers(&c.Capacity),
+	)
 }
 
 func splitList(v string) []string {
