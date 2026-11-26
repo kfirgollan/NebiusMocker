@@ -1,3 +1,4 @@
+<!-- {% raw %} -->
 # 03 — Repository layout
 
 ## One Go module, public libraries
@@ -208,3 +209,4 @@ These are enforced by `.golangci.yml` (depguard + forbidigo) and the `test/arch`
 - Third-party dependencies need a short justification in the PR. Expected core set: `google.golang.org/grpc`,
   `github.com/nebius/gosdk`, `buf.build/go/protovalidate`, `go.etcd.io/bbolt`, `github.com/golang-jwt/jwt/v5`,
   `log/slog` (stdlib).
+<!-- {% endraw %} -->

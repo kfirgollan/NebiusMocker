@@ -1,3 +1,4 @@
+<!-- {% raw %} -->
 # 08 — Resource lifecycle and the operation engine
 
 ## Lifecycle machines
@@ -114,3 +115,4 @@ data plane can have a pluggable **backend**:
 
 Backends implement a small interface per module, and the default is always `mock`. The "real" backends never sit on the
 Terraform critical path for M1.
+<!-- {% endraw %} -->
