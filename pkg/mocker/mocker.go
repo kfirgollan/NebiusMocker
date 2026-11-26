@@ -184,15 +184,17 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 		return nil, err
 	}
 	authn := auth.NewAuthenticator(cfg.Tokens, issuer)
+	auditCfg := interceptors.AuditConfig{
+		Recorder: recorder, Hierarchy: engine, Rules: rules,
+		Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID, States: states,
+	}
 	srv := edge.NewTLS(log, tlsCfg,
 		interceptors.RequestID(),
 		interceptors.Recover(log),
 		interceptors.Log(log, o.clk),
+		interceptors.AuditAuthnFailures(auditCfg),
 		interceptors.Authenticate(cfg.Authn, authn),
-		interceptors.Audit(interceptors.AuditConfig{
-			Recorder: recorder, Hierarchy: engine, Rules: rules,
-			Reads: cfg.Audit.Reads, DefaultTenant: cfg.TenantID, States: states,
-		}),
+		interceptors.Audit(auditCfg),
 		validate,
 		interceptors.Authorize(engine, rules, cfg.Authz, log),
 	)

@@ -101,21 +101,23 @@ func Authenticate(mode config.AuthnMode, tokens TokenAuthenticator) grpc.UnarySe
 		if isExempt(info.FullMethod) {
 			return next(ctx, req)
 		}
+		rinfo := reqctx.InfoFrom(ctx)
+		if rinfo == nil {
+			rinfo = &reqctx.Info{}
+			ctx = reqctx.WithInfo(ctx, rinfo)
+		}
 		token, present := bearerToken(ctx)
 		if !present {
 			if mode == config.AuthnRequired {
+				rinfo.AuthnFailed = true
 				return nil, serviceerror.FromDomain(ctx, errs.Unauthenticated("missing bearer token"))
 			}
 			return next(ctx, req) // anonymous
 		}
 		principal, err := tokens.Authenticate(token)
 		if err != nil {
+			rinfo.AuthnFailed = true
 			return nil, serviceerror.FromDomain(ctx, errs.Unauthenticated("invalid bearer token: "+err.Error()))
-		}
-		rinfo := reqctx.InfoFrom(ctx)
-		if rinfo == nil {
-			rinfo = &reqctx.Info{}
-			ctx = reqctx.WithInfo(ctx, rinfo)
 		}
 		rinfo.Principal = reqctx.Principal{ID: principal}
 		return next(ctx, req)

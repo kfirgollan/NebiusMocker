@@ -18,6 +18,7 @@ import (
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/audit"
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
@@ -210,7 +211,15 @@ func registerTokenExchange(reg grpc.ServiceRegistrar, r repos, keys *domain.Auth
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
-	h := api.NewTokenExchangeHandler(svc, deps.Log)
+	var failures api.AuthnFailureRecorder
+	if deps.AuditRecorder != nil {
+		rec, err := audit.NewAuthnRecorder(deps.AuditRecorder, deps.Authz, deps.Config.TenantID)
+		if err != nil {
+			return fmt.Errorf("iam: %w", err)
+		}
+		failures = rec
+	}
+	h := api.NewTokenExchangeHandler(svc, failures, deps.Log)
 	iampb.RegisterTokenExchangeServiceServer(reg, h)
 	if deps.HTTP != nil {
 		deps.HTTP.HandleHTTP("POST "+api.TokenExchangePath, h)

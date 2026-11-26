@@ -6,13 +6,21 @@ import (
 	"errors"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+
+	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/audit"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 	"github.com/kfirgollan/NebiusMocker/pkg/serviceerror"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
@@ -28,27 +36,91 @@ const maxFormBytes = 64 << 10
 // and POST /oauth2/token/exchange (HTTP); both use the same domain path.
 type TokenExchangeHandler struct {
 	iampb.UnimplementedTokenExchangeServiceServer
-	svc *domain.TokenExchangeService
-	log *slog.Logger
+	svc   *domain.TokenExchangeService
+	audit AuthnFailureRecorder
+	log   *slog.Logger
 }
 
 var _ iampb.TokenExchangeServiceServer = (*TokenExchangeHandler)(nil)
 
-// NewTokenExchangeHandler returns a handler backed by svc.
-func NewTokenExchangeHandler(svc *domain.TokenExchangeService, log *slog.Logger) *TokenExchangeHandler {
-	return &TokenExchangeHandler{svc: svc, log: log}
+// AuthnFailureRecorder records refused exchanges as audit events (satisfied
+// by *audit.AuthnRecorder).
+type AuthnFailureRecorder interface {
+	RecordAuthnFailure(ctx context.Context, f audit.AuthnFailure)
+}
+
+// NewTokenExchangeHandler returns a handler backed by svc that records every
+// refused exchange through rec (nil records nothing).
+func NewTokenExchangeHandler(svc *domain.TokenExchangeService, rec AuthnFailureRecorder, log *slog.Logger) *TokenExchangeHandler {
+	return &TokenExchangeHandler{svc: svc, audit: rec, log: log}
+}
+
+// Audit sources of refused exchanges: the gRPC method, and the HTTP
+// endpoint (named like data-plane sources, "<protocol>/<operation>").
+const (
+	exchangeSourceGRPC = "nebius.iam.v1.TokenExchangeService/Exchange"
+	exchangeSourceHTTP = "oauth2/token/exchange"
+)
+
+// client is the transport view of the caller, for audit events.
+type client struct {
+	ip, userAgent, requestID string
+}
+
+func grpcClient(ctx context.Context) client {
+	md, _ := metadata.FromIncomingContext(ctx)
+	c := client{requestID: reqctx.RequestID(ctx)}
+	if ua := md.Get("user-agent"); len(ua) > 0 {
+		c.userAgent = ua[0]
+	}
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		c.ip = hostOnly(p.Addr.String())
+	}
+	return c
+}
+
+func httpClient(r *http.Request) client {
+	return client{ip: hostOnly(r.RemoteAddr), userAgent: r.UserAgent()}
+}
+
+// hostOnly strips the port from "ip:port" (and brackets from IPv6).
+func hostOnly(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// recordFailure records the refused exchange req as a failed
+// authentication: the presented key or account, the claimed service
+// account, the masked token and the refusal. err is the domain error.
+func (h *TokenExchangeHandler) recordFailure(ctx context.Context, source string, c client, req domain.ExchangeRequest, err error, payload map[string]string) {
+	if h.audit == nil {
+		return
+	}
+	p := domain.PresentedBy(req)
+	st := serviceerror.StatusProto(ctx, err)
+	params := map[string]string{
+		"grant_type": req.GrantType, "requested_token_type": req.RequestedTokenType,
+		"subject_token_type": req.SubjectTokenType, "actor_token_type": req.ActorTokenType,
+		"service_account_id": p.ServiceAccountID,
+		"kid":                p.KeyID, "alg": p.Algorithm, "iss": p.Issuer, "sub": p.Subject,
+	}
+	h.audit.RecordAuthnFailure(ctx, audit.AuthnFailure{
+		Source: source, Area: "iam", ServiceName: "IAM", Action: "EXCHANGE",
+		ResourceID: p.CredentialID, ResourceType: "tokenexchange",
+		Token: p.Token, Subject: p.ServiceAccountID, Parameters: params,
+		ClientIP: c.ip, UserAgent: c.userAgent, RequestID: c.requestID,
+		Code: code.Code(st.GetCode()), Message: st.GetMessage(), Payload: payload,
+	})
 }
 
 // Exchange exchanges a service account JWT (or an impersonation request) for
 // an access token.
 func (h *TokenExchangeHandler) Exchange(ctx context.Context, req *iampb.ExchangeTokenRequest) (*iampb.CreateTokenResponse, error) {
-	res, err := h.svc.Exchange(ctx, domain.ExchangeRequest{
-		GrantType: req.GetGrantType(), RequestedTokenType: req.GetRequestedTokenType(),
-		SubjectToken: req.GetSubjectToken(), SubjectTokenType: req.GetSubjectTokenType(),
-		Scopes: req.GetScopes(), Audience: req.GetAudience(),
-		ActorToken: req.GetActorToken(), ActorTokenType: req.GetActorTokenType(), Resource: req.GetResource(),
-	})
+	res, err := h.svc.Exchange(ctx, exchangeRequest(req))
 	if err != nil {
+		h.recordFailure(ctx, exchangeSourceGRPC, grpcClient(ctx), exchangeRequest(req), err, nil)
 		return nil, serviceerror.FromDomain(ctx, err)
 	}
 	return &iampb.CreateTokenResponse{
@@ -57,12 +129,29 @@ func (h *TokenExchangeHandler) Exchange(ctx context.Context, req *iampb.Exchange
 	}, nil
 }
 
+func exchangeRequest(req *iampb.ExchangeTokenRequest) domain.ExchangeRequest {
+	return domain.ExchangeRequest{
+		GrantType: req.GetGrantType(), RequestedTokenType: req.GetRequestedTokenType(),
+		SubjectToken: req.GetSubjectToken(), SubjectTokenType: req.GetSubjectTokenType(),
+		Scopes: req.GetScopes(), Audience: req.GetAudience(),
+		ActorToken: req.GetActorToken(), ActorTokenType: req.GetActorTokenType(), Resource: req.GetResource(),
+	}
+}
+
 // tokenResponse is the RFC 8693 §2.2.1 success body.
 type tokenResponse struct {
 	AccessToken     string `json:"access_token"`
 	IssuedTokenType string `json:"issued_token_type"`
 	TokenType       string `json:"token_type"`
 	ExpiresIn       int64  `json:"expires_in"`
+}
+
+// oauthServerError is the RFC 6749 §5.2 code of an internal failure.
+const oauthServerError domain.OAuthErrorCode = "server_error"
+
+// oauthPayload is the response detail of a refused HTTP exchange.
+func oauthPayload(httpStatus int, c domain.OAuthErrorCode) map[string]string {
+	return map[string]string{"http_status": strconv.Itoa(httpStatus), "error": string(c)}
 }
 
 // oauthError is the RFC 6749 §5.2 error body.
@@ -77,17 +166,20 @@ func (h *TokenExchangeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	req, ferr := exchangeForm(w, r)
 	if ferr != nil {
+		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, ferr, oauthPayload(http.StatusBadRequest, domain.OAuthInvalidRequest))
 		writeOAuthError(w, http.StatusBadRequest, domain.OAuthInvalidRequest, ferr.Error())
 		return
 	}
 	res, err := h.svc.Exchange(ctx, req)
 	if xe, ok := errors.AsType[*domain.ExchangeError](err); ok {
+		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, err, oauthPayload(http.StatusBadRequest, xe.Code))
 		writeOAuthError(w, http.StatusBadRequest, xe.Code, xe.Description())
 		return
 	}
 	if err != nil {
 		h.log.ErrorContext(ctx, "token exchange", "error", err)
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", "internal error")
+		h.recordFailure(ctx, exchangeSourceHTTP, httpClient(r), req, err, oauthPayload(http.StatusInternalServerError, oauthServerError))
+		writeOAuthError(w, http.StatusInternalServerError, oauthServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, tokenResponse{
@@ -143,8 +235,8 @@ func nonEmpty(form url.Values, name string) []string {
 	return out
 }
 
-func writeOAuthError(w http.ResponseWriter, status int, code domain.OAuthErrorCode, desc string) {
-	writeJSON(w, status, oauthError{Error: string(code), ErrorDescription: desc})
+func writeOAuthError(w http.ResponseWriter, status int, oc domain.OAuthErrorCode, desc string) {
+	writeJSON(w, status, oauthError{Error: string(oc), ErrorDescription: desc})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

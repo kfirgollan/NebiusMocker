@@ -30,6 +30,7 @@
 | `secret_delivery_mode = MYSTERY_BOX`: the secret is delivered to a MysteryBox secret (`status.secret_reference_id`), read with `nebius_mysterybox_v1_secret_payload_entry` / `nebius mysterybox payload get` and used against the S3 front | ✅ e2e: `test/terraform/iam` (lifecycle in `make e2e`; the S3 use with RustFS in `make e2e-storage`), `test/cli/iam` (`make e2e-storage`) |
 | `nebius.iam.v1.AuthPublicKeyService`: Create, Get, GetByName, List, ListByAccount, Update (reset mask), Activate, Deactivate, Delete. Status `state`/`fingerprint`/`algorithm`/`key_size` computed from `spec.data` | ✅ T1 (see [Service-account keys and token exchange](#service-account-keys-and-token-exchange)) |
 | `nebius.iam.v1.TokenExchangeService.Exchange` (gRPC, `tokens.iam`) and `POST /oauth2/token/exchange` (HTTP form, RFC 8693) on the edge port: service-account JWT exchange and impersonation | ✅ |
+| Refused exchanges (unknown, deactivated, expired or deleted key, bad signature, wrong iss/sub, expired JWT, failed federated or impersonation exchange) and rejected bearer tokens are audit events naming the presented key, the claimed service account, the client IP and user agent (see [audit: failed authentications](audit.md#failed-authentications)) | ✅ contract + e2e: `test/audit` (canary key via CLI) |
 | Issued access tokens (`nmock.v1.…`, HMAC-signed, 12h, revocable) accepted by every gRPC service and the registry's docker front, next to the static dev tokens | ✅ |
 | Service-account credentials in the official tools: gosdk `ServiceAccountReader` (credentials file, private key file), Terraform provider `service_account` block, `nebius profile create --service-account-file`, `nebius iam auth-public-key create/generate` | ✅ contract: `test/contract/iam_token*_test.go`, `iam_authkey*_test.go`; e2e: `test/terraform/iam/sa_auth_test.go`, `test/cli/iam/sa_auth_e2e_test.go` |
 | `nebius_iam_v1_auth_public_key` resource and data source | ✅ e2e: `test/terraform/iam/sa_auth_test.go` |
@@ -258,6 +259,9 @@ Confirm them during parity recording.
 
 The response is `CreateTokenResponse{access_token, issued_token_type, token_type="Bearer", expires_in}`. The checks and
 error mapping are listed under [Service-account keys and token exchange](#service-account-keys-and-token-exchange).
+Every refused exchange, over gRPC or HTTP, is recorded as an audit event (`action` `EXCHANGE`) whose
+`resource.metadata.id` is the presented key (`kid`) or, without one, the claimed service account; see
+[audit: failed authentications](audit.md#failed-authentications). Successful exchanges are not recorded.
 
 ### Federations and certificates
 - A federation's parent is a tenant. `metadata.name` is required and unique in the tenant. `spec.saml_settings` is

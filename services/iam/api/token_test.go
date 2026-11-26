@@ -158,7 +158,7 @@ func newApFixture(t *testing.T, impersonationAllowed bool) *apFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &apFixture{handler: api.NewTokenExchangeHandler(svc, log), issuer: issuer, priv: priv}
+	return &apFixture{handler: api.NewTokenExchangeHandler(svc, nil, log), issuer: issuer, priv: priv}
 }
 
 func (f *apFixture) assertion(t *testing.T) string {

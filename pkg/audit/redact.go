@@ -10,6 +10,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/kfirgollan/NebiusMocker/pkg/auth"
 )
 
 // sanitizer is implemented by every gosdk message that has (or contains) a
@@ -98,12 +100,22 @@ func ToStruct(m proto.Message) *structpb.Struct {
 }
 
 // MaskToken returns the form of a bearer token that may appear in an event.
-// A JWT loses its signature, as in Nebius. An opaque token (the mocker's dev
-// tokens) is replaced by a short prefix and a hash, so the event identifies
-// the credential without revealing it.
+// A JWT loses its signature, as in Nebius, and so does a mocker-issued access
+// token ("nmock.v1.<claims>"). An opaque token (the mocker's dev tokens) is
+// replaced by a short prefix and a hash, so the event identifies the
+// credential without revealing it. The result is at most maxMaskedToken
+// bytes: a presented token is untrusted input.
 func MaskToken(token string) string {
+	return clip(maskToken(token), maxMaskedToken)
+}
+
+func maskToken(token string) string {
 	if token == "" {
 		return ""
+	}
+	if signed, mac, ok := strings.Cut(strings.TrimPrefix(token, auth.TokenPrefix), "."); ok && strings.HasPrefix(token, auth.TokenPrefix) &&
+		signed != "" && mac != "" && !strings.Contains(mac, ".") {
+		return auth.TokenPrefix + signed
 	}
 	if parts := strings.Split(token, "."); len(parts) == 3 && parts[0] != "" && parts[1] != "" {
 		return parts[0] + "." + parts[1]

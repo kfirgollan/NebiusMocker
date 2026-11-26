@@ -65,6 +65,7 @@ Order matters. Each step can short-circuit with a gRPC status.
 | 1 | **request context** | Assign `X-Request-ID` and `X-Trace-ID` (returned in response headers and trailers, which `gosdk/serviceerror` reads); start a log span; capture `User-Agent` (the provider sends `terraform-provider-nebius/<ver> (terraform/<ver>)`) | — |
 | 2 | **recorder** (optional) | Record request and response to a JSONL journal, for debugging and parity fixtures | — |
 | 3 | **faults** | Match rules from [09](09-quotas-limits-faults.md) and inject latency or errors | any |
+| 3a | **audit authn failures** | Outside authn: when authn rejects a request's credentials (it flags `reqctx.Info.AuthnFailed`), records one failed-authentication event, whatever the method. See [Audit events](#audit-events) | never fails the call |
 | 4 | **authn** | Parse `authorization: Bearer <token>`; resolve the token to a `Principal` (user account, service account, or anonymous). `TokenExchangeService` and health/reflection are exempt | `UNAUTHENTICATED` |
 | 4a | **audit** | Records one audit event per mutating RPC (and per enforced authz denial) after the call returns, in `pkg/audit`'s bounded log. It resolves the target resource and its hierarchy **before** the handler runs, so a Delete still has its ancestry. See [Audit events](#audit-events) | never fails the call |
 | 5 | **rate limit** | Token bucket per (principal, service), configurable | `RESOURCE_EXHAUSTED` + `TooManyRequests` |
@@ -83,6 +84,10 @@ Order matters. Each step can short-circuit with a gRPC status.
   plus any call the authz interceptor denied under `enforce`. It sits outside authz, which flags denials in
   `reqctx.Info.Denied`, since a denied read returns NOT_FOUND like a real one. Reads are recorded too with
   `NEBIUS_MOCKER_AUDIT_READS=true`. Health/reflection/token exchange are exempt.
+- **Failed authentications:** `interceptors.AuditAuthnFailures` (outside authn) records every request whose bearer
+  token authn rejects (unknown, malformed, expired, revoked; missing when authentication is required), reads included,
+  with `authentication.authenticated=false`, the masked token and no `request.parameters`. The token exchange records
+  its own refusals through `audit.AuthnRecorder` (see [audit](../services/audit.md#failed-authentications)).
 - **Mapping:** `source` is the full method. `service.name` is the API area upper-cased, with the documented exceptions
   (`vpc` → `VIRTUAL_NETWORKS`, `mysterybox` → `MBOX`, `msp.postgresql` → `MSP_POSTGRESQL`, …). `action` is the method
   in UPPER_SNAKE (`CREATE`, `LIST_MEMBER_OF`). `type` is `ai.nebius.<area>.<NID prefix>.<action>`.

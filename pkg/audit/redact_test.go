@@ -183,6 +183,25 @@ func TestMaskToken(t *testing.T) {
 			t.Errorf("MaskToken(jwt) = %q, want header.payload", got)
 		}
 	})
+	t.Run("mocker token drops its mac", func(t *testing.T) {
+		t.Parallel()
+		if got := MaskToken("nmock.v1.eyJzdWIiOiJ4In0.bWFjbWFj"); got != "nmock.v1.eyJzdWIiOiJ4In0" {
+			t.Errorf("MaskToken(nmock) = %q, want nmock.v1.<claims>", got)
+		}
+	})
+	t.Run("mocker token without mac is hidden", func(t *testing.T) {
+		t.Parallel()
+		if got := MaskToken("nmock.v1.eyJzdWIiOiJ4In0"); strings.Contains(got, "eyJzdWIiOiJ4In0") {
+			t.Errorf("MaskToken(nmock, no mac) = %q reveals the token", got)
+		}
+	})
+	t.Run("clipped", func(t *testing.T) {
+		t.Parallel()
+		got := MaskToken("h." + strings.Repeat("p", 5000) + ".sig")
+		if len(got) != maxMaskedToken {
+			t.Errorf("len(MaskToken(long jwt)) = %d, want %d", len(got), maxMaskedToken)
+		}
+	})
 	t.Run("opaque is hidden and stable", func(t *testing.T) {
 		t.Parallel()
 		const tok = "nmock-dev-admin"

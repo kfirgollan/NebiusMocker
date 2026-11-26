@@ -21,13 +21,16 @@
 | `DATA_PLANE` in List and exports: selected by `event_type`, never mixed with `CONTROL_PLANE` | ✅ |
 | `peer.AuditSink`: data planes record `DATA_PLANE` events from structured fields; the audit module provides it | ✅ |
 | Object Storage S3 front: `DATA_PLANE` events for every documented object operation, per the bucket's `object_audit_logging`, including denied, failed and badly signed requests | ✅ e2e: `test/audit` (`make e2e-storage`: AWS SDK v2, aws CLI, `nebius` CLI, export) |
+| Failed authentications on the gRPC edge: every request with an unknown, malformed, expired or revoked bearer token (or none, when authentication is required), any method, as an `ERROR` event with `authenticated=false`, the masked token, `client_ip`, `user_agent` and the reason (see [Failed authentications](#failed-authentications)) | ✅ contract: `test/contract/audit_authn_test.go` |
+| Failed token exchanges (gRPC `TokenExchangeService/Exchange` and HTTP `POST /oauth2/token/exchange`): the presented key (`kid` → `resource.metadata.id`), the claimed service account, the masked JWT (never its signature), `client_ip`, `user_agent`, the reason | ✅ contract + e2e: canary key with the `nebius` CLI and the gosdk credentials file (`test/audit`) |
+| Failed authentications on the registry's Docker front and the AI endpoints data plane | Not yet |
 | `authentication.federation` | Not yet |
 | Persistence of events across restarts | Not yet (the log sits behind a port; a persistent implementation can replace it) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
-Covered by unit tests (`pkg/audit`: filter parser with fuzzing, log eviction, recorder, redaction; `pkg/interceptors`:
-event mapping; `services/audit/domain`, `services/audit/dal`, with a 50k-event List benchmark), gosdk contract tests
+Covered by unit tests (`pkg/audit`: filter parser with fuzzing, log eviction, recorder, redaction, failed-authentication
+events; `pkg/interceptors`: event mapping, failed authentications; `services/audit/domain`, `services/audit/dal`, with a 50k-event List benchmark), gosdk contract tests
 (`test/contract/audit_*`), the Terraform e2e (`test/terraform/audit`) and the CLI e2e (`test/audit`), all in `make e2e`,
 plus the S3-front export download in `make e2e-storage`.
 
@@ -84,7 +87,8 @@ the same `Sanitize()` redaction as request and response payloads.
 
 **Which calls:** methods whose authz verb is neither `get` nor `list` (by name when no rule exists), plus every call
 that `enforce` mode denied. Real Nebius control-plane logs show management operations; reads are included with
-`NEBIUS_MOCKER_AUDIT_READS=true`. Calls rejected before the interceptor (invalid or missing token) are not recorded.
+`NEBIUS_MOCKER_AUDIT_READS=true`. Calls whose credentials are rejected are recorded by a second interceptor, for
+every method: see [Failed authentications](#failed-authentications).
 
 **Redaction:** gosdk generates `Sanitize()` for every message with `(nebius.sensitive)` fields (secret payloads,
 access-key secrets, filters). `audit.Redact` runs it on a `proto.Clone`, never on the live request, walking into
@@ -93,6 +97,52 @@ never appear in stored or exported events.
 
 **Cost:** recording is synchronous and append-only: one clone, two JSON conversions and one append under a short mutex.
 It never changes the call's result.
+
+### Failed authentications
+
+> **Fidelity:** the mocker records failed authentications; Nebius does not document whether its audit log does. The
+> event shape below uses only fields of `audit.v2.AuditEvent` and the naming every other event follows.
+
+**Which:** every failed authentication, whatever the method, reads included, since the point is to see bad
+credentials:
+
+| Where | Refused | `source` / `action` | `resource.metadata` |
+|---|---|---|---|
+| gRPC edge (`interceptors.AuditAuthnFailures`, outside authentication) | an unknown or malformed bearer token, an issued token that is expired or revoked (its key was deactivated or deleted, its service account deleted), no token when authentication is required | the method, e.g. `nebius.iam.v1.ProfileService/Get` / `GET` | the request's resource, as for any event |
+| Token exchange, gRPC | every exchange that issues no token: unknown, deactivated, expired or deleted auth public key, bad signature, wrong `iss`/`sub`, expired or malformed JWT, `alg` other than RS256, federated credentials that do not trust the issuer or subject or whose signature fails, an invalid impersonation actor token, a malformed request | `nebius.iam.v1.TokenExchangeService/Exchange` / `EXCHANGE` | the presented key (`kid`, `publickey-…`), else the claimed service account, else none |
+| Token exchange, HTTP | the same, plus a malformed form | `oauth2/token/exchange` / `EXCHANGE` | as above |
+
+`type` follows the usual rule: `ai.nebius.iam.publickey.exchange`, `ai.nebius.iam.serviceaccount.exchange`,
+`ai.nebius.iam.tokenexchange.exchange` (nothing identified), `ai.nebius.iam.profile.get`. Successful exchanges are not
+recorded.
+
+| Event field | Value |
+|---|---|
+| `authentication` | `authenticated` false. `token_credential.masked_token`: the presented JWT without its signature, a mocker token without its MAC, or `prefix***hash` for an opaque token. `subject.service_account_id`: the account the credential **claims** (JWT `sub`/`iss`, the exchange's `subject_token`, an issued token's `sub`), unverified |
+| `resource.hierarchy` | the resource's ancestors; for a key or account that does not exist (a canary ID that was never real), the claimed service account's, else the default tenant |
+| `request` | `client_ip`, `user_agent`, `request_id`. `parameters`: for an exchange the non-secret form fields (`grant_type`, `subject_token_type`, `actor_token_type`, `requested_token_type`, `service_account_id`) and the JWT's `kid`, `alg`, `iss`, `sub`; for a rejected issued token its `token_id` and `token_key_id`. Never the JWT, its signature, the actor token or a private key. The request body of a rejected gRPC call is not recorded |
+| `response` | `status_code` (`UNAUTHENTICATED`, `INVALID_ARGUMENT` for a malformed request, `PERMISSION_DENIED` for a denied impersonation), `error_message` the reason (e.g. `auth public key publickey-… is INACTIVE`); HTTP exchanges add `payload.http_status` and `payload.error` (the OAuth code, `invalid_grant`) |
+| `status` | `ERROR` |
+
+**Finding them:** the filter language has no `authenticated` field, so select by what was presented:
+
+```
+resource.metadata.id = 'publickey-e00…' AND action = 'EXCHANGE'          # a key, e.g. a canary
+authentication.subject.service_account_id = 'serviceaccount-e00…' AND status = 'ERROR'
+authentication.token_credential.masked_token = '<masked token>'
+```
+
+**Canary keys:** create a key for a service account (`nebius iam auth-public-key generate`) and deactivate it right
+away; it can never yield a token. Any use of it, through a profile made with `--service-account-file` or with
+`--service-account-id --public-key-id --private-key-file`, or a gosdk credentials file, is refused and recorded, and
+`nebius audit v2 audit-event list --filter "resource.metadata.id = '<key>' AND action = 'EXCHANGE'"` returns it; the
+first such event is the alert. A key ID that never existed works too (the event then belongs to the claimed service
+account's tenant, else the default tenant).
+
+**Bounded:** failed-authentication events go into the same ring as all others (`NEBIUS_MOCKER_AUDIT_MAX_EVENTS`, oldest
+evicted), so an unauthenticated flood cannot grow memory beyond it, though it evicts older events as any burst would.
+What an unauthenticated caller controls is clipped: IDs, subjects, parameter values and the user agent to 256 bytes,
+the masked token to 2 KB, the message to 1 KB, at most 16 parameters.
 
 ### Storage and search: vanilla, no index library
 
@@ -228,11 +278,15 @@ _No Terraform provider objects use this area._ The e2e instead checks that Terra
 - `authentication.subject.name` is the principal ID; the mocker has no user names.
 - Every event belongs to the default region; there is no per-region event history.
 - Events live in memory only.
+- Failed authentications on the registry's Docker front (`docker login` with a bad token) and on the AI endpoints data
+  plane are not recorded yet; successful token exchanges are not recorded either.
+- A failed federated exchange names the service account as its resource, not the federated credentials it tried.
 
 ## Open questions
 
-- Does Nebius audit failed validation and authentication errors? The mocker records validation failures of mutating
-  calls but not authentication failures.
+- Does Nebius audit failed validation and authentication errors? Not documented. The mocker records validation
+  failures of mutating calls and, at a user's request, every failed authentication (see
+  [Failed authentications](#failed-authentications)); the event shape for those is the mocker's own choice.
 - The exact export object naming and compression are not documented. The mocker writes uncompressed `.jsonl`.
 
 ## API surface

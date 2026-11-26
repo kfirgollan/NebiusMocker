@@ -158,12 +158,8 @@ func (i *Issuer) Verify(token string) (Claims, error) {
 	if err != nil || !hmac.Equal(gotMAC, i.mac(signed)) {
 		return Claims{}, ErrInvalidToken
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(signed, TokenPrefix))
-	if err != nil {
-		return Claims{}, ErrInvalidToken
-	}
 	var c Claims
-	if err := json.Unmarshal(payload, &c); err != nil || c.Principal == "" || c.TokenID == "" {
+	if err := decodeClaims(signed, &c); err != nil || c.Principal == "" || c.TokenID == "" {
 		return Claims{}, ErrInvalidToken
 	}
 	if i.clk.Now().Unix() >= c.ExpiresAt {
@@ -225,6 +221,18 @@ func (i *Issuer) mac(signed string) []byte {
 	m := hmac.New(sha256.New, i.secret)
 	m.Write([]byte(signed))
 	return m.Sum(nil)
+}
+
+// decodeClaims decodes the claims of signed, an issued token without its MAC.
+func decodeClaims(signed string, c *Claims) error {
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(signed, TokenPrefix))
+	if err != nil {
+		return fmt.Errorf("decode claims: %w", err)
+	}
+	if err := json.Unmarshal(payload, c); err != nil {
+		return fmt.Errorf("decode claims: %w", err)
+	}
+	return nil
 }
 
 func cutLast(s, sep string) (before, after string, found bool) {

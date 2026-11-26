@@ -25,14 +25,11 @@ import (
 const (
 	userAgentHeader   = "user-agent"
 	idempotencyHeader = "x-idempotency-key"
-	maxAncestry       = 16
 )
 
 // Hierarchy resolves a resource's parent ("" for a root). *authz.Engine
 // implements it.
-type Hierarchy interface {
-	Parent(ctx context.Context, id string) (string, error)
-}
+type Hierarchy = audit.Hierarchy
 
 // AuditConfig configures the Audit interceptor.
 type AuditConfig struct {
@@ -179,19 +176,7 @@ func isContainer(id string) bool {
 // ancestors returns the ancestors of id, root first; it stops at the first
 // unresolvable link.
 func ancestors(ctx context.Context, h Hierarchy, id string) []string {
-	var up []string
-	for range maxAncestry {
-		p, err := h.Parent(ctx, id)
-		if err != nil || p == "" {
-			break
-		}
-		up = append(up, p)
-		id = p
-	}
-	for i, j := 0, len(up)-1; i < j; i, j = i+1, j-1 {
-		up[i], up[j] = up[j], up[i]
-	}
-	return up
+	return audit.Ancestry(ctx, h, id)
 }
 
 // buildEvent maps a completed call to an event. runningOp is the ID of an
@@ -249,15 +234,9 @@ func authentication(ctx context.Context) *auditv2pb.Authentication {
 	if p.Anonymous() {
 		return &auditv2pb.Authentication{Authenticated: false}
 	}
-	sub := &auditv2pb.Subject{Name: p.ID}
-	if strings.HasPrefix(p.ID, "serviceaccount-") {
-		sub.Id = &auditv2pb.Subject_ServiceAccountId{ServiceAccountId: p.ID}
-	} else {
-		sub.Id = &auditv2pb.Subject_TenantUserId{TenantUserId: p.ID}
-	}
 	a := &auditv2pb.Authentication{
 		Authenticated:      true,
-		Subject:            sub,
+		Subject:            audit.SubjectOf(p.ID),
 		AuthenticationType: auditv2pb.AuthenticationType_ACCESS_TOKEN,
 	}
 	if tok, ok := bearerToken(ctx); ok {

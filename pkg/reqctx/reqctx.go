@@ -28,6 +28,10 @@ type Info struct {
 	// request, so outer interceptors (audit) can tell a denial from a
 	// handler error with the same code.
 	Denied bool
+	// AuthnFailed is set by the authentication interceptor when it rejects
+	// the request's credentials (or their absence), so the audit interceptor
+	// outside it can record the failed authentication.
+	AuthnFailed bool
 }
 
 // WithInfo returns ctx carrying info.
