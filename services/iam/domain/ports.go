@@ -25,6 +25,11 @@ const (
 	// KindAuthPublicKey is the NID type of auth public keys ("publickey-e00…"
 	// in the nebius/api README).
 	KindAuthPublicKey = "publickey"
+
+	KindFederation            = "federation"
+	KindFederationCertificate = "federationcertificate"
+	KindFederatedCredentials  = "federatedcredentials"
+	KindInvitation            = "invitation"
 )
 
 // ContainerRepository stores tenants or projects (both iam.v1.Container; a
@@ -220,3 +225,36 @@ type AuthPublicKeyRepository interface {
 	Update(ctx context.Context, k *iampb.AuthPublicKey) error
 	Delete(ctx context.Context, id string) error
 }
+
+// TenantUserAccountPage is one page of a tenant user account listing.
+type TenantUserAccountPage struct {
+	Items         []*iampb.TenantUserAccount
+	NextPageToken string
+}
+
+// TenantUserAccountRepository stores tenant user accounts (unnamed, children
+// of their tenant): the seeded dev users, and the accounts invitations create.
+type TenantUserAccountRepository interface {
+	Get(ctx context.Context, id string) (*iampb.TenantUserAccount, error)
+	List(ctx context.Context, tenantID string, pageSize int, pageToken string) (TenantUserAccountPage, error)
+	// Ensure inserts the account unless one with its ID exists (seeding).
+	Ensure(ctx context.Context, a *iampb.TenantUserAccount) error
+	Create(ctx context.Context, a *iampb.TenantUserAccount) error
+	// Update fails with errs.NotFound if the account does not exist.
+	Update(ctx context.Context, a *iampb.TenantUserAccount) error
+	Delete(ctx context.Context, id string) error
+	FederationUserCounter
+}
+
+// FederationUserCounter counts the tenant user accounts linked to a
+// federation (FederationStatus.users_count); satisfied by
+// TenantUserAccountRepository.
+type FederationUserCounter interface {
+	CountByFederation(ctx context.Context, federationID string) (int, error)
+}
+
+// ---- Federations and federation certificates ----
+
+// ---- Invitations and tenant user accounts ----
+
+// ---- Federated credentials ----

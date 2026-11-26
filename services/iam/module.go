@@ -44,6 +44,7 @@ type repos struct {
 	sas         *dal.ServiceAccountRepo
 	keys        *dal.AccessKeyRepo
 	authKeys    *dal.AuthPublicKeyRepo
+	users       *dal.TenantUserAccountRepo
 }
 
 // Register seeds IAM data, installs authorization bindings and registers the
@@ -58,6 +59,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		sas:         dal.NewServiceAccountRepo(deps.Store),
 		keys:        dal.NewAccessKeyRepo(deps.Store),
 		authKeys:    dal.NewAuthPublicKeyRepo(deps.Store),
+		users:       dal.NewTenantUserAccountRepo(deps.Store),
 	}
 	if err := seed(ctx, r, deps); err != nil {
 		return err
@@ -83,6 +85,12 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		return fmt.Errorf("iam: %w", err)
 	}
 	if err := registerCredentials(reg, r, deps); err != nil {
+		return err
+	}
+	if err := registerUsers(ctx, reg, r, deps); err != nil {
+		return err
+	}
+	if err := registerFederations(reg, r, deps); err != nil {
 		return err
 	}
 	iampb.RegisterGroupServiceServer(reg, api.NewGroupHandler(groups))
