@@ -19,6 +19,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -71,6 +72,9 @@ type lifecycle[T keyMsg] struct {
 	ids       IDGenerator
 	hierarchy Hierarchy
 	clk       clock.Clock
+	quota     QuotaGate
+	// quotaName is the quota a created key is charged to (pkg/quota).
+	quotaName string
 	status    func(T) keyStatus
 	setStatus func(T, keyStatus)
 	// catchUp applies the time-driven changes due by now to an ACTIVE key
@@ -91,7 +95,7 @@ func (l *lifecycle[T]) current(ctx context.Context, k T) (T, error) {
 }
 
 func (l *lifecycle[T]) validate() error {
-	if l.repo == nil || l.ops == nil || l.ids == nil || l.hierarchy == nil || l.clk == nil {
+	if l.repo == nil || l.ops == nil || l.ids == nil || l.hierarchy == nil || l.clk == nil || l.quota == nil {
 		return errors.New("kms: key service dependencies must not be nil")
 	}
 	return nil
@@ -449,4 +453,14 @@ func (l *lifecycle[T]) update(ctx context.Context, md *commonpb.ResourceMetadata
 			return err
 		},
 	})
+}
+
+// admitCreate charges one key of this kind to the project of key and, if it
+// fits, stores it through create. Keys scheduled for deletion keep counting
+// until purged, so only creation is admitted.
+func (l *lifecycle[T]) admitCreate(ctx context.Context, key T, create func(ctx context.Context) error) error {
+	return l.quota.Admit(ctx, peer.QuotaClaim{
+		ContainerID: key.GetMetadata().GetParentId(),
+		Amounts:     map[string]int64{l.quotaName: 1},
+	}, create)
 }

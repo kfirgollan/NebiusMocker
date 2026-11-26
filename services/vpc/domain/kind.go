@@ -16,6 +16,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -64,6 +65,9 @@ type kind[T Resource, S proto.Message] struct {
 	remove func(ctx context.Context, r T) error
 	// decorate, if set, fills live status fields on reads.
 	decorate func(ctx context.Context, r T) error
+	// quota, if set, names the project a resource is charged to and what it
+	// consumes. User creates are admitted against it; usage counts it.
+	quota func(ctx context.Context, r T) (project string, amounts map[string]int64, err error)
 }
 
 // Get returns a resource by ID.
@@ -153,20 +157,37 @@ func (k *kind[T, S]) Create(ctx context.Context, cmd CreateCmd[S]) (*operations.
 		Prepare: func(ctx context.Context) error {
 			k.c.mu.Lock()
 			defer k.c.mu.Unlock()
-			_, err := k.createLocked(ctx, md, spec)
+			_, err := k.createCharged(ctx, md, spec)
 			return err
 		},
 	})
 }
 
-// createLocked builds and stores a resource; core.mu must be held.
+// createLocked builds and stores a system-created resource (defaults, seeds);
+// core.mu must be held. It is not admitted against quotas: such resources
+// count in usage but never fail the request that brings them along.
 func (k *kind[T, S]) createLocked(ctx context.Context, md *commonpb.ResourceMetadata, spec S) (T, error) {
+	return k.create(ctx, md, spec, func(ctx context.Context, _ T, store func(ctx context.Context) error) error {
+		return store(ctx)
+	})
+}
+
+// createCharged is createLocked for a user request: the store write runs
+// inside the quota gate, which refuses it when the project's quota is full.
+func (k *kind[T, S]) createCharged(ctx context.Context, md *commonpb.ResourceMetadata, spec S) (T, error) {
+	return k.create(ctx, md, spec, k.admit)
+}
+
+func (k *kind[T, S]) create(ctx context.Context, md *commonpb.ResourceMetadata, spec S,
+	admit func(ctx context.Context, r T, store func(ctx context.Context) error) error,
+) (T, error) {
 	var zero T
 	r, err := k.build(ctx, md, spec)
 	if err != nil {
 		return zero, err
 	}
-	if err := k.repo.Create(ctx, r); err != nil {
+	store := func(ctx context.Context) error { return k.repo.Create(ctx, r) }
+	if err := admit(ctx, r, store); err != nil {
 		return zero, err
 	}
 	if k.afterCreate != nil {
@@ -363,4 +384,16 @@ func idsOf[T Resource](rs []T) []string {
 
 func immutable(field string) error {
 	return errs.BadRequest(errs.Violation{Field: field, Message: "field is immutable"})
+}
+
+// admit runs store through the quota gate, charging what r consumes.
+func (k *kind[T, S]) admit(ctx context.Context, r T, store func(ctx context.Context) error) error {
+	if k.quota == nil {
+		return store(ctx)
+	}
+	project, amounts, err := k.quota(ctx, r)
+	if err != nil {
+		return err
+	}
+	return k.c.gate.Admit(ctx, peer.QuotaClaim{ContainerID: project, Amounts: amounts}, store)
 }

@@ -38,6 +38,7 @@ type Deps struct {
 	Records   RecordRepository
 	Networks  Networks
 	Hierarchy Hierarchy
+	Quota     QuotaGate
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
@@ -53,6 +54,7 @@ type Service struct {
 	records   RecordRepository
 	networks  Networks
 	hierarchy Hierarchy
+	gate      QuotaGate
 	ops       Operations
 	ids       IDGenerator
 	clk       clock.Clock
@@ -61,11 +63,11 @@ type Service struct {
 
 // New wires the DNS domain.
 func New(d Deps) (*Service, error) {
-	if d.Zones == nil || d.Records == nil || d.Networks == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.Zones == nil || d.Records == nil || d.Networks == nil || d.Hierarchy == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("dns: service dependencies must not be nil")
 	}
 	return &Service{
-		zones: d.Zones, records: d.Records, networks: d.Networks, hierarchy: d.Hierarchy,
+		zones: d.Zones, records: d.Records, networks: d.Networks, hierarchy: d.Hierarchy, gate: d.Quota,
 		ops: d.Ops, ids: d.IDs, clk: d.Clock, cfg: d.Config,
 	}, nil
 }

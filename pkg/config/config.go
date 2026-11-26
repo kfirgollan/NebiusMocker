@@ -106,6 +106,8 @@ type Config struct {
 	IAM IAMConfig
 	// Billing configures the billing module's price list (NEBIUS_MOCKER_BILLING_*).
 	Billing BillingConfig
+	// Quotas configures the quota catalog's default limits (NEBIUS_MOCKER_QUOTAS_*).
+	Quotas QuotasConfig
 	// Auth configures issued access tokens and the service-account token
 	// exchange (NEBIUS_MOCKER_TOKEN_*, NEBIUS_MOCKER_IAM_JWT_MAX_TTL).
 	Auth AuthConfig
@@ -307,6 +309,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, mk8sK3sParsers(&c.MK8sK3s)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
+	parsers = append(parsers, quotasParsers(&c.Quotas)...)
 	parsers = append(parsers, authParsers(&c.Auth)...)
 	parsers = append(parsers, computeFabricsParsers(&c.ComputeFabricsFile)...)
 	parsers = append(parsers, capacityParsers(&c.Capacity)...)

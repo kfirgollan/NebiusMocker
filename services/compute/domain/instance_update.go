@@ -166,13 +166,15 @@ func (s *InstanceService) commitUpdate(ctx context.Context, stored, updated *com
 	if err != nil {
 		return err
 	}
-	return s.d.Instances.Txn(ctx, func(tx InstanceTx) error {
-		atts, err := s.applyDisks(tx, stored, plan)
-		if err != nil {
-			return err
-		}
-		updated.Status.DiskAttachments = atts
-		return tx.PutInstance(updated)
+	return s.admitUpdate(ctx, stored, updated, plan, func(ctx context.Context) error {
+		return s.d.Instances.Txn(ctx, func(tx InstanceTx) error {
+			atts, err := s.applyDisks(tx, stored, plan)
+			if err != nil {
+				return err
+			}
+			updated.Status.DiskAttachments = atts
+			return tx.PutInstance(updated)
+		})
 	})
 }
 

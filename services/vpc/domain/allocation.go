@@ -25,7 +25,7 @@ func newAllocationService(c *core) *AllocationService {
 		c: c, prefix: KindAllocation, what: "allocation", repo: c.r.Allocations,
 		newMsg:  func() *vpcpb.Allocation { return &vpcpb.Allocation{} },
 		newSpec: func() *vpcpb.AllocationSpec { return &vpcpb.AllocationSpec{} },
-		build:   s.build, apply: s.apply, checkDelete: s.checkDelete,
+		quota:   allocationQuota, build: s.build, apply: s.apply, checkDelete: s.checkDelete,
 	}
 	return s
 }

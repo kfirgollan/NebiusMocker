@@ -16,7 +16,8 @@
 | `nebius_kms_v1_symmetric_key`, `nebius_kms_v1_asymmetric_key` resources and data sources with the official provider | ✅ e2e: `test/terraform/kms` |
 | `nebius kms` CLI flows from the docs (quickstarts, encrypt/decrypt with AAD, rotate, data keys, delete/undelete, openssl verification) | ✅ e2e: `test/kms` |
 | Automatic rotation on `rotation_period` (mock clock; manual Rotate and Update reschedule; see Behavior notes) | ✅ |
-| `PENDING_IMPORT` / key import, quotas (3000 keys per tenant) | Not yet |
+| Quotas `kms.symmetrickey.count` and `kms.asymmetrickey.count` enforced on Create; keys scheduled for deletion keep counting until purged, as in Nebius ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_areas_test.go` |
+| `PENDING_IMPORT` / key import | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 

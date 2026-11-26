@@ -14,6 +14,7 @@ import (
 	kmspb "github.com/nebius/gosdk/proto/nebius/kms/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/kms/api"
 	"github.com/kfirgollan/NebiusMocker/services/kms/dal"
 	"github.com/kfirgollan/NebiusMocker/services/kms/domain"
@@ -46,14 +47,19 @@ func (*Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocke
 	})
 	api.RegisterAuthzRules(deps.Rules)
 
+	gate := peer.QuotaGateFor(deps.Peers)
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey("kms"), dal.NewQuotaUsage(deps.Store)); err != nil {
+		return fmt.Errorf("kms: %w", err)
+	}
+
 	sym, err := domain.NewSymmetricKeyService(domain.KeyDeps[*kmspb.SymmetricKey]{
-		Keys: symRepo, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Keys: symRepo, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: gate,
 	})
 	if err != nil {
 		return fmt.Errorf("kms: %w", err)
 	}
 	asym, err := domain.NewAsymmetricKeyService(domain.KeyDeps[*kmspb.AsymmetricKey]{
-		Keys: asymRepo, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Keys: asymRepo, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: gate,
 	})
 	if err != nil {
 		return fmt.Errorf("kms: %w", err)

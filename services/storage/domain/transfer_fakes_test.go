@@ -260,6 +260,11 @@ type trFixture struct {
 
 func newTrFixture(t *testing.T, maxParallel int) *trFixture {
 	t.Helper()
+	return newTrFixtureGate(t, maxParallel, passGate{})
+}
+
+func newTrFixtureGate(t *testing.T, maxParallel int, gate domain.QuotaGate) *trFixture {
+	t.Helper()
 	clk := clock.NewManual(t0)
 	f := &trFixture{repo: newTrRepo(), buckets: &fakeBuckets{}, clk: clk, eng: &trEngine{clk: clk}}
 	for _, b := range []struct {
@@ -277,7 +282,7 @@ func newTrFixture(t *testing.T, maxParallel int) *trFixture {
 		})
 	}
 	svc, err := domain.NewTransferService(domain.TransferDeps{
-		Repo: f.repo, Buckets: f.buckets, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: clk,
+		Repo: f.repo, Buckets: f.buckets, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: clk, Quota: gate,
 		Region: trRegion, Engine: f.eng, MaxParallel: maxParallel,
 	})
 	if err != nil {

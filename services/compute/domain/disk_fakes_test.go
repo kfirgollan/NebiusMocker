@@ -267,6 +267,7 @@ type diskFixture struct {
 	ops    *deferOps
 	idx    *fakeOpIndex
 	clk    *clock.Manual
+	gate   *fakeQuotaGate
 	ds     *DiskService
 	ss     *SnapshotService
 }
@@ -276,12 +277,12 @@ func newDiskFixture(t *testing.T) *diskFixture {
 	f := &diskFixture{
 		disks: &fakeDisks{}, snaps: &fakeSnapshots{}, ops: &deferOps{}, idx: &fakeOpIndex{},
 		images: &fakeImageLookup{public: map[string]bool{PublicProjectID("e00"): true}},
-		clk:    clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		clk:    clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), gate: &fakeQuotaGate{},
 	}
 	deps := DiskDeps{
 		Disks: f.disks, Snapshots: f.snaps, Images: f.images, OpIndex: f.idx,
 		Projects: fakeProjects{testProject: true, otherProject: true},
-		Ops:      f.ops, IDs: &fakeIDs{}, Clock: f.clk,
+		Ops:      f.ops, IDs: &fakeIDs{}, Clock: f.clk, Quota: f.gate,
 	}
 	var err error
 	if f.ds, err = NewDiskService(deps); err != nil {

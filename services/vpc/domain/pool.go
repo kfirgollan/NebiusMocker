@@ -11,6 +11,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 // Names of the pools seeded in every project.
@@ -29,7 +30,7 @@ func newPoolService(c *core) *PoolService {
 	s.kind = &kind[*vpcpb.Pool, *vpcpb.PoolSpec]{
 		c: c, prefix: KindPool, what: "pool", repo: c.r.Pools,
 		newMsg: func() *vpcpb.Pool { return &vpcpb.Pool{} }, newSpec: func() *vpcpb.PoolSpec { return &vpcpb.PoolSpec{} },
-		build: s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.remove, decorate: s.decorate,
+		quota: ownQuota[*vpcpb.Pool](quota.VPCPoolCount), build: s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.remove, decorate: s.decorate,
 	}
 	return s
 }

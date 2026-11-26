@@ -91,11 +91,14 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 		return fmt.Errorf("storage: the object store %T does not support content inventory (objstore.Inventory)", deps.ObjStore)
 	}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
-		Buckets: buckets, Backend: deps.ObjStore, Content: content, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Buckets: buckets, Backend: deps.ObjStore, Content: content, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 		Settings:    domain.Settings{Region: cfg.Region, Domain: cfg.S3Domain, PurgeGrace: cfg.PurgeGrace},
 		Filesystems: peerFilesystems{deps.Peers}, Access: deps.Authz, Mode: deps.Config.Authz, Log: deps.Log,
 	})
 	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey("storage"), dal.NewQuotaUsage(deps.Store)); err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
 	deps.Authz.RegisterKind(domain.KindBucket, func(ctx context.Context, id string) (string, error) {
@@ -174,7 +177,7 @@ func (m *Module) registerTransfers(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 	}
 	engine := domain.NewTransferEngine(endpoints, dal.NewManagedRepo(deps.Store), deps.Clock, deps.Log)
 	svc, err := domain.NewTransferService(domain.TransferDeps{
-		Repo: repo, Buckets: buckets, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Repo: repo, Buckets: buckets, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 		Region: deps.Config.Storage.Region, Engine: engine, Log: deps.Log,
 	})
 	if err != nil {

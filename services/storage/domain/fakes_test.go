@@ -229,3 +229,10 @@ func (f fakeKeys) ResolveAccessKey(_ context.Context, id string) (peer.AccessKey
 }
 
 var errBackendDown = errors.New("backend down")
+
+// passGate admits every claim and just runs apply.
+type passGate struct{}
+
+func (passGate) Admit(ctx context.Context, _ peer.QuotaClaim, apply func(ctx context.Context) error) error {
+	return apply(ctx)
+}

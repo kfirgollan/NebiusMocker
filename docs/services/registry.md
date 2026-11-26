@@ -17,7 +17,8 @@
 | `nebius.iam.v1.ProfileService.Get` (the CLI calls it before printing a token; served by the IAM module) | ✅ |
 | Authorization of RPCs and of docker pull/push under `NEBIUS_MOCKER_AUTHZ` | ✅ |
 | `ListRegistries` / `ListArtifacts` `filter` | Rejected with `INVALID_ARGUMENT` on field `filter`: no filter syntax is documented upstream (the Compute proto marks the same field "not implemented, filtering could be done on client side") |
-| Quotas (`registry.registry.count`, `registry.size`) | Not yet |
+| Quota `registry.count` (registries per project and tenant, per region) enforced on Create ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_areas_test.go` |
+| Quota on registry storage size | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312, Harbor v2.16.0.
 

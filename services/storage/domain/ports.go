@@ -152,3 +152,9 @@ type AccessLog interface {
 	// Forget drops every record of a bucket (on purge).
 	Forget(ctx context.Context, bucketID string) error
 }
+
+// QuotaGate admits a quota claim and runs apply, the store write that makes the
+// consumption visible to the usage source (satisfied by peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
+}

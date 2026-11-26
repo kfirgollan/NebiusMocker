@@ -18,6 +18,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -32,11 +33,13 @@ type GpuClusterDeps struct {
 	Ops      Operations
 	IDs      IDGenerator
 	Clock    clock.Clock
+	// Quota admits GPU cluster creations.
+	Quota QuotaGate
 }
 
 func (d GpuClusterDeps) validate() error {
 	if d.Clusters == nil || d.OpIndex == nil || d.Projects == nil || d.Regions == nil ||
-		d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return errors.New("compute: gpu cluster service dependencies must not be nil")
 	}
 	return nil
@@ -119,7 +122,10 @@ func (s *GpuClusterService) Create(ctx context.Context, cmd CreateGpuClusterCmd)
 		Description: "Create GPU cluster",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.d.Clusters.Create(ctx, cluster) },
+		Prepare: func(ctx context.Context) error {
+			return admit(ctx, s.d.Quota, cluster.GetMetadata().GetParentId(), map[string]int64{quota.ComputeGPUClusterCount: 1},
+				func(ctx context.Context) error { return s.d.Clusters.Create(ctx, cluster) })
+		},
 		Work: func(ctx context.Context) error {
 			_, err := s.d.Clusters.Mutate(ctx, id, func(c *computepb.GpuCluster) error {
 				c.Status.Reconciling = false

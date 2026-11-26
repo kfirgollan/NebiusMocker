@@ -107,18 +107,19 @@ type fsFixture struct {
 	data *fakeFsData
 	ops  *deferOps
 	clk  *clock.Manual
+	gate *fakeQuotaGate
 	svc  *FilesystemService
 }
 
 func newFsFixture(t *testing.T) *fsFixture {
 	t.Helper()
 	f := &fsFixture{
-		repo: &fakeFilesystems{}, data: &fakeFsData{}, ops: &deferOps{},
+		repo: &fakeFilesystems{}, data: &fakeFsData{}, ops: &deferOps{}, gate: &fakeQuotaGate{},
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	svc, err := NewFilesystemService(FilesystemDeps{
 		Filesystems: f.repo, OpIndex: &fakeOpIndex{}, Data: f.data,
-		Projects: fakeProjects{testProject: true}, Ops: f.ops, IDs: &fakeIDs{}, Clock: f.clk,
+		Projects: fakeProjects{testProject: true}, Ops: f.ops, IDs: &fakeIDs{}, Clock: f.clk, Quota: f.gate,
 	})
 	if err != nil {
 		t.Fatal(err)

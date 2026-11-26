@@ -20,7 +20,8 @@
 | All `nebius_vpc_v1_*` resources and data sources (incl. `nebius_vpc_v1_default_network`) with the official Terraform provider | ✅ e2e: `test/terraform/vpc` |
 | `nebius vpc network\|subnet list\|get-by-name` with the official CLI | ✅ e2e: `test/terraform/vpc/cli_test.go` |
 | `status.assignment` of allocations: set by compute for instance network interfaces through `peer.NetworkInterfaces` (dynamic and user allocations, `PRIMARY`/`PUBLIC`/`ALIAS`) | ✅ unit tests (`services/vpc/domain/nic_test.go`), compute contract and Terraform suites |
-| `TargetGroupService` (needs compute instances), load balancer assignments, quotas | Not yet |
+| `TargetGroupService` (needs compute instances), load balancer assignments | Not yet |
+| Quotas on every user-created kind: `vpc.network.count`, `vpc.subnet.count`, `vpc.pool.count`, `vpc.allocation.count`, `vpc.ipv4-address.public.count`, `vpc.routetable.count`, `vpc.route.count`, `vpc.securitygroup.count`, `vpc.securityrule.count` ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_*`, e2e: `test/terraform/quotas` |
 | `vpc.v1alpha1` (second view of the same resources, see [v1alpha1](#v1alpha1-a-second-view-of-the-same-resources)): `AllocationService` Get, GetByName, List, Create, Update, Delete; `PoolService`, `SubnetService` (+ ListByNetwork), `NetworkService` (+ GetDefault) Get, GetByName, List; `ScopeService` Get, GetByName, List; `nebius.common.v1alpha1.OperationService` Get, List | ✅ contract: `test/contract/vpc_v1alpha1_*` |
 | `nebius_vpc_v1alpha1_allocation` (resource and data source) and the `network`, `pool`, `scope`, `subnet` data sources with the official Terraform provider | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
 | `nebius vpc v1alpha1 allocation\|network\|pool\|scope\|subnet` with the official CLI | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
@@ -183,7 +184,12 @@ from being deleted. Every pool records its scope in `status.scope_id`, which v1 
 - Permissions: `vpc.pools.*`, `vpc.networks.*`, `vpc.subnets.*`, `vpc.allocations.*`, `vpc.securityGroups.*`,
   `vpc.securityRules.*`, `vpc.routeTables.*`, `vpc.routes.*`, `vpc.scopes.*` (v1alpha1 reuses the v1 permissions). `ListBy*` need `list` on the filtered resource;
   `GetDefault` needs `vpc.networks.get` on the project.
-- Quotas: not enforced yet.
+- Quotas ([quotas.md](quotas.md)): every user Create of a network, subnet, pool, allocation, route table, route, security group or
+  security rule is charged to its project (`vpc.<kind>.count`); a public allocation also charges
+  `vpc.ipv4-address.public.count`. NIC binds charge the allocations they create (one per private address, one more
+  plus a public IPv4 for a public address), in one claim, so a refused bind changes nothing. Resources the mocker
+  creates itself (the seeded default network and pools, and the default route table, route and security group of a
+  new network) count in usage but are never refused, so project and network creation cannot fail on them.
 
 ## Terraform
 

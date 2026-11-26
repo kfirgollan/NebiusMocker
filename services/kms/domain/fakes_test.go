@@ -17,6 +17,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
@@ -250,7 +251,7 @@ func newSymEnv(t *testing.T) *symEnv {
 	clk := clock.NewManual(t0)
 	repo := newFakeRepo(func(k *kmspb.SymmetricKey) kmspb.KeyState { return k.GetStatus().GetState() })
 	svc, err := NewSymmetricKeyService(KeyDeps[*kmspb.SymmetricKey]{
-		Keys: repo, Hierarchy: fakeHierarchy{}, Ops: &fakeOps{clk: clk}, IDs: &seqIDs{}, Clock: clk,
+		Keys: repo, Hierarchy: fakeHierarchy{}, Ops: &fakeOps{clk: clk}, IDs: &seqIDs{}, Clock: clk, Quota: passGate{},
 	})
 	if err != nil {
 		t.Fatalf("NewSymmetricKeyService: %v", err)
@@ -269,10 +270,17 @@ func newAsymEnv(t *testing.T) *asymEnv {
 	clk := clock.NewManual(t0)
 	repo := newFakeRepo(func(k *kmspb.AsymmetricKey) kmspb.KeyState { return k.GetStatus().GetState() })
 	svc, err := NewAsymmetricKeyService(KeyDeps[*kmspb.AsymmetricKey]{
-		Keys: repo, Hierarchy: fakeHierarchy{}, Ops: &fakeOps{clk: clk}, IDs: &seqIDs{}, Clock: clk,
+		Keys: repo, Hierarchy: fakeHierarchy{}, Ops: &fakeOps{clk: clk}, IDs: &seqIDs{}, Clock: clk, Quota: passGate{},
 	})
 	if err != nil {
 		t.Fatalf("NewAsymmetricKeyService: %v", err)
 	}
 	return &asymEnv{svc: svc, repo: repo, clk: clk}
+}
+
+// passGate admits every claim and just runs apply.
+type passGate struct{}
+
+func (passGate) Admit(ctx context.Context, _ peer.QuotaClaim, apply func(ctx context.Context) error) error {
+	return apply(ctx)
 }

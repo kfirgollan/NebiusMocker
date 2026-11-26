@@ -23,6 +23,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -46,6 +48,7 @@ type TransferDeps struct {
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
+	Quota     QuotaGate
 	// Region is the only Nebius region the mocker serves (e.g. "eu-north1").
 	Region string
 	// Engine runs iterations (a *TransferEngine).
@@ -66,6 +69,7 @@ type TransferService struct {
 	ops         Operations
 	ids         IDGenerator
 	clk         clock.Clock
+	quota       QuotaGate
 	region      string
 	engine      transferEngine
 	log         *slog.Logger
@@ -91,7 +95,7 @@ type runningIteration struct {
 
 // NewTransferService wires a TransferService.
 func NewTransferService(d TransferDeps) (*TransferService, error) {
-	if d.Repo == nil || d.Buckets == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Engine == nil {
+	if d.Repo == nil || d.Buckets == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil || d.Engine == nil {
 		return nil, errors.New("storage: transfer service dependencies must not be nil")
 	}
 	if d.Region == "" {
@@ -101,7 +105,7 @@ func NewTransferService(d TransferDeps) (*TransferService, error) {
 		return nil, fmt.Errorf("storage: transfer MaxParallel must not be negative, got %d", d.MaxParallel)
 	}
 	return &TransferService{
-		repo: d.Repo, buckets: d.Buckets, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock,
+		repo: d.Repo, buckets: d.Buckets, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, quota: d.Quota,
 		region: d.Region, engine: d.Engine, log: cmp.Or(d.Log, slog.New(slog.DiscardHandler)),
 		maxParallel: cmp.Or(d.MaxParallel, defaultMaxParallel),
 		running:     map[string]*runningIteration{},
@@ -199,7 +203,13 @@ func (s *TransferService) create(ctx context.Context, req proto.Message, build f
 			defer s.mu.Unlock()
 			rec.Status = TransferStatus{State: TransferActive}
 			rec.NextRun = s.clk.Now()
-			if err := s.repo.Create(ctx, rec); err != nil {
+			// Both API versions share one transfer quota; the record is
+			// written here (not in Prepare), so the claim is too.
+			err := s.quota.Admit(ctx, peer.QuotaClaim{
+				ContainerID: rec.Metadata().GetParentId(),
+				Amounts:     map[string]int64{quota.StorageTransferCount: 1},
+			}, func(ctx context.Context) error { return s.repo.Create(ctx, rec) })
+			if err != nil {
 				return err
 			}
 			s.notify()

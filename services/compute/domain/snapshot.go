@@ -287,7 +287,9 @@ func (s *SnapshotService) prepareCreate(ctx context.Context, snap *computepb.Dis
 	}
 	// The disk may have grown since the request was validated.
 	snap.Status = snapshotStatusOf(disk)
-	if err := s.d.Snapshots.Create(ctx, snap); err != nil {
+	err = admit(ctx, s.d.Quota, snap.GetMetadata().GetParentId(), snapshotAmounts(snap),
+		func(ctx context.Context) error { return s.d.Snapshots.Create(ctx, snap) })
+	if err != nil {
 		return errors.Join(err, s.unlockDisk(ctx, diskID, id))
 	}
 	return nil

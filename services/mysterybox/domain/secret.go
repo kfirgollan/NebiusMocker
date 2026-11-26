@@ -16,6 +16,8 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -128,7 +130,9 @@ func (s *Service) CreateSecret(ctx context.Context, cmd CreateSecretCmd) (*opera
 		Prepare: func(ctx context.Context) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			return s.createSecret(ctx, id, md, cmd.Spec.GetDescription(), first)
+			return s.admitSecret(ctx, md.GetParentId(), func(ctx context.Context) error {
+				return s.createSecret(ctx, id, md, cmd.Spec.GetDescription(), first)
+			})
 		},
 	})
 }
@@ -152,7 +156,10 @@ func (s *Service) CreateSystemSecret(ctx context.Context, cmd SystemSecretCmd) (
 	md := &commonpb.ResourceMetadata{ParentId: cmd.ParentID, Name: cmd.Name, Labels: cmd.Labels}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.createSecret(ctx, id, md, cmd.Description, &mysteryboxpb.SecretVersionSpec{Payload: cmd.Payload}); err != nil {
+	err = s.admitSecret(ctx, cmd.ParentID, func(ctx context.Context) error {
+		return s.createSecret(ctx, id, md, cmd.Description, &mysteryboxpb.SecretVersionSpec{Payload: cmd.Payload})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.secret(ctx, id, activeOnly)
@@ -254,6 +261,16 @@ func (s *Service) checkParent(ctx context.Context, parentID string) error {
 		return fmt.Errorf("secret parent %s: %w", parentID, err)
 	}
 	return nil
+}
+
+// admitSecret charges one secret to the project and, if it fits, runs create.
+// A secret scheduled for deletion keeps its record (and so its count) until
+// purged, and Undelete restores it in place, so only creation is admitted.
+func (s *Service) admitSecret(ctx context.Context, projectID string, create func(ctx context.Context) error) error {
+	return s.quota.Admit(ctx, peer.QuotaClaim{
+		ContainerID: projectID,
+		Amounts:     map[string]int64{quota.MysteryBoxSecretCount: 1},
+	}, create)
 }
 
 // createSecret stores a new secret and, when first is set, its first version

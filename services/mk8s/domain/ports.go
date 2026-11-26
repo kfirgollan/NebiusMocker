@@ -240,3 +240,10 @@ type Operations interface {
 type IDGenerator interface {
 	New(typ string) (string, error)
 }
+
+// QuotaGate admits a quota claim and runs apply, the store write that makes
+// the consumption visible to the usage source; a nil apply only checks
+// (satisfied by peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
+}

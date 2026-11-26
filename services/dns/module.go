@@ -63,9 +63,13 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	records := dal.NewRecordRepo(deps.Store)
 	svc, err := domain.New(domain.Deps{
 		Zones: zones, Records: records, Networks: peerNetworks{deps.Peers}, Hierarchy: deps.Authz,
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Config: domain.Config{ProjectID: deps.Config.ProjectID},
+		Quota: peer.QuotaGateFor(deps.Peers),
+		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Config: domain.Config{ProjectID: deps.Config.ProjectID},
 	})
 	if err != nil {
+		return fmt.Errorf("dns: %w", err)
+	}
+	if err := peer.Provide[peer.QuotaUsageSource](deps.Peers, peer.QuotaUsageKey("dns"), svc); err != nil {
 		return fmt.Errorf("dns: %w", err)
 	}
 	deps.Authz.RegisterKind(domain.KindZone, func(ctx context.Context, id string) (string, error) {

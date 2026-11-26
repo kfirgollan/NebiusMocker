@@ -12,6 +12,8 @@
 | Bucket semantics: global S3 names, naming rules, `IMMUTABLE_NAME`, `versioning_policy` default + transition rules, `status.state/domain_name/region/bucket_type`, soft delete with `deleted_at`/`purge_at`, background purge sweeper | ✅ |
 | `status.counters`: per storage class, current/noncurrent simple and multipart objects, multipart uploads and in-flight parts, computed from the object store on every read | ✅ |
 | `spec.max_size_bytes`: writes that would exceed it are refused at the S3 front (`QuotaExceeded`) | ✅ |
+| Quotas `storage.bucket.count` (every bucket type, gRPC and S3 CreateBucket) and `storage.transfer.count` (v1 and v1alpha1; checked when the transfer is stored, so a refused transfer fails its operation) ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_areas_test.go` |
+| Object size quotas (`storage.bucket.size.<class>`) | Not yet |
 | `spec.cors`: preflight `OPTIONS` and `Access-Control-*` headers at the S3 front | ✅ |
 | `spec.bucket_policy`: group and anonymous rules, `storage.*` roles, path patterns, evaluated at the S3 front; `status.anonymous_access_enabled` | ✅ |
 | `spec.lifecycle_configuration`: expiration (days/date), expired delete markers, noncurrent expiration (+ `newer_noncurrent_versions`), abort incomplete multipart uploads, with prefix/size/tag filters, applied on the mock clock | ✅ |

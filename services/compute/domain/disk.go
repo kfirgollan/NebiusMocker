@@ -18,6 +18,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -32,11 +33,13 @@ type DiskDeps struct {
 	Ops      Operations
 	IDs      IDGenerator
 	Clock    clock.Clock
+	// Quota admits disk and snapshot creations and disk growth.
+	Quota QuotaGate
 }
 
 func (d DiskDeps) validate() error {
 	if d.Disks == nil || d.Snapshots == nil || d.Images == nil || d.OpIndex == nil || d.Projects == nil ||
-		d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return errors.New("compute: disk service dependencies must not be nil")
 	}
 	return nil
@@ -424,7 +427,9 @@ func (s *DiskService) prepareCreate(ctx context.Context, disk *computepb.Disk, s
 			return fmt.Errorf("source snapshot: %w", err)
 		}
 	}
-	if err := s.d.Disks.Create(ctx, disk); err != nil {
+	err := admit(ctx, s.d.Quota, disk.GetMetadata().GetParentId(), diskAmounts(disk.GetSpec().GetType(), diskSize(disk)),
+		func(ctx context.Context) error { return s.d.Disks.Create(ctx, disk) })
+	if err != nil {
 		return errors.Join(err, s.unlockSnapshot(ctx, src.snapshotID, id))
 	}
 	return nil
@@ -448,19 +453,32 @@ func (s *DiskService) unlockSnapshot(ctx context.Context, snapshotID, diskID str
 	return err
 }
 
+// applyUpdate stores the update. A resize claims the growth against the quota
+// first.
 func (s *DiskService) applyUpdate(ctx context.Context, cmd UpdateDiskCmd) error {
-	_, err := s.d.Disks.Mutate(ctx, cmd.Metadata.GetId(), func(stored *computepb.Disk) error {
-		updated, err := s.patchDisk(stored, cmd)
-		if err != nil {
-			return err
-		}
-		if updated != stored {
-			proto.Reset(stored)
-			proto.Merge(stored, updated)
-		}
-		return nil
+	cur, err := s.d.Disks.Get(ctx, cmd.Metadata.GetId())
+	if err != nil {
+		return err
+	}
+	next, err := s.patchDisk(cur, cmd)
+	if err != nil {
+		return err
+	}
+	amounts := map[string]int64{quota.ComputeDiskSize(cur.GetSpec().GetType().String()): diskSize(next) - diskSize(cur)}
+	return admit(ctx, s.d.Quota, cur.GetMetadata().GetParentId(), amounts, func(ctx context.Context) error {
+		_, err := s.d.Disks.Mutate(ctx, cmd.Metadata.GetId(), func(stored *computepb.Disk) error {
+			updated, err := s.patchDisk(stored, cmd)
+			if err != nil {
+				return err
+			}
+			if updated != stored {
+				proto.Reset(stored)
+				proto.Merge(stored, updated)
+			}
+			return nil
+		})
+		return err
 	})
-	return err
 }
 
 // patchDisk returns stored with the update applied, or stored itself when nothing changed.

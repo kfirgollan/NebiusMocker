@@ -17,7 +17,7 @@
 | `nebius_dns_v1_zone`, `nebius_dns_v1_record` resources and data sources with the official provider | ✅ e2e: `test/terraform/dns` |
 | `nebius dns zone` / `nebius dns record` CLI flows from the docs, verified with `dig` | ✅ e2e: `test/cli/dns` |
 | System-managed `<network_ID>.compute.internal.` zones with VM FQDNs | Not yet |
-| Quota on zones (100 per region) | Not yet |
+| Quota `dns.zone.count` enforced on zone Create ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_areas_test.go` |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 

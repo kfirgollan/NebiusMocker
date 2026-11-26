@@ -45,6 +45,7 @@ type Deps struct {
 	IDs       IDGenerator
 	Clock     clock.Clock
 	Hierarchy Hierarchy
+	Quota     QuotaGate
 	Config    Config
 }
 
@@ -56,6 +57,7 @@ type core struct {
 	ids  IDGenerator
 	clk  clock.Clock
 	hier Hierarchy
+	gate QuotaGate
 	cfg  Config
 	r    Repos
 
@@ -76,12 +78,12 @@ type Service struct{ c *core }
 // New wires the VPC domain.
 func New(d Deps) (*Service, error) {
 	r := d.Repos
-	if d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Hierarchy == nil ||
+	if d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Hierarchy == nil || d.Quota == nil ||
 		r.Pools == nil || r.Networks == nil || r.Subnets == nil || r.Allocations == nil ||
 		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil || r.Scopes == nil || r.NetworkUsers == nil {
 		return nil, errors.New("vpc: service dependencies must not be nil")
 	}
-	c := &core{ops: d.Ops, ids: d.IDs, clk: d.Clock, hier: d.Hierarchy, cfg: d.Config, r: r}
+	c := &core{ops: d.Ops, ids: d.IDs, clk: d.Clock, hier: d.Hierarchy, gate: d.Quota, cfg: d.Config, r: r}
 	c.pools = newPoolService(c)
 	c.networks = newNetworkService(c)
 	c.subnets = newSubnetService(c)

@@ -9,6 +9,7 @@ import (
 	kmspb "github.com/nebius/gosdk/proto/nebius/kms/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // Resource type prefixes (NID types) owned by KMS.
@@ -86,4 +87,10 @@ type Operations interface {
 // IDGenerator creates NIDs (satisfied by pkg/nid generators).
 type IDGenerator interface {
 	New(typ string) (string, error)
+}
+
+// QuotaGate admits a quota claim and runs apply, the store write that makes the
+// consumption visible to the usage source (satisfied by peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
 }

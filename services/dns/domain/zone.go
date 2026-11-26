@@ -13,6 +13,8 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -200,7 +202,8 @@ func (s *Service) createZone(ctx context.Context, id string, cmd CreateZoneCmd) 
 	if err := s.networks.Bind(ctx, networkID, id); err != nil {
 		return fmt.Errorf("spec.vpc.primary_network_id: %w", err)
 	}
-	if err := s.zones.Create(ctx, z); err != nil {
+	claim := peer.QuotaClaim{ContainerID: md.GetParentId(), Amounts: map[string]int64{quota.DNSZoneCount: 1}}
+	if err := s.gate.Admit(ctx, claim, func(ctx context.Context) error { return s.zones.Create(ctx, z) }); err != nil {
 		return s.unbindAfter(ctx, networkID, id, err)
 	}
 	for _, sys := range []struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 type fakeRegistries struct {
@@ -273,4 +274,11 @@ func (a fakeAuthorizer) Check(_ context.Context, principal string, perm authz.Pe
 		return authz.Decision{}, errs.NotFound(target)
 	}
 	return authz.Decision{Allowed: slices.Contains(a[principal], perm.Verb()), Permission: perm, Target: target}, nil
+}
+
+// passGate admits every claim and just runs apply.
+type passGate struct{}
+
+func (passGate) Admit(ctx context.Context, _ peer.QuotaClaim, apply func(ctx context.Context) error) error {
+	return apply(ctx)
 }

@@ -33,7 +33,7 @@ func registerFilesystems(reg grpc.ServiceRegistrar, deps mocker.Deps) error {
 	data := fsstore.New(deps.ObjStore)
 	svc, err := domain.NewFilesystemService(domain.FilesystemDeps{
 		Filesystems: repo, OpIndex: dal.NewFilesystemOpIndex(deps.Store), Data: data,
-		Projects: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Projects: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 	})
 	if err != nil {
 		return fmt.Errorf("compute: %w", err)

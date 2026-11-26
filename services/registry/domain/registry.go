@@ -18,6 +18,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -46,6 +48,7 @@ type RegistryService struct {
 	ops       Operations
 	ids       IDGenerator
 	clk       clock.Clock
+	quota     QuotaGate
 }
 
 // RegistryDeps are the dependencies of a RegistryService. All are required.
@@ -58,17 +61,18 @@ type RegistryDeps struct {
 	Ops        Operations
 	IDs        IDGenerator
 	Clock      clock.Clock
+	Quota      QuotaGate
 }
 
 // NewRegistryService wires a RegistryService.
 func NewRegistryService(d RegistryDeps) (*RegistryService, error) {
 	if d.Registries == nil || d.Artifacts == nil || d.Backend == nil || d.Hierarchy == nil || d.Endpoint == nil ||
-		d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return nil, errors.New("registry: registry service dependencies must not be nil")
 	}
 	return &RegistryService{
 		repo: d.Registries, index: d.Artifacts, backend: d.Backend, hierarchy: d.Hierarchy, endpoint: d.Endpoint,
-		ops: d.Ops, ids: d.IDs, clk: d.Clock,
+		ops: d.Ops, ids: d.IDs, clk: d.Clock, quota: d.Quota,
 	}, nil
 }
 
@@ -172,8 +176,13 @@ func (s *RegistryService) Create(ctx context.Context, cmd CreateRegistryCmd) (*o
 		Description: "Create registry",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.repo.Create(ctx, r) },
-		Work:        func(ctx context.Context) error { return s.activate(ctx, id) },
+		Prepare: func(ctx context.Context) error {
+			return s.quota.Admit(ctx, peer.QuotaClaim{
+				ContainerID: r.GetMetadata().GetParentId(),
+				Amounts:     map[string]int64{quota.RegistryCount: 1},
+			}, func(ctx context.Context) error { return s.repo.Create(ctx, r) })
+		},
+		Work: func(ctx context.Context) error { return s.activate(ctx, id) },
 	})
 }
 

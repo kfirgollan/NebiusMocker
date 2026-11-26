@@ -66,6 +66,10 @@ default `nebius/soperator,nebius/nvidia-gpu-operator,nebius/nvidia-network-opera
 see [services/applications.md](../services/applications.md#configuration).
 DNS: `NEBIUS_MOCKER_DNS_LISTEN` (default `:4653`, UDP and TCP; `off` disables it) is the address of the DNS responder
 that answers from the mock's zones; see [services/dns.md](../services/dns.md#configuration).
+Quotas: `NEBIUS_MOCKER_QUOTAS_LIMITS` (comma-separated `name=limit`, `Ki`…`Pi` suffixes for byte quotas, e.g.
+`compute.instance.count=2,compute.disk.size.network-ssd=4Ti`) overrides the default limit of catalog quotas for every
+tenant and project allowance nobody has set; unknown names fail startup. See
+[services/quotas.md](../services/quotas.md#catalog).
 
 ### Managed Kubernetes: k3s backend
 

@@ -17,6 +17,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -148,7 +149,10 @@ func (s *Service) storeNewCluster(ctx context.Context, c *mk8spb.Cluster, networ
 	if err := s.d.Bindings.Set(ctx, id, networkID); err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id))
 	}
-	if err := s.d.Clusters.Create(ctx, c); err != nil {
+	err := s.d.Quota.Admit(ctx, peer.QuotaClaim{
+		ContainerID: c.GetMetadata().GetParentId(), Amounts: map[string]int64{quota.MK8sClusterCount: 1},
+	}, func(ctx context.Context) error { return s.d.Clusters.Create(ctx, c) })
+	if err != nil {
 		return errors.Join(err, nets.Unbind(ctx, networkID, id), s.d.Bindings.Delete(ctx, id))
 	}
 	return nil

@@ -75,6 +75,7 @@ type Deps struct {
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
+	Quota     QuotaGate
 	Limits    Limits
 }
 
@@ -92,6 +93,7 @@ type Service struct {
 	ops       Operations
 	ids       IDGenerator
 	clk       clock.Clock
+	quota     QuotaGate
 	limits    Limits
 
 	mu sync.Mutex
@@ -100,12 +102,12 @@ type Service struct {
 // NewService wires a Service.
 func NewService(d Deps) (*Service, error) {
 	if d.Secrets == nil || d.Versions == nil || d.Payloads == nil || d.Sealer == nil ||
-		d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return nil, errors.New("mysterybox: service dependencies must not be nil")
 	}
 	return &Service{
 		secrets: d.Secrets, versions: d.Versions, payloads: d.Payloads, sealer: d.Sealer,
-		hierarchy: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, limits: d.Limits.withDefaults(),
+		hierarchy: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, quota: d.Quota, limits: d.Limits.withDefaults(),
 	}, nil
 }
 

@@ -151,6 +151,9 @@ func DefaultCatalog() *Catalog {
 			Excludes: []string{
 				"iam.accessPermits.create", "iam.accessPermits.delete", "iam.groupMemberships.create", "iam.groupMemberships.delete",
 				auditPermissions,
+				// Nebius docs (overview/quotas): only users in groups with the
+				// admin role can change quotas.
+				"quotas.quotaAllowances.create", "quotas.quotaAllowances.update", "quotas.quotaAllowances.delete",
 			},
 		},
 		Role{Name: RoleAdmin, Grants: []string{"*"}},

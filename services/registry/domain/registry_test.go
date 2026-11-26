@@ -38,7 +38,7 @@ func newEnv(t *testing.T) *env {
 		Registries: e.regs, Artifacts: e.index, Backend: e.backend,
 		Hierarchy: fakeHierarchy{testProject: testTenant, testTenant: ""},
 		Endpoint:  fixedEndpoint("127.0.0.1:4590"), Ops: inlineOps{}, IDs: ids,
-		Clock: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		Clock: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), Quota: passGate{},
 	})
 	if err != nil {
 		t.Fatalf("NewRegistryService: %v", err)

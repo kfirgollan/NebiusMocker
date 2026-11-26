@@ -18,7 +18,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | MysteryBox (secrets) | [mysterybox.md](mysterybox.md) | 3 | 14 | 3 / 7 | **T2** | — |
 | KMS | [kms.md](kms.md) | 4 | 23 | 2 / 4 | **T3** | — |
 | DNS | [dns.md](dns.md) | 2 | 13 | 2 / 4 | **T2** ✅ implemented; **T3** DNS responder (`miekg/dns`) ✅ | — |
-| Quotas | [quotas.md](quotas.md) | 1 | 6 | 1 / 2 | T1 (+ live usage) | — |
+| Quotas | [quotas.md](quotas.md) | 1 | 6 | 1 / 2 | **T2** allowances with live usage, enforced across areas | — |
 | Billing | [billing.md](billing.md) | 5 | 14 | 1 / 2 | **T1** ✅ pricing policies, spot prices, calculator (v1, v1alpha1) from a configurable price list; one-time export `UNIMPLEMENTED` | — |
 | Capacity | [capacity.md](capacity.md) | 4 | 14 | 2 / 3 | **T2** ✅ implemented (seeded block groups and intervals on the mock clock, project allowances, resource advice) | Compute instances drawing from reservations (`followup-compute-reservations`) |
 | Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | T1 | — |

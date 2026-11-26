@@ -9,6 +9,7 @@ import (
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // KindImage is the NID type prefix of compute images.
@@ -301,4 +302,20 @@ type NodeRepository interface {
 	Put(ctx context.Context, n NodeRecord) error
 	// Delete drops a record; a missing one is not an error.
 	Delete(ctx context.Context, instanceID string) error
+}
+
+// QuotaGate admits a quota claim and runs apply, the store write that makes the
+// consumption visible to the usage source (satisfied by peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
+}
+
+// QuotaRecords reads every stored compute resource across all projects, for
+// the quota usage source (QuotaUsage).
+type QuotaRecords interface {
+	Instances(ctx context.Context) ([]*computepb.Instance, error)
+	Disks(ctx context.Context) ([]*computepb.Disk, error)
+	Snapshots(ctx context.Context) ([]*computepb.DiskSnapshot, error)
+	Filesystems(ctx context.Context) ([]*computepb.Filesystem, error)
+	GpuClusters(ctx context.Context) ([]*computepb.GpuCluster, error)
 }

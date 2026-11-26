@@ -448,6 +448,7 @@ type instFixture struct {
 	ops    *deferOps
 	idx    *fakeOpIndex
 	clk    *clock.Manual
+	gate   *fakeQuotaGate
 }
 
 // testNVLGroup is the NVL instance group of newInstFixture.
@@ -473,7 +474,7 @@ func newInstFixture(t *testing.T) *instFixture {
 		nodes:  &fakeNodes{},
 		images: &fakeImageLookup{public: map[string]bool{PublicProjectID("e00"): true}},
 		perms:  &fakePerms{deny: map[string]bool{}}, ops: &deferOps{}, idx: &fakeOpIndex{},
-		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), gate: &fakeQuotaGate{},
 	}
 	f.repo = &fakeInstanceRepo{disks: &f.disks.repo}
 	f.nvl = &fakeNVLGroups{}
@@ -485,14 +486,14 @@ func newInstFixture(t *testing.T) *instFixture {
 	ids := &fakeIDs{}
 	f.ds, err = NewDiskService(DiskDeps{
 		Disks: f.disks, Snapshots: &fakeSnapshots{}, Images: f.images, OpIndex: &fakeOpIndex{},
-		Projects: projects, Ops: f.ops, IDs: ids, Clock: f.clk,
+		Projects: projects, Ops: f.ops, IDs: ids, Clock: f.clk, Quota: f.gate,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.svc, err = NewInstanceService(InstanceDeps{
 		Instances: f.repo, OpIndex: f.idx, Projects: projects, Platforms: platforms, Network: f.net, Disks: f.ds,
-		GpuClusters: f.gpu, NVLGroups: nvlMembers, Filesystems: f.fs, Nodes: f.nodes, Perms: f.perms, Ops: f.ops, IDs: ids, Clock: f.clk,
+		GpuClusters: f.gpu, NVLGroups: nvlMembers, Filesystems: f.fs, Nodes: f.nodes, Perms: f.perms, Quota: f.gate, Ops: f.ops, IDs: ids, Clock: f.clk,
 		PublicIPReleaseAfter: time.Hour,
 	})
 	if err != nil {

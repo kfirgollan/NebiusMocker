@@ -23,6 +23,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/registry/api"
 	"github.com/kfirgollan/NebiusMocker/services/registry/backend/harbor"
 	"github.com/kfirgollan/NebiusMocker/services/registry/backend/memory"
@@ -77,9 +78,12 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	}
 	registries := dal.NewRegistryRepo(deps.Store)
 	index := dal.NewArtifactIndex(deps.Store)
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey("registry"), dal.NewQuotaUsage(deps.Store)); err != nil {
+		return fmt.Errorf("registry: %w", err)
+	}
 	regSvc, err := domain.NewRegistryService(domain.RegistryDeps{
 		Registries: registries, Artifacts: index, Backend: m.backend, Hierarchy: deps.Authz, Endpoint: m.endpoint,
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 	})
 	if err != nil {
 		return err

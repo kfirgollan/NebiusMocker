@@ -11,6 +11,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 // RouteTableService implements nebius.vpc.v1.RouteTableService.
@@ -24,7 +25,7 @@ func newRouteTableService(c *core) *RouteTableService {
 		c: c, prefix: KindRouteTable, what: "route table", repo: c.r.RouteTables,
 		newMsg:  func() *vpcpb.RouteTable { return &vpcpb.RouteTable{} },
 		newSpec: func() *vpcpb.RouteTableSpec { return &vpcpb.RouteTableSpec{} },
-		build:   s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.cascade, decorate: s.decorate,
+		quota:   ownQuota[*vpcpb.RouteTable](quota.VPCRouteTableCount), build: s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.cascade, decorate: s.decorate,
 	}
 	return s
 }
@@ -118,7 +119,7 @@ func newRouteService(c *core) *RouteService {
 	s.kind = &kind[*vpcpb.Route, *vpcpb.RouteSpec]{
 		c: c, prefix: KindRoute, what: "route", repo: c.r.Routes,
 		newMsg: func() *vpcpb.Route { return &vpcpb.Route{} }, newSpec: func() *vpcpb.RouteSpec { return &vpcpb.RouteSpec{} },
-		build: s.build, apply: s.apply,
+		quota: routeQuota(c.r.RouteTables), build: s.build, apply: s.apply,
 	}
 	return s
 }

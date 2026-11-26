@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 46 | 0 | 1 (`nebius_hash`) | 3 |
-| Data sources | 62 | 58 | 0 | 1 (`nebius_parent_id`) | 3 |
+| Resources | 50 | 47 | 0 | 1 (`nebius_hash`) | 2 |
+| Data sources | 62 | 59 | 0 | 1 (`nebius_parent_id`) | 2 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **108** | **0** | **2** | **6** |
+| **Total** | **116** | **110** | **0** | **2** | **4** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -102,7 +102,7 @@ supply real credentials.
 | `nebius_msp_postgresql_v1alpha1_cluster` | ❌ Missing | |
 | `nebius_mysterybox_v1_secret` | ✅ | No encryption with a customer KMS key ([mysterybox.md](services/mysterybox.md)) |
 | `nebius_mysterybox_v1_secret_version` | ✅ | |
-| `nebius_quotas_v1_quota_allowance` | ❌ Missing | |
+| `nebius_quotas_v1_quota_allowance` | ✅ | Limits are enforced on creates across compute, VPC, DNS, storage, mk8s, registry, MysteryBox and KMS, with live usage; destroy resets to the default ([quotas.md](services/quotas.md)) |
 | `nebius_registry_v1_registry` | ✅ | `docker push`/`pull` work with the Harbor backend ([registry.md](services/registry.md)) |
 | `nebius_storage_v1_bucket` | ✅ | CORS, policies, lifecycle rules, size limits and storage classes take effect with the RustFS backend ([storage.md](services/storage.md)) |
 | `nebius_storage_v1_inventory` | ✅ | Reports (CSV/Parquet, manifest) really land in the destination bucket on the mock clock ([storage.md](services/storage.md#inventories)) |
@@ -164,7 +164,7 @@ supply real credentials.
 | `nebius_mysterybox_v1_secret_payload_entry` | ✅ | |
 | `nebius_mysterybox_v1_secret_version` | ✅ | |
 | `nebius_parent_id` | ➖ Provider-local | Resolved by the provider, with no API call |
-| `nebius_quotas_v1_quota_allowance` | ❌ Missing | |
+| `nebius_quotas_v1_quota_allowance` | ✅ | Limits are enforced on creates across compute, VPC, DNS, storage, mk8s, registry, MysteryBox and KMS, with live usage; destroy resets to the default ([quotas.md](services/quotas.md)) |
 | `nebius_registry_v1_registry` | ✅ | |
 | `nebius_storage_v1_bucket` | ✅ | |
 | `nebius_storage_v1_inventory` | ✅ | |

@@ -52,7 +52,7 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	cfg := deps.Config.MysteryBox
 	svc, err := domain.NewService(domain.Deps{
 		Secrets: secrets, Versions: versions, Payloads: dal.NewPayloadRepo(deps.Store), Sealer: sealer,
-		Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 		Limits: domain.Limits{
 			MaxEntriesPerVersion: cfg.MaxEntries, MaxValueBytes: cfg.MaxValueBytes,
 			MaxVersionsPerSecret: cfg.MaxVersions, PurgeDelay: cfg.PurgeDelay,
@@ -74,6 +74,9 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 		return v.GetMetadata().GetParentId(), err
 	})
 	api.RegisterAuthzRules(deps.Rules)
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey("mysterybox"), dal.NewQuotaUsage(deps.Store)); err != nil {
+		return fmt.Errorf("mysterybox: %w", err)
+	}
 	if err := peer.Provide[peer.SecretPayloads](deps.Peers, peer.SecretPayloadsKey, payloadPeer{svc: svc}); err != nil {
 		return fmt.Errorf("mysterybox: %w", err)
 	}

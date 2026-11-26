@@ -9,6 +9,7 @@ import (
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/compute/api"
 	"github.com/kfirgollan/NebiusMocker/services/compute/dal"
 	"github.com/kfirgollan/NebiusMocker/services/compute/domain"
@@ -20,7 +21,7 @@ func registerDisks(reg grpc.ServiceRegistrar, deps mocker.Deps, images domain.Im
 	disks, snapshots := dal.NewDiskRepo(deps.Store), dal.NewSnapshotRepo(deps.Store)
 	dd := domain.DiskDeps{
 		Disks: disks, Snapshots: snapshots, Images: images, OpIndex: dal.NewDiskOpIndex(deps.Store),
-		Projects: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Projects: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 	}
 	diskSvc, err := domain.NewDiskService(dd)
 	if err != nil {

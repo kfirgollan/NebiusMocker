@@ -26,14 +26,16 @@ const (
 
 // env is a VPC service over in-memory fakes with the project's defaults seeded.
 type env struct {
-	svc *Service
-	clk *clock.Manual
-	def DefaultNetwork
+	svc  *Service
+	clk  *clock.Manual
+	def  DefaultNetwork
+	gate *fakeGate
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	clk := clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	gate := &fakeGate{}
 	svc, err := New(Deps{
 		Repos: Repos{
 			Pools:          newFakeRepo[*vpcpb.Pool](),
@@ -48,6 +50,7 @@ func newEnv(t *testing.T) *env {
 			NetworkUsers:   newFakeNetworkUsers(),
 		},
 		Ops:       &inlineOps{},
+		Quota:     gate,
 		IDs:       &seqIDs{},
 		Clock:     clk,
 		Hierarchy: fakeHierarchy{known: map[string]bool{"project-e00other": true}},
@@ -63,7 +66,8 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatalf("GetDefault: %v", err)
 	}
-	return &env{svc: svc, clk: clk, def: def}
+	e := &env{svc: svc, clk: clk, def: def, gate: gate}
+	return e
 }
 
 // --- generic helpers over the exported sub-services ---

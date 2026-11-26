@@ -69,6 +69,7 @@ type gpuFixture struct {
 	ops      *deferOps
 	idx      *fakeOpIndex
 	clk      *clock.Manual
+	gate     *fakeQuotaGate
 	svc      *GpuClusterService
 	members  *GpuClusterMembers
 }
@@ -80,14 +81,14 @@ func newGpuFixture(t *testing.T) *gpuFixture {
 		t.Fatal(err)
 	}
 	f := &gpuFixture{
-		clusters: &fakeGpuClusters{}, ops: &deferOps{}, idx: &fakeOpIndex{},
+		clusters: &fakeGpuClusters{}, ops: &deferOps{}, idx: &fakeOpIndex{}, gate: &fakeQuotaGate{},
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	f.svc, err = NewGpuClusterService(GpuClusterDeps{
 		Clusters: f.clusters, Fabrics: fabrics, OpIndex: f.idx,
 		Projects: fakeProjects{testProject: true, otherProject: true},
 		Regions:  fakeRegions{testProject: "eu-north1", otherProject: "eu-west1"},
-		Ops:      f.ops, IDs: &fakeIDs{}, Clock: f.clk,
+		Ops:      f.ops, IDs: &fakeIDs{}, Clock: f.clk, Quota: f.gate,
 	})
 	if err != nil {
 		t.Fatal(err)

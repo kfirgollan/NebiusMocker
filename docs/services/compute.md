@@ -107,11 +107,11 @@ object-storage/objects/upload-download); they never write into the object store,
   the docs; the real catalog should come from parity recording.
 - The routing codes of regions other than `eu-north1` (`e00`) are placeholders.
 - Payloads are never booted or converted; only their headers are read.
-- No quota accounting for image storage.
-- Disks and snapshots: no quotas (`compute.disk.count`, `compute.disk.size.<type>`), and no `ERROR`/`BROKEN` states,
+- No quota accounting for image storage (the public API cannot create images).
+- Disks and snapshots: no `ERROR`/`BROKEN` states,
   because nothing can fail without a data plane.
 - Instances: nothing boots or runs (no VM, no container, cloud-init is never executed); no `ERROR` state is ever
-  reached; no quota accounting (`compute.instance.count`, `compute.vcpu`, `compute.memory`, `compute.gpu.*`) and no
+  reached; no
   capacity simulation (`NotEnoughResources`, `RESOURCE_EXHAUSTED`); no preemption, maintenance events
   (`MaintenanceService`, `status.maintenance_event_id`) or host recovery (so `recovery_policy = ALWAYS` has nothing to
   retry); `NodeService`, capacity reservations, spot pricing policies and local disk passthrough are not implemented (their spec fields are
@@ -120,7 +120,6 @@ object-storage/objects/upload-download); they never write into the object store,
 - Filesystems:
   - no VM mounts (virtiofs with the `mount_tag`): there are no VMs; mounts go through filesystem buckets and rclone;
   - no IOPS/throughput limits, no inode or max-file-size limits, no encryption settings (always on upstream);
-  - no quotas (`compute.filesystem.size.<type>`);
   - `READ_ONLY` attachments (upstream supports only `READ_WRITE`);
   - filesystem buckets: only the root `directory` and default `uid`/`gid`/`file_mode`/`directory_mode` (POSIX
     ownership and permissions are not emulated), and only in the filesystem's project. Versioning, lifecycle rules,
@@ -134,8 +133,7 @@ object-storage/objects/upload-download); they never write into the object store,
   is required (`UNSPECIFIED` is `INVALID_ARGUMENT`), `spec.nvl_instance_group_id` is immutable on an instance (like
   `gpu_cluster`, placement is decided at creation), instances of NVL platforms may also run outside a group, and a
   full group is `FAILED_PRECONDITION`. mk8s node groups with `template.nvlink` are still rejected by the mk8s module.
-- GPU clusters: no fabric or topology simulation (`infiniband_topology_path` is synthetic), no capacity modeling, no
-  quota (upstream: 5 GPU clusters per region). The exact upstream error for an instance whose platform does not match
+- GPU clusters: no fabric or topology simulation (`infiniband_topology_path` is synthetic), no capacity modeling. The exact upstream error for an instance whose platform does not match
   the cluster's fabric is undocumented; the mock answers `INVALID_ARGUMENT` on `spec.gpu_cluster.id`.
 
 ## Overview
@@ -535,9 +533,21 @@ NVLink domain; nothing is allocated.
 ### Permissions and quotas
 - Permissions: `compute.instances.*` (+ `start`, `stop`), `compute.disks.*`, `compute.disksnapshots.*`, `compute.filesystems.*` (implemented; plus `compute.filesystems.useViaObjectStorage` for filesystem buckets),
   `compute.images.*`, `compute.gpuClusters.*`, `compute.nvlInstanceGroups.*`, `compute.platforms.get/list`.
-- Quotas: `compute.instance.count`, `compute.vcpu`, `compute.memory`, `compute.gpu.<gpu_count_quota_type>`,
-  `compute.disk.count`, `compute.disk.size.<type>`, `compute.filesystem.size.<type>`. vCPU/memory/GPU are charged while
-  the instance is not `STOPPED`, which mirrors on-demand accounting. That is configurable.
+- Quotas (enforced, see [quotas.md](quotas.md#catalog)), charged to the project from creation until deletion, running
+  or stopped (the docs: "VMs count toward quota from creation to deletion"):
+  - instances: `compute.instance.count` (or `compute.instance.preemptible.count`), plus
+    `compute.instance.non-gpu.vcpu` = preset vCPUs on non-GPU platforms, or `compute.instance.gpu.<family>` = preset GPUs
+    on GPU platforms for regular VMs (`gpu-h100-sxm` → `h100`). Preset changes claim the delta. mk8s nodes and NVL group
+    members are ordinary instances and count the same way;
+  - disks, including managed boot disks: `compute.disk.count` and `compute.disk.size.<type>` (bytes); resizes claim the
+    growth;
+  - snapshots: `compute.disk.snapshot.count` and `compute.disk.snapshot.size` (the source disk's size);
+  - filesystems: `compute.filesystem.count` and `compute.filesystem.size.<type>`; resizes claim the growth;
+  - GPU clusters: `compute.gpucluster.count`.
+
+  The check runs in each create's or update's synchronous step, so an exceeded quota is the RPC's `RESOURCE_EXHAUSTED`.
+  There is no memory quota (Nebius documents none). GPUs are never skipped as "with reservations", since capacity
+  reservations are not implemented.
 
 ## Terraform
 
@@ -572,7 +582,6 @@ must work verbatim, so the default image catalog has to include whatever familie
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](#gpu-clusters-implemented)); replaces the built-in one. **Implemented** |
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Regions with a public image catalog (`ListPublic --region`); the first is the `GetLatestByFamily` default. **Implemented** |
 | `NEBIUS_MOCKER_OBJSTORE` (+ `_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION`) | `memory` | Where image payloads live: `memory` or `rustfs` (shared with Object Storage; see [storage.md](storage.md)) |
-| `NEBIUS_MOCKER_COMPUTE_CHARGE_STOPPED` | `0` | (later, with quotas) Count vCPU/GPU quota for stopped instances |
 | `NEBIUS_MOCKER_COMPUTE_BACKEND` | `mock` | (later) `container` to run instances as containers with cloud-init |
 
 ## Open questions

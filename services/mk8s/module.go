@@ -50,13 +50,17 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	groups := dal.NewNodeGroupRepo(deps.Store)
 	svc, err := domain.New(domain.Deps{
 		Clusters: clusters, NodeGroups: groups, Bindings: dal.NewNetworkBindingRepo(deps.Store), Backend: backend, Peers: peers{deps.Peers}, Hierarchy: deps.Authz,
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Quota: peer.QuotaGateFor(deps.Peers),
+		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		Config: domain.Config{
 			ProjectID: deps.Config.ProjectID, Versions: deps.Config.MK8s.Versions, Detached: detached(backend),
 			RolloutStep: deps.Config.MK8s.RolloutStep,
 		},
 	})
 	if err != nil {
+		return fmt.Errorf("mk8s: %w", err)
+	}
+	if err := peer.Provide(deps.Peers, peer.QuotaUsageKey("mk8s"), dal.NewQuotaUsage(deps.Store)); err != nil {
 		return fmt.Errorf("mk8s: %w", err)
 	}
 	m.mu.Lock()

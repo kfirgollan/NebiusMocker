@@ -12,6 +12,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // NICService gives Compute instance network interfaces (NICs) their VPC
@@ -140,7 +141,7 @@ func (n *NICService) BindInterface(ctx context.Context, b NICBinding) (NICAddres
 	if err := n.plan(ctx, p); err != nil {
 		return NICAddresses{}, err
 	}
-	if err := n.apply(ctx, p); err != nil {
+	if err := n.admitApply(ctx, p); err != nil {
 		return NICAddresses{}, err
 	}
 	out, err := n.addresses(ctx, p)
@@ -370,6 +371,25 @@ func assignedTo(a *vpcpb.Allocation) string {
 		return ni.GetInstanceId() + "/" + ni.GetName()
 	}
 	return "another resource"
+}
+
+// admitApply writes the plan, charging the quotas of the ephemeral allocations
+// it creates (they are real allocations, public ones real public addresses).
+// The whole write is the admitted apply, so the charge is atomic with it.
+func (n *NICService) admitApply(ctx context.Context, p *nicPlan) error {
+	amounts := map[string]int64{}
+	for _, s := range p.slots {
+		if s.created != nil {
+			for name, v := range allocationAmounts(s.created) {
+				amounts[name] += v
+			}
+		}
+	}
+	if len(amounts) == 0 {
+		return n.apply(ctx, p)
+	}
+	claim := peer.QuotaClaim{ContainerID: p.b.ProjectID, Amounts: amounts}
+	return n.c.gate.Admit(ctx, claim, func(ctx context.Context) error { return n.apply(ctx, p) })
 }
 
 // apply writes the plan: release what the NIC no longer uses, then create and

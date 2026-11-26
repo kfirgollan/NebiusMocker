@@ -13,6 +13,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -58,6 +59,8 @@ type ngPlan struct {
 	changed bool
 	// rollout recreates every node (template or version change).
 	rollout nodeRollout
+	// claim is what the nodes this plan adds would consume (nil: none).
+	claim *peer.QuotaClaim
 }
 
 // CreateNodeGroup creates a node group in a RUNNING cluster and its nodes.
@@ -78,6 +81,9 @@ func (s *Service) CreateNodeGroup(ctx context.Context, cmd CreateNodeGroupCmd) (
 			}
 			p.ng.Metadata, err = s.newMetadata(id, cmd.Metadata)
 			if err != nil {
+				return err
+			}
+			if err := s.checkNodeQuota(ctx, p); err != nil {
 				return err
 			}
 			return s.d.NodeGroups.Create(ctx, p.ng)
@@ -114,12 +120,14 @@ func (s *Service) planCreate(ctx context.Context, md *commonpb.ResourceMetadata,
 		return nil, err
 	}
 	nv := createNodeVersion(spec.GetVersion(), s.versions.clusterMinor(c))
-	if err := s.checkWithCluster(ctx, c, spec, nv, chk); err != nil {
+	res, err := s.checkWithCluster(ctx, c, spec, nv, chk)
+	if err != nil {
 		return nil, err
 	}
-	return &ngPlan{changed: true, ng: &mk8spb.NodeGroup{Spec: spec, Status: &mk8spb.NodeGroupStatus{
+	target := targetOnCreate(spec)
+	return &ngPlan{changed: true, claim: nodeClaim(c, spec.GetTemplate(), res, target), ng: &mk8spb.NodeGroup{Spec: spec, Status: &mk8spb.NodeGroupStatus{
 		State: mk8spb.NodeGroupStatus_PROVISIONING, Reconciling: true,
-		TargetNodeCount: targetOnCreate(spec), Version: nodeStatusVersion(c, nv.minor, nv.image), Strategy: strategy,
+		TargetNodeCount: target, Version: nodeStatusVersion(c, nv.minor, nv.image), Strategy: strategy,
 	}}}, nil
 }
 
@@ -169,28 +177,28 @@ func createNodeVersion(spec, clusterMinor string) nodeVersion {
 // checkWithCluster normalizes the template in spec and runs the checks that
 // need the cluster: version skew, subnets, node image and the compute
 // template.
-func (s *Service) checkWithCluster(ctx context.Context, c *mk8spb.Cluster, spec *mk8spb.NodeGroupSpec, nv nodeVersion, chk *checker) error {
+func (s *Service) checkWithCluster(ctx context.Context, c *mk8spb.Cluster, spec *mk8spb.NodeGroupSpec, nv nodeVersion, chk *checker) (peer.NodeResources, error) {
 	if err := chk.check(s.versions.checkNodeVersion(nv, s.versions.clusterMinor(c))); err != nil {
-		return err
+		return peer.NodeResources{}, err
 	}
 	if spec.GetTemplate() == nil {
-		return nil
+		return peer.NodeResources{}, nil
 	}
 	t := spec.GetTemplate()
 	normalizeTemplate(t, c.GetSpec().GetControlPlane().GetSubnetId())
 	if err := chk.check(s.checkSubnets(ctx, c, t)); err != nil {
-		return err
+		return peer.NodeResources{}, err
 	}
 	family, err := checkImage(t)
 	if err != nil || chk.anyUnknown("spec.template") {
-		return chk.check(err)
+		return peer.NodeResources{}, chk.check(err)
 	}
 	cn, err := s.computeNodes("spec.template.resources")
 	if err != nil {
-		return chk.check(err)
+		return peer.NodeResources{}, chk.check(err)
 	}
-	_, err = cn.CheckTemplate(ctx, c.GetMetadata().GetParentId(), toPeerTemplate(t, family))
-	return chk.check(prefixFields(err, "spec.template."))
+	res, err := cn.CheckTemplate(ctx, c.GetMetadata().GetParentId(), toPeerTemplate(t, family))
+	return res, chk.check(prefixFields(err, "spec.template."))
 }
 
 // checkSubnets requires every node subnet to be in the cluster's network.
@@ -237,6 +245,9 @@ func (s *Service) UpdateNodeGroup(ctx context.Context, cmd UpdateNodeGroupCmd) (
 			if p, err = s.planUpdate(ctx, cmd.Metadata, cmd.Spec, cmd.ResetMask, &checker{}); err != nil || !p.changed {
 				return err
 			}
+			if err := s.checkNodeQuota(ctx, p); err != nil {
+				return err
+			}
 			return s.d.NodeGroups.Update(ctx, p.ng)
 		},
 		Work: func(ctx context.Context) error {
@@ -264,7 +275,8 @@ func (s *Service) planUpdate(ctx context.Context, md *commonpb.ResourceMetadata,
 		return nil, err
 	}
 	nv := updateNodeVersion(stored, updated.GetSpec(), s.versions.clusterMinor(c))
-	if err := s.checkWithCluster(ctx, c, updated.GetSpec(), nv, chk); err != nil {
+	res, err := s.checkWithCluster(ctx, c, updated.GetSpec(), nv, chk)
+	if err != nil {
 		return nil, err
 	}
 	st := updated.GetStatus()
@@ -275,6 +287,7 @@ func (s *Service) planUpdate(ctx context.Context, md *commonpb.ResourceMetadata,
 	}
 	st.Strategy = strategy
 	st.TargetNodeCount = targetOnUpdate(updated.GetSpec(), stored.GetStatus().GetNodeCount())
+	p.claim = nodeClaim(c, updated.GetSpec().GetTemplate(), res, st.GetTargetNodeCount()-stored.GetStatus().GetTargetNodeCount())
 	st.Version = nodeStatusVersion(c, nv.minor, nv.image)
 	if proto.Equal(updated, stored) {
 		return p, nil // nothing to do: keep resource_version and updated_at

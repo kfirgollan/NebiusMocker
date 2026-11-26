@@ -11,6 +11,7 @@ import (
 	dnspb "github.com/nebius/gosdk/proto/nebius/dns/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // Resource type prefixes (NID types) owned by DNS, and the kinds it refers to.
@@ -100,4 +101,11 @@ type Operations interface {
 // IDGenerator creates NIDs (satisfied by pkg/nid generators).
 type IDGenerator interface {
 	New(typ string) (string, error)
+}
+
+// QuotaGate admits the consumption of new zones against the project's quotas
+// (satisfied by peer.QuotaGateFor). apply is the store write that makes the
+// zone countable by the usage source.
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
 }

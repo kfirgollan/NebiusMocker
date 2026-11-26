@@ -13,6 +13,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 // AsymmetricKeyService manages asymmetric keys and performs asymmetric crypto.
@@ -25,6 +26,7 @@ func NewAsymmetricKeyService(d KeyDeps[*kmspb.AsymmetricKey]) (*AsymmetricKeySer
 	lc := &lifecycle[*kmspb.AsymmetricKey]{
 		kind: KindAsymmetricKey, label: "asymmetric key",
 		repo: d.Keys, ops: d.Ops, ids: d.IDs, hierarchy: d.Hierarchy, clk: d.Clock,
+		quota: d.Quota, quotaName: quota.KMSAsymmetricKeyCount,
 		status: func(k *kmspb.AsymmetricKey) keyStatus {
 			s := k.GetStatus()
 			return keyStatus{State: s.GetState(), DeletedAt: s.GetDeletedAt(), PurgeAt: s.GetPurgeAt()}
@@ -91,7 +93,9 @@ func (s *AsymmetricKeyService) Create(ctx context.Context, cmd CreateAsymmetricK
 		if err != nil {
 			return errs.BadRequest(errs.Violation{Field: "spec.algorithm", Message: err.Error()})
 		}
-		return s.lc.repo.Create(ctx, key, m.der)
+		return s.lc.admitCreate(ctx, key, func(ctx context.Context) error {
+			return s.lc.repo.Create(ctx, key, m.der)
+		})
 	})
 }
 

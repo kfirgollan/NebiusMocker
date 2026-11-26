@@ -18,6 +18,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/nid"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/mysterybox/domain"
 )
 
@@ -281,6 +282,18 @@ func newEnv(t *testing.T) *env {
 
 func newEnvLimits(t *testing.T, l domain.Limits) *env {
 	t.Helper()
+	return newEnvGate(t, l, passGate{})
+}
+
+// passGate admits every claim and just runs apply.
+type passGate struct{}
+
+func (passGate) Admit(ctx context.Context, _ peer.QuotaClaim, apply func(ctx context.Context) error) error {
+	return apply(ctx)
+}
+
+func newEnvGate(t *testing.T, l domain.Limits, gate domain.QuotaGate) *env {
+	t.Helper()
 	ids, err := nid.NewGenerator(nid.Sequential, "e00", 0)
 	if err != nil {
 		t.Fatalf("nid.NewGenerator: %v", err)
@@ -296,7 +309,7 @@ func newEnvLimits(t *testing.T, l domain.Limits) *env {
 	}
 	e.svc, err = domain.NewService(domain.Deps{
 		Secrets: e.secrets, Versions: e.versions, Payloads: e.payloads, Sealer: fakeSealer{},
-		Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: ids, Clock: e.clk, Limits: l,
+		Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: ids, Clock: e.clk, Quota: gate, Limits: l,
 	})
 	if err != nil {
 		t.Fatalf("domain.NewService: %v", err)

@@ -10,6 +10,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 // Security groups and rules are stored and validated, never enforced: the
@@ -26,7 +27,7 @@ func newSecurityGroupService(c *core) *SecurityGroupService {
 		c: c, prefix: KindSecurityGroup, what: "security group", repo: c.r.SecurityGroups,
 		newMsg:  func() *vpcpb.SecurityGroup { return &vpcpb.SecurityGroup{} },
 		newSpec: func() *vpcpb.SecurityGroupSpec { return &vpcpb.SecurityGroupSpec{} },
-		build:   s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.cascade,
+		quota:   ownQuota[*vpcpb.SecurityGroup](quota.VPCSecurityGroupCount), build: s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.cascade,
 	}
 	return s
 }
@@ -107,7 +108,7 @@ func newSecurityRuleService(c *core) *SecurityRuleService {
 		c: c, prefix: KindSecurityRule, what: "security rule", repo: c.r.SecurityRules,
 		newMsg:  func() *vpcpb.SecurityRule { return &vpcpb.SecurityRule{} },
 		newSpec: func() *vpcpb.SecurityRuleSpec { return &vpcpb.SecurityRuleSpec{} },
-		build:   s.build, apply: s.apply,
+		quota:   ruleQuota(c.r.SecurityGroups), build: s.build, apply: s.apply,
 	}
 	return s
 }

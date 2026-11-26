@@ -50,6 +50,10 @@ CI with no Nebius account.
 > **Tunnels** (`nebius_tunnel_v1_tunnel`, `nebius tunnel`) are an inventory too: they stay `DISCONNECTED`, because the
 > Nebius tunnel agent speaks an undocumented protocol to the edge; see
 > [docs/services/tunnel.md](docs/services/tunnel.md#implementation-status).
+> **Quotas**: every tenant and project has a `QuotaAllowance` per quota with live usage, and creates across compute,
+> VPC, DNS, Object Storage, mk8s, Container Registry, MysteryBox and KMS that would exceed an allowance fail with
+> `RESOURCE_EXHAUSTED` + `QuotaFailure`, as in Nebius. Defaults are high; lower one with Terraform, the Go SDK or
+> `nebius quotas quota-allowance create`; see [docs/services/quotas.md](docs/services/quotas.md#implementation-status).
 > **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
 > event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
 > `nebius audit`; see [docs/services/audit.md](docs/services/audit.md#implementation-status).
@@ -229,6 +233,7 @@ Details, the IAM → Kubernetes group mapping, capacity limits and Linux notes a
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 | `NEBIUS_MOCKER_DNS_LISTEN` | `:4653` | DNS responder for the mock's zones, UDP and TCP (`off` disables it) |
+| `NEBIUS_MOCKER_QUOTAS_LIMITS` | catalog defaults | Default quota limits, e.g. `compute.instance.count=2,compute.disk.size.network-ssd=4Ti` |
 | `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | Kubernetes data plane of mk8s clusters (`mock` runs no Kubernetes API); `NEBIUS_MOCKER_MK8S_VERSIONS` sets the version catalog (`1.34,1.35,1.36`) |
 | `NEBIUS_MOCKER_APPLICATIONS_PRODUCTS` | six `nebius/*` slugs | Marketplace product slugs an Applications K8s release may install |
 | `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL; TCP ports use `NEBIUS_MOCKER_AI_TCP_LISTEN`, `:4601`) |

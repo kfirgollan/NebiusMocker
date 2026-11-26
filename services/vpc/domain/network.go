@@ -13,6 +13,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -36,7 +37,7 @@ func newNetworkService(c *core) *NetworkService {
 	s.kind = &kind[*vpcpb.Network, *vpcpb.NetworkSpec]{
 		c: c, prefix: KindNetwork, what: "network", repo: c.r.Networks,
 		newMsg: func() *vpcpb.Network { return &vpcpb.Network{} }, newSpec: func() *vpcpb.NetworkSpec { return &vpcpb.NetworkSpec{} },
-		build: s.build, afterCreate: s.createDefaults, apply: s.apply, checkDelete: s.checkDelete, remove: s.remove,
+		quota: ownQuota[*vpcpb.Network](quota.VPCNetworkCount), build: s.build, afterCreate: s.createDefaults, apply: s.apply, checkDelete: s.checkDelete, remove: s.remove,
 	}
 	return s
 }

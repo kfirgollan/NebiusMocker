@@ -40,6 +40,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	repos := dal.NewRepos(deps.Store)
 	svc, err := domain.New(domain.Deps{
 		Repos: repos, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Hierarchy: deps.Authz,
+		Quota: peer.QuotaGateFor(deps.Peers),
 		Config: domain.Config{
 			ProjectID:          deps.Config.ProjectID,
 			DefaultPrivateCIDR: deps.Config.VPC.DefaultPrivateCIDR,
@@ -53,6 +54,9 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		return fmt.Errorf("vpc: seed default network: %w", err)
 	}
 	registerKinds(deps, repos)
+	if err := peer.Provide[peer.QuotaUsageSource](deps.Peers, peer.QuotaUsageKey("vpc"), svc); err != nil {
+		return fmt.Errorf("vpc: %w", err)
+	}
 	api.RegisterAuthzRules(deps.Rules)
 	if err := peer.Provide[peer.NetworkInterfaces](deps.Peers, peer.NetworkInterfacesKey, nicPeer{svc: svc.NICs()}); err != nil {
 		return fmt.Errorf("vpc: %w", err)

@@ -268,6 +268,7 @@ type env struct {
 	records  *fakeRecords
 	networks *fakeNetworks
 	clk      *clock.Manual
+	gate     *fakeGate
 }
 
 func newEnv(t *testing.T) *env {
@@ -276,9 +277,9 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatalf("nid.NewGenerator: %v", err)
 	}
-	e := &env{zones: &fakeZones{}, records: &fakeRecords{}, networks: newFakeNetworks(), clk: clock.NewManual(t0)}
+	e := &env{zones: &fakeZones{}, records: &fakeRecords{}, networks: newFakeNetworks(), clk: clock.NewManual(t0), gate: &fakeGate{}}
 	e.svc, err = domain.New(domain.Deps{
-		Zones: e.zones, Records: e.records, Networks: e.networks, Hierarchy: fakeHierarchy{},
+		Zones: e.zones, Records: e.records, Networks: e.networks, Hierarchy: fakeHierarchy{}, Quota: e.gate,
 		Ops: inlineOps{}, IDs: ids, Clock: e.clk, Config: domain.Config{ProjectID: projectID},
 	})
 	if err != nil {

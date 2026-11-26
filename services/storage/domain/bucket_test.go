@@ -29,9 +29,14 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureGate(t, passGate{})
+}
+
+func newFixtureGate(t *testing.T, gate domain.QuotaGate) *fixture {
+	t.Helper()
 	f := &fixture{buckets: &fakeBuckets{}, backend: newFakeBackend(), content: newContentFake(false), clk: clock.NewManual(t0)}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
-		Buckets: f.buckets, Backend: f.backend, Content: f.content, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk,
+		Buckets: f.buckets, Backend: f.backend, Content: f.content, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk, Quota: gate,
 		Settings: domain.Settings{Region: "eu-north1", Domain: "s3.test", PurgeGrace: grace},
 	})
 	if err != nil {

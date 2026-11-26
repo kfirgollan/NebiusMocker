@@ -32,7 +32,7 @@ func registerGpuClusters(reg grpc.ServiceRegistrar, deps mocker.Deps) (*domain.G
 	svc, err := domain.NewGpuClusterService(domain.GpuClusterDeps{
 		Clusters: clusters, Fabrics: fabrics, OpIndex: dal.NewGpuClusterOpIndex(deps.Store),
 		Projects: deps.Authz, Regions: projectRegions{peers: deps.Peers},
-		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Quota: peer.QuotaGateFor(deps.Peers),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compute: %w", err)

@@ -18,6 +18,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -31,11 +32,13 @@ type FilesystemDeps struct {
 	Ops      Operations
 	IDs      IDGenerator
 	Clock    clock.Clock
+	// Quota admits filesystem creations and growth.
+	Quota QuotaGate
 }
 
 func (d FilesystemDeps) validate() error {
 	if d.Filesystems == nil || d.OpIndex == nil || d.Data == nil || d.Projects == nil ||
-		d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return errors.New("compute: filesystem service dependencies must not be nil")
 	}
 	return nil
@@ -116,7 +119,10 @@ func (s *FilesystemService) Create(ctx context.Context, cmd CreateFilesystemCmd)
 		Description: "Create filesystem",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.d.Filesystems.Create(ctx, fs) },
+		Prepare: func(ctx context.Context) error {
+			return admit(ctx, s.d.Quota, fs.GetMetadata().GetParentId(), filesystemAmounts(fs.GetSpec().GetType(), filesystemSize(fs)),
+				func(ctx context.Context) error { return s.d.Filesystems.Create(ctx, fs) })
+		},
 		Work: func(ctx context.Context) error {
 			if err := s.d.Data.Provision(ctx, id); err != nil {
 				err = fmt.Errorf("provision filesystem %s: %w", id, err)
@@ -301,19 +307,32 @@ func (s *FilesystemService) newFilesystem(ctx context.Context, cmd CreateFilesys
 	}, nil
 }
 
+// applyUpdate stores the update. A resize claims the growth against the quota
+// first.
 func (s *FilesystemService) applyUpdate(ctx context.Context, cmd UpdateFilesystemCmd) error {
-	_, err := s.d.Filesystems.Mutate(ctx, cmd.Metadata.GetId(), func(stored *computepb.Filesystem) error {
-		updated, err := s.patchFilesystem(stored, cmd)
-		if err != nil {
-			return err
-		}
-		if updated != stored {
-			proto.Reset(stored)
-			proto.Merge(stored, updated)
-		}
-		return nil
+	cur, err := s.d.Filesystems.Get(ctx, cmd.Metadata.GetId())
+	if err != nil {
+		return err
+	}
+	next, err := s.patchFilesystem(cur, cmd)
+	if err != nil {
+		return err
+	}
+	amounts := map[string]int64{quota.ComputeFilesystemSize(cur.GetSpec().GetType().String()): filesystemSize(next) - filesystemSize(cur)}
+	return admit(ctx, s.d.Quota, cur.GetMetadata().GetParentId(), amounts, func(ctx context.Context) error {
+		_, err := s.d.Filesystems.Mutate(ctx, cmd.Metadata.GetId(), func(stored *computepb.Filesystem) error {
+			updated, err := s.patchFilesystem(stored, cmd)
+			if err != nil {
+				return err
+			}
+			if updated != stored {
+				proto.Reset(stored)
+				proto.Merge(stored, updated)
+			}
+			return nil
+		})
+		return err
 	})
-	return err
 }
 
 // patchFilesystem returns stored with the update applied, or stored itself when nothing changed.

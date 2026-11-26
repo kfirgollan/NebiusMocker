@@ -11,6 +11,7 @@ import (
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // Resource type prefixes (NID types) owned by VPC.
@@ -86,4 +87,11 @@ type IDGenerator interface {
 type Hierarchy interface {
 	// Parent returns the parent of id ("" for roots), or errs.NotFound.
 	Parent(ctx context.Context, id string) (string, error)
+}
+
+// QuotaGate admits the consumption of new resources against the project's
+// quotas (satisfied by peer.QuotaGateFor). apply is the store write that makes
+// the resource countable by the usage source.
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
 }

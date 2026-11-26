@@ -94,6 +94,9 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	if err != nil {
 		return err
 	}
+	if err := provideQuotaUsage(deps, platforms); err != nil {
+		return err
+	}
 	nvlGroups, err := registerNVLInstanceGroups(reg, deps, platforms)
 	if err != nil {
 		return err

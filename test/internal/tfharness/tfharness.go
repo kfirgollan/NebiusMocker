@@ -153,6 +153,18 @@ func (r *Run) Apply(t *testing.T) {
 	}
 }
 
+// ApplyError runs terraform apply (no plan file) for a step that is expected
+// to fail, and returns its error with Terraform's diagnostics, or nil.
+func (r *Run) ApplyError(t *testing.T) error {
+	t.Helper()
+	start := r.out.Len()
+	err := r.tf.Apply(t.Context())
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, r.out.String()[start:])
+	}
+	return nil
+}
+
 // Destroy runs terraform destroy.
 func (r *Run) Destroy(t *testing.T) {
 	t.Helper()

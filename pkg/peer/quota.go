@@ -89,6 +89,16 @@ func AdmitQuota(ctx context.Context, d *Directory, c QuotaClaim, apply func(ctx 
 	return apply(ctx)
 }
 
+// QuotaGateFor returns a QuotaGate that looks the quotas module up in d at
+// call time (see AdmitQuota), for wiring into a domain's quota port.
+func QuotaGateFor(d *Directory) QuotaGate { return lazyGate{d: d} }
+
+type lazyGate struct{ d *Directory }
+
+func (g lazyGate) Admit(ctx context.Context, c QuotaClaim, apply func(ctx context.Context) error) error {
+	return AdmitQuota(ctx, g.d, c, apply)
+}
+
 // QuotaFunc adapts a function to QuotaUsageSource.
 type QuotaFunc func(ctx context.Context) ([]QuotaUsage, error)
 

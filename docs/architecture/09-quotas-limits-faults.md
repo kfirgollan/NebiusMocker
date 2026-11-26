@@ -6,43 +6,29 @@ Nebius exposes quotas as resources: `nebius.quotas.v1.QuotaAllowance` (`spec.lim
 `status.usage`, `status.usage_state`, …) under a tenant or project, served by `QuotaAllowanceService` at
 `quota-dispatcher.billing-cpl`. The Terraform provider manages them through `nebius_quotas_v1_quota_allowance`.
 
-### Ledger
+### Usage and the gate
 
-`pkg/quota` keeps **usage counters** keyed by `(scope_id, quota_name, region)` and **limits** coming from:
+The quota names, units, owning areas and default limits are the catalog in `pkg/quota` (names as Nebius uses them, for
+example `compute.disk.size.network-ssd`; defaults overridable with `NEBIUS_MOCKER_QUOTAS_LIMITS`). The contract between
+areas is `pkg/peer/quota.go`:
 
-1. `QuotaAllowance` resources, if present for that scope and name;
-2. otherwise the catalog default (`quotas/catalog.yaml`), for example:
+- **Usage is counted, not stored.** Each area that charges quotas provides a `peer.QuotaUsageSource` under
+  `peer.QuotaUsageKey(area)`, which counts its own store (`[]QuotaUsage{ContainerID, Region, Name, Amount}`). There is
+  no ledger to drift: usage is right after a restart and for resources that predate an allowance. A project's usage also
+  counts toward its tenant.
+- **Creates pass through the gate.** An area wraps the store write of a create or resize in
+  `peer.QuotaGate.Admit(ctx, QuotaClaim{ContainerID, Region, Amounts}, apply)`, usually inside its operation's `Prepare`.
+  Under one process-wide lock the quotas module computes usage, checks each positive delta against the project's and
+  the tenant's allowance (the value set on the `QuotaAllowance`, else the catalog default) and only then runs `apply`.
+  Two concurrent creates therefore cannot both fit under one limit. A resource counts until its record is removed, so
+  deletes release their share without bookkeeping.
+- Exceeding an allowance → `RESOURCE_EXHAUSTED` with `QuotaFailure{violations[{quota, limit, requested, region,
+  message}]}` (`errs.QuotaExceeded`, mapped in `pkg/serviceerror`).
+- `QuotaAllowance.status.usage` and `usage_percentage` are computed from the same sources on every read, so Terraform
+  data sources and the CLI see real numbers.
+- With the quotas module disabled, `peer.AdmitQuota` runs `apply` directly and nothing is enforced.
 
-   ```yaml
-   - name: compute.instance.count        # count of instances
-     unit: count
-     default: { tenant: 100 }
-   - name: compute.disk.size             # sum of disk sizes
-     unit: bytes
-     default: { tenant: 100Ti }
-   - name: compute.gpu.h100              # GPUs by platform
-     unit: count
-     default: { tenant: 16 }
-   - name: vpc.network.count
-     unit: count
-     default: { project: 10 }
-   - name: mk8s.cluster.count
-     unit: count
-     default: { tenant: 10 }
-   ```
-
-The catalog uses **our own quota names**, chosen to mirror what `QuotaAllowance.status.service`/`description` show in the
-real cloud. Parity tests reconcile the names over time.
-
-### Accounting
-
-- Modules bind quotas to kinds declaratively: `Binding{Name, Per: Tenant|Project, Amount: func(msg) int64}`.
-  For example, an instance on `gpu-h100-sxm` with preset `8gpu-…` costs 8 of `compute.gpu.h100`.
-- On Create/Update the framework computes the delta and **reserves** it in the same transaction as the write.
-  Exceeding the limit → `RESOURCE_EXHAUSTED` with `QuotaFailure{violations[{quota, limit, requested, region}]}`.
-- On Delete, the reservation is released when the resource reaches `Gone`.
-- `QuotaAllowance.status.usage` and `usage_percentage` are computed live from the ledger. Terraform data sources and the
-  CLI therefore see real numbers.
+Per-area details (which kinds charge which quotas) are in [services/quotas.md](../services/quotas.md#catalog).
 
 ## Static limits and validation
 

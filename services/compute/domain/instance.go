@@ -44,6 +44,9 @@ type InstanceDeps struct {
 	// Nodes records the instances managed by mk8s node groups (nodes.go).
 	Nodes NodeRepository
 	Perms CallerPermissions
+	// Quota admits instance creations, resource changes and the managed disks
+	// they create.
+	Quota QuotaGate
 	Ops   Operations
 	IDs   IDGenerator
 	Clock clock.Clock
@@ -54,7 +57,7 @@ type InstanceDeps struct {
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
-		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
 	}
 	if d.PublicIPReleaseAfter <= 0 {
@@ -485,13 +488,15 @@ func (s *InstanceService) prepareCreate(ctx context.Context, inst *computepb.Ins
 	if err != nil {
 		return undo(err, fs)
 	}
-	err = s.d.Instances.Txn(ctx, func(tx InstanceTx) error {
-		atts, err := s.applyDisks(tx, inst, plan)
-		if err != nil {
-			return err
-		}
-		inst.Status.DiskAttachments = atts
-		return tx.CreateInstance(inst)
+	err = s.admitCreate(ctx, inst, plan, func(ctx context.Context) error {
+		return s.d.Instances.Txn(ctx, func(tx InstanceTx) error {
+			atts, err := s.applyDisks(tx, inst, plan)
+			if err != nil {
+				return err
+			}
+			inst.Status.DiskAttachments = atts
+			return tx.CreateInstance(inst)
+		})
 	})
 	if err != nil {
 		return undo(err, fs)

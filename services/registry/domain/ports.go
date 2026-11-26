@@ -11,6 +11,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 )
 
 // Resource type prefixes (NID types) owned by the registry area.
@@ -112,4 +113,10 @@ type IDGenerator interface {
 // status.registry_fqdn.
 type Endpoint interface {
 	FQDN() string
+}
+
+// QuotaGate admits a quota claim and runs apply, the store write that makes the
+// consumption visible to the usage source (satisfied by peer.QuotaGate).
+type QuotaGate interface {
+	Admit(ctx context.Context, c peer.QuotaClaim, apply func(ctx context.Context) error) error
 }

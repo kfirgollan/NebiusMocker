@@ -23,7 +23,8 @@
 | A working Kubernetes API: `k3s` backend (a k3s server per cluster, a k3s agent per node, bounded by the Docker host), Nebius IAM tokens through a TokenReview webhook mapped to `nebius:viewer`/`editor`/`admin`, GPU capacity | ✅ e2e: `test/mk8s` (`make e2e-mk8s`), see [k3s backend](#k3s-backend-real-kubernetes) |
 | Rolling node replacement in batches that honour `strategy` (`max_surge`, `max_unavailable`), progress in `status` | ✅ |
 | `template.max_pods` (8–256, default 110): stored and echoed, a change rolls the nodes out; the k3s backend runs each kubelet with it | ✅ e2e: `test/terraform/mk8s`, `make e2e-mk8s` |
-| Quotas, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, container runtime | Not yet (see [Not yet](#not-yet)) |
+| Quotas: `mk8s.cluster.count` on cluster Create; node group Create and scale-up are checked against the compute quotas of the nodes they add (instances, vCPUs or GPUs, boot disks), synchronously; each node is then charged by compute ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_compute_test.go` |
+| Audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, container runtime | Not yet (see [Not yet](#not-yet)) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 
@@ -196,7 +197,7 @@ write (`test/contract/mk8s_authz_test.go`).
 
 ### Not yet
 
-- Quotas (`mk8s.cluster.count`, `mk8s.nodegroup.count`) and node-level compute quotas.
+- Quota pre-checks for surge nodes of a rolling update (each surge node is still charged by compute when created).
 - Audit logs, Karpenter and OIDC authentication; NVLink, capacity reservations, local disks, spot pricing, SOCI pull mode
   and DRA (all rejected, see above).
 - Auto-repair: the setting is stored, but nodes never fail in the mock, so nothing is repaired (like compute's

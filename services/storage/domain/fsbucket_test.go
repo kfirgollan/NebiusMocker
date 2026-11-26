@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strconv"
@@ -112,6 +113,7 @@ type fsOptions struct {
 	mode    authz.Mode
 	checker domain.AccessChecker
 	paging  bool
+	gate    domain.QuotaGate // nil admits everything
 }
 
 type fsFixture struct {
@@ -130,7 +132,7 @@ func newFSFixture(t *testing.T, o fsOptions) *fsFixture {
 		fsID1: {ID: fsID1, ParentID: projectID, Ready: true, CapacityBytes: fsCapacity, BackendBucket: fsStore1},
 	}}
 	svc, err := domain.NewBucketService(domain.BucketDeps{
-		Buckets: repo, Backend: f.backend, Content: f.content, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk,
+		Buckets: repo, Backend: f.backend, Content: f.content, Hierarchy: fakeHierarchy{}, Ops: inlineOps{}, IDs: &seqIDs{}, Clock: f.clk, Quota: cmp.Or[domain.QuotaGate](o.gate, passGate{}),
 		Settings:    domain.Settings{Region: "eu-north1", Domain: "s3.test", PurgeGrace: grace},
 		Filesystems: fss, Access: o.checker, Mode: o.mode,
 	})

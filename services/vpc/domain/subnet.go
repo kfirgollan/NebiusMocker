@@ -10,6 +10,7 @@ import (
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 // SubnetService implements nebius.vpc.v1.SubnetService.
@@ -22,7 +23,7 @@ func newSubnetService(c *core) *SubnetService {
 	s.kind = &kind[*vpcpb.Subnet, *vpcpb.SubnetSpec]{
 		c: c, prefix: KindSubnet, what: "subnet", repo: c.r.Subnets,
 		newMsg: func() *vpcpb.Subnet { return &vpcpb.Subnet{} }, newSpec: func() *vpcpb.SubnetSpec { return &vpcpb.SubnetSpec{} },
-		build: s.build, apply: s.apply, checkDelete: s.checkDelete, decorate: s.decorate,
+		quota: ownQuota[*vpcpb.Subnet](quota.VPCSubnetCount), build: s.build, apply: s.apply, checkDelete: s.checkDelete, decorate: s.decorate,
 	}
 	return s
 }

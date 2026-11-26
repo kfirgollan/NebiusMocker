@@ -32,6 +32,7 @@ func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 		Platforms: w.platforms, Network: peerNetwork{dir: deps.Peers}, Disks: w.disks,
 		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
 		Perms: callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
+		Quota: peer.QuotaGateFor(deps.Peers),
 		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		PublicIPReleaseAfter: deps.Config.ComputePublicIPReleaseAfter,
 	})

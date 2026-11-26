@@ -20,7 +20,8 @@
 | Terraform: `nebius_mysterybox_v1_secret`, `_secret_version` (resources and data sources), `_secret_payload_entry` (data source), `_secret_payload` and `_secret_payload_entry` (ephemeral) | ✅ e2e: `test/terraform/mysterybox` |
 | CLI: `nebius mysterybox secret` / `secret-version` / `payload` flows from the docs | ✅ e2e: `test/cli/mysterybox` |
 | Delivery target for IAM access keys with `secret_delivery_mode = MYSTERY_BOX` (`peer.SystemSecrets`) | ✅ contract: `test/contract/iam_accesskey_mysterybox_test.go`; e2e: `test/terraform/iam`, `test/cli/iam` (see `docs/services/iam.md`) |
-| KMS encryption with a customer key, quota `mysterybox.secret.count` | Not yet |
+| Quota `mysterybox.secret.count` enforced on Create (including system secrets for IAM access keys); secrets scheduled for deletion keep counting until purged, as in Nebius ([quotas.md](quotas.md)) | ✅ contract: `test/contract/quotas_areas_test.go` |
+| KMS encryption with a customer key | Not yet |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 

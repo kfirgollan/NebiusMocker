@@ -243,12 +243,16 @@ type fakeCompute struct {
 	nodes   map[string][]peer.NodeInstance // node group → nodes in creation order
 	specs   map[string]peer.NodeSpec       // instance ID → what created it
 	presets map[string]int                 // "platform/preset" → GPUs
+	vcpus   map[string]int                 // "platform/preset" → vCPUs
+	// createErr, when set, fails every CreateNode (compute refusing a node).
+	createErr error
 }
 
 func newFakeCompute() *fakeCompute {
 	return &fakeCompute{
 		nodes: map[string][]peer.NodeInstance{}, specs: map[string]peer.NodeSpec{},
 		presets: map[string]int{"cpu-d3/2vcpu-8gb": 0, "cpu-d3/4vcpu-16gb": 0, "gpu-h100-sxm/8gpu-128vcpu-1600gb": 8},
+		vcpus:   map[string]int{"cpu-d3/2vcpu-8gb": 2, "cpu-d3/4vcpu-16gb": 4, "gpu-h100-sxm/8gpu-128vcpu-1600gb": 128},
 	}
 }
 
@@ -260,12 +264,15 @@ func (f *fakeCompute) CheckTemplate(_ context.Context, project string, t peer.No
 	if t.ServiceAccountID != "" && project != projectID {
 		return peer.NodeResources{}, errs.BadRequest(errs.Violation{Field: "service_account_id", Message: "wrong project"})
 	}
-	return peer.NodeResources{GPUs: gpus}, nil
+	return peer.NodeResources{GPUs: gpus, VCPUs: f.vcpus[t.Platform+"/"+t.Preset]}, nil
 }
 
 func (f *fakeCompute) CreateNode(_ context.Context, n peer.NodeSpec) (peer.NodeInstance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return peer.NodeInstance{}, f.createErr
+	}
 	for _, in := range f.nodes[n.NodeGroupID] {
 		if in.Name == n.Name {
 			return in, nil
@@ -352,6 +359,36 @@ func (p fakePeers) Networks() (peer.Networks, bool) { return p.vpc, p.vpc != nil
 
 func (p fakePeers) ClusterReleases() (peer.ClusterReleases, bool) {
 	return p.releases, p.releases != nil
+}
+
+// fakeQuota is a quota gate that records every claim and refuses the ones
+// that charge the quota named refuse (none by default).
+type fakeQuota struct {
+	mu     sync.Mutex
+	refuse string
+	claims []peer.QuotaClaim
+	// applied counts the claims whose apply ran.
+	applied int
+}
+
+func (q *fakeQuota) Admit(ctx context.Context, c peer.QuotaClaim, apply func(context.Context) error) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.claims = append(q.claims, c)
+	if _, hit := c.Amounts[q.refuse]; q.refuse != "" && hit {
+		return errs.QuotaExceeded("quota exhausted", errs.QuotaViolation{Quota: q.refuse})
+	}
+	if apply == nil {
+		return nil
+	}
+	q.applied++
+	return apply(ctx)
+}
+
+func (q *fakeQuota) claimsWith(name string) []peer.QuotaClaim {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(q.claims), func(c peer.QuotaClaim) bool { _, ok := c.Amounts[name]; return !ok })
 }
 
 // fakeHierarchy knows one project besides the configured one.
@@ -450,6 +487,7 @@ type env struct {
 	vpc      *fakeVPC
 	releases *fakeReleases
 	backend  *backend
+	quota    *fakeQuota
 }
 
 func newEnv(t *testing.T, versions ...string) *env {
@@ -463,11 +501,11 @@ func newEnv(t *testing.T, versions ...string) *env {
 	}
 	e := &env{
 		clusters: newFakeRepo[*mk8spb.Cluster](), groups: newFakeRepo[*mk8spb.NodeGroup](),
-		compute: newFakeCompute(), vpc: newFakeVPC(), releases: &fakeReleases{}, backend: newBackend(),
+		compute: newFakeCompute(), vpc: newFakeVPC(), releases: &fakeReleases{}, backend: newBackend(), quota: &fakeQuota{},
 	}
 	e.svc, err = domain.New(domain.Deps{
 		Clusters: e.clusters, NodeGroups: e.groups, Bindings: &fakeBindings{}, Backend: e.backend,
-		Peers: fakePeers{compute: e.compute, vpc: e.vpc, releases: e.releases}, Hierarchy: fakeHierarchy{},
+		Peers: fakePeers{compute: e.compute, vpc: e.vpc, releases: e.releases}, Hierarchy: fakeHierarchy{}, Quota: e.quota,
 		Ops: inlineOps{}, IDs: ids, Clock: clock.NewManual(t0),
 		Config: domain.Config{ProjectID: projectID, Versions: versions},
 	})

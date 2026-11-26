@@ -16,6 +16,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 )
 
 const (
@@ -42,6 +43,7 @@ type KeyDeps[T any] struct {
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
+	Quota     QuotaGate
 }
 
 // NewSymmetricKeyService wires a SymmetricKeyService.
@@ -49,6 +51,7 @@ func NewSymmetricKeyService(d KeyDeps[*kmspb.SymmetricKey]) (*SymmetricKeyServic
 	lc := &lifecycle[*kmspb.SymmetricKey]{
 		kind: KindSymmetricKey, label: "symmetric key",
 		repo: d.Keys, ops: d.Ops, ids: d.IDs, hierarchy: d.Hierarchy, clk: d.Clock,
+		quota: d.Quota, quotaName: quota.KMSSymmetricKeyCount,
 		status: func(k *kmspb.SymmetricKey) keyStatus {
 			s := k.GetStatus()
 			return keyStatus{State: s.GetState(), DeletedAt: s.GetDeletedAt(), PurgeAt: s.GetPurgeAt()}
@@ -126,7 +129,9 @@ func (s *SymmetricKeyService) Create(ctx context.Context, cmd CreateSymmetricKey
 		if err != nil {
 			return err
 		}
-		return s.lc.repo.Create(ctx, key, blob)
+		return s.lc.admitCreate(ctx, key, func(ctx context.Context) error {
+			return s.lc.repo.Create(ctx, key, blob)
+		})
 	})
 }
 

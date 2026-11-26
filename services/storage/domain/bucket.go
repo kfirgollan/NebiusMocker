@@ -23,6 +23,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+	"github.com/kfirgollan/NebiusMocker/pkg/quota"
 	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
@@ -53,6 +55,7 @@ type BucketService struct {
 	set     Settings
 
 	filesystems Filesystems
+	quota       QuotaGate
 	access      AccessChecker
 	mode        authz.Mode
 	log         *slog.Logger
@@ -68,6 +71,7 @@ type BucketDeps struct {
 	Ops       Operations
 	IDs       IDGenerator
 	Clock     clock.Clock
+	Quota     QuotaGate
 	Settings  Settings
 	// Filesystems resolves the compute filesystems of filesystem buckets;
 	// nil rejects filesystem buckets.
@@ -82,7 +86,7 @@ type BucketDeps struct {
 
 // NewBucketService wires a BucketService.
 func NewBucketService(d BucketDeps) (*BucketService, error) {
-	if d.Buckets == nil || d.Backend == nil || d.Content == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+	if d.Buckets == nil || d.Backend == nil || d.Content == nil || d.Hierarchy == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Quota == nil {
 		return nil, errors.New("storage: bucket service dependencies must not be nil")
 	}
 	if d.Settings.Region == "" || d.Settings.Domain == "" || d.Settings.PurgeGrace <= 0 {
@@ -90,7 +94,7 @@ func NewBucketService(d BucketDeps) (*BucketService, error) {
 	}
 	return &BucketService{
 		buckets: d.Buckets, backend: d.Backend, content: d.Content, parents: d.Hierarchy, ops: d.Ops, ids: d.IDs, clk: d.Clock, set: d.Settings,
-		filesystems: d.Filesystems, access: d.Access, mode: d.Mode, log: cmp.Or(d.Log, slog.New(slog.DiscardHandler)),
+		filesystems: d.Filesystems, quota: d.Quota, access: d.Access, mode: d.Mode, log: cmp.Or(d.Log, slog.New(slog.DiscardHandler)),
 	}, nil
 }
 
@@ -210,8 +214,14 @@ func (s *BucketService) Create(ctx context.Context, cmd CreateBucketCmd) (*opera
 		Description: "Create bucket",
 		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
 		Request:     cmd.Request,
-		Prepare:     func(ctx context.Context) error { return s.createRecord(ctx, b) },
-		Work:        func(ctx context.Context) error { return s.provision(ctx, id) },
+		Prepare: func(ctx context.Context) error {
+			// Every bucket type counts, soft-deleted ones until purged.
+			return s.quota.Admit(ctx, peer.QuotaClaim{
+				ContainerID: b.GetMetadata().GetParentId(),
+				Amounts:     map[string]int64{quota.StorageBucketCount: 1},
+			}, func(ctx context.Context) error { return s.createRecord(ctx, b) })
+		},
+		Work: func(ctx context.Context) error { return s.provision(ctx, id) },
 	})
 }
 
