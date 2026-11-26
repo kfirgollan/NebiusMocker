@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
+	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
@@ -23,6 +24,7 @@ type Repos struct {
 	Routes         Repository[*vpcpb.Route]
 	SecurityGroups Repository[*vpcpb.SecurityGroup]
 	SecurityRules  Repository[*vpcpb.SecurityRule]
+	Scopes         Repository[*vpcv1alpha1pb.Scope]
 }
 
 // Config holds the seeded address space.
@@ -64,6 +66,7 @@ type core struct {
 	routes         *RouteService
 	securityGroups *SecurityGroupService
 	securityRules  *SecurityRuleService
+	scopes         *ScopeService
 }
 
 // Service is the VPC domain: one sub-service per resource kind.
@@ -74,7 +77,7 @@ func New(d Deps) (*Service, error) {
 	r := d.Repos
 	if d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Hierarchy == nil ||
 		r.Pools == nil || r.Networks == nil || r.Subnets == nil || r.Allocations == nil ||
-		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil {
+		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil || r.Scopes == nil {
 		return nil, errors.New("vpc: service dependencies must not be nil")
 	}
 	c := &core{ops: d.Ops, ids: d.IDs, clk: d.Clock, hier: d.Hierarchy, cfg: d.Config, r: r}
@@ -86,6 +89,7 @@ func New(d Deps) (*Service, error) {
 	c.routes = newRouteService(c)
 	c.securityGroups = newSecurityGroupService(c)
 	c.securityRules = newSecurityRuleService(c)
+	c.scopes = newScopeService(c)
 	return &Service{c: c}, nil
 }
 
@@ -112,6 +116,9 @@ func (s *Service) SecurityGroups() *SecurityGroupService { return s.c.securityGr
 
 // SecurityRules returns the security rule service.
 func (s *Service) SecurityRules() *SecurityRuleService { return s.c.securityRules }
+
+// Scopes returns the (v1alpha1, read-only) scope service.
+func (s *Service) Scopes() *ScopeService { return s.c.scopes }
 
 // checkProject verifies that id is an existing project.
 func (c *core) checkProject(ctx context.Context, id string) error {

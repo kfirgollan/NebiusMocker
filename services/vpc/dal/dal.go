@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
+	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/pkg/store"
@@ -43,6 +44,7 @@ func NewRepos(st store.Store) domain.Repos {
 		Routes:         NewRepo(st, domain.KindRoute, func() *vpcpb.Route { return &vpcpb.Route{} }),
 		SecurityGroups: NewRepo(st, domain.KindSecurityGroup, func() *vpcpb.SecurityGroup { return &vpcpb.SecurityGroup{} }),
 		SecurityRules:  NewRepo(st, domain.KindSecurityRule, func() *vpcpb.SecurityRule { return &vpcpb.SecurityRule{} }),
+		Scopes:         NewRepo(st, domain.KindScope, func() *vpcv1alpha1pb.Scope { return &vpcv1alpha1pb.Scope{} }),
 	}
 }
 

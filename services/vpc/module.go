@@ -1,4 +1,5 @@
-// Package vpc is the NebiusMocker module for Nebius VPC (nebius.vpc.v1).
+// Package vpc is the NebiusMocker module for Nebius VPC (nebius.vpc.v1, plus
+// nebius.vpc.v1alpha1 as a second view of the same resources).
 //
 // Implemented: pools, networks (with the seeded default network), subnets,
 // allocations, route tables and routes, security groups and rules. IPAM is
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
+	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
@@ -64,6 +66,11 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	vpcpb.RegisterRouteServiceServer(reg, api.NewRouteHandler(svc.Routes()))
 	vpcpb.RegisterSecurityGroupServiceServer(reg, api.NewSecurityGroupHandler(svc.SecurityGroups()))
 	vpcpb.RegisterSecurityRuleServiceServer(reg, api.NewSecurityRuleHandler(svc.SecurityRules()))
+	vpcv1alpha1pb.RegisterPoolServiceServer(reg, api.NewAlphaPoolHandler(svc.Pools()))
+	vpcv1alpha1pb.RegisterNetworkServiceServer(reg, api.NewAlphaNetworkHandler(svc.Networks()))
+	vpcv1alpha1pb.RegisterSubnetServiceServer(reg, api.NewAlphaSubnetHandler(svc.Subnets()))
+	vpcv1alpha1pb.RegisterAllocationServiceServer(reg, api.NewAlphaAllocationHandler(svc.Allocations()))
+	vpcv1alpha1pb.RegisterScopeServiceServer(reg, api.NewAlphaScopeHandler(svc.Scopes()))
 	return nil
 }
 
@@ -78,6 +85,7 @@ func registerKinds(deps mocker.Deps, r domain.Repos) {
 	e.RegisterKind(domain.KindRoute, parentOf(r.Routes))
 	e.RegisterKind(domain.KindSecurityGroup, parentOf(r.SecurityGroups))
 	e.RegisterKind(domain.KindSecurityRule, parentOf(r.SecurityRules))
+	e.RegisterKind(domain.KindScope, parentOf(r.Scopes))
 }
 
 func parentOf[T domain.Resource](repo domain.Repository[T]) func(context.Context, string) (string, error) {

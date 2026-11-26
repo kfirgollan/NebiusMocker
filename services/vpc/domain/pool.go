@@ -29,7 +29,7 @@ func newPoolService(c *core) *PoolService {
 	s.kind = &kind[*vpcpb.Pool, *vpcpb.PoolSpec]{
 		c: c, prefix: KindPool, what: "pool", repo: c.r.Pools,
 		newMsg: func() *vpcpb.Pool { return &vpcpb.Pool{} }, newSpec: func() *vpcpb.PoolSpec { return &vpcpb.PoolSpec{} },
-		build: s.build, apply: s.apply, checkDelete: s.checkDelete, decorate: s.decorate,
+		build: s.build, apply: s.apply, checkDelete: s.checkDelete, remove: s.remove, decorate: s.decorate,
 	}
 	return s
 }
@@ -53,7 +53,29 @@ func (s *PoolService) build(ctx context.Context, md *commonpb.ResourceMetadata, 
 	if err := s.resolve(ctx, nil, p); err != nil {
 		return nil, err
 	}
+	scope, err := s.scopeLocked(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	p.Status.ScopeId = scope
 	return p, nil
+}
+
+// scopeLocked returns the scope of p: its source pool's scope, or for a root
+// pool the project's scope of its visibility (created on first use); core.mu
+// must be held.
+func (s *PoolService) scopeLocked(ctx context.Context, p *vpcpb.Pool) (string, error) {
+	if srcID := p.GetSpec().GetSourcePoolId(); srcID != "" {
+		src, err := ref(ctx, s.c.r.Pools, "spec.source_pool_id", srcID)
+		if err != nil {
+			return "", err
+		}
+		if id := src.GetStatus().GetScopeId(); id != "" {
+			return id, nil
+		}
+		return s.scopeLocked(ctx, src)
+	}
+	return s.c.scopes.ensureLocked(ctx, p.GetMetadata().GetParentId(), p.GetSpec().GetVisibility())
 }
 
 // resolve fills defaults and status.cidrs of p; stored is its previous version.
@@ -156,6 +178,26 @@ func (s *PoolService) checkShrink(ctx context.Context, stored, updated *vpcpb.Po
 		if u, hit := firstOverlap(old, used); hit {
 			return errs.BadState(stored.GetMetadata().GetId(), fmt.Sprintf("cannot remove %s: %s is still in use", old, u))
 		}
+	}
+	return nil
+}
+
+// remove deletes a pool, and its scope once no pool is left in it: scopes are
+// system-managed and must not keep an otherwise empty project alive.
+func (s *PoolService) remove(ctx context.Context, p *vpcpb.Pool) error {
+	if err := s.repo.Delete(ctx, p.GetMetadata().GetId()); err != nil {
+		return err
+	}
+	scope := p.GetStatus().GetScopeId()
+	if scope == "" {
+		return nil
+	}
+	left, err := s.c.r.Pools.All(ctx, func(o *vpcpb.Pool) bool { return o.GetStatus().GetScopeId() == scope })
+	if err != nil || len(left) > 0 {
+		return err
+	}
+	if err := s.c.r.Scopes.Delete(ctx, scope); err != nil && !errs.IsKind(err, errs.KindNotFound) {
+		return err
 	}
 	return nil
 }

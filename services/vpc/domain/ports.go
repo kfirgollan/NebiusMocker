@@ -23,6 +23,8 @@ const (
 	KindRoute         = "vpcroute"
 	KindSecurityGroup = "vpcsecuritygroup"
 	KindSecurityRule  = "vpcsecurityrule"
+	// KindScope is served only by v1alpha1 (ScopeService).
+	KindScope = "vpcscope"
 )
 
 // KindProject is the IAM project prefix: the parent of most VPC resources.

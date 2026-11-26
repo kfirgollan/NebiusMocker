@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 27 | 0 | 1 (`nebius_hash`) | 22 |
-| Data sources | 62 | 31 | 2 | 1 (`nebius_parent_id`) | 28 |
+| Resources | 50 | 28 | 0 | 1 (`nebius_hash`) | 21 |
+| Data sources | 62 | 36 | 2 | 1 (`nebius_parent_id`) | 23 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **62** | **2** | **2** | **50** |
+| **Total** | **116** | **68** | **2** | **2** | **44** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -117,7 +117,7 @@ supply real credentials.
 | `nebius_vpc_v1_security_group` | ✅ | |
 | `nebius_vpc_v1_security_rule` | ✅ | Stored and validated. No traffic is filtered |
 | `nebius_vpc_v1_subnet` | ✅ | |
-| `nebius_vpc_v1alpha1_allocation` | ❌ Missing | The whole `vpc.v1alpha1` API is not implemented. Use `nebius_vpc_v1_allocation` |
+| `nebius_vpc_v1alpha1_allocation` | ✅ | Same allocations and IPAM as `nebius_vpc_v1_allocation`: v1alpha1 is a second view of the v1 resources ([vpc.md](services/vpc.md#v1alpha1-a-second-view-of-the-same-resources)) |
 
 ## Data sources
 
@@ -180,11 +180,11 @@ supply real credentials.
 | `nebius_vpc_v1_security_group` | ✅ | |
 | `nebius_vpc_v1_security_rule` | ✅ | |
 | `nebius_vpc_v1_subnet` | ✅ | |
-| `nebius_vpc_v1alpha1_allocation` | ❌ Missing | `vpc.v1alpha1` is not implemented |
-| `nebius_vpc_v1alpha1_network` | ❌ Missing | |
-| `nebius_vpc_v1alpha1_pool` | ❌ Missing | |
-| `nebius_vpc_v1alpha1_scope` | ❌ Missing | |
-| `nebius_vpc_v1alpha1_subnet` | ❌ Missing | |
+| `nebius_vpc_v1alpha1_allocation` | ✅ | |
+| `nebius_vpc_v1alpha1_network` | ✅ | The v1 networks; `spec.pools` lists the private pools |
+| `nebius_vpc_v1alpha1_pool` | ✅ | |
+| `nebius_vpc_v1alpha1_scope` | ✅ | Two system scopes per project: `default-private-scope`, `default-public-scope` |
+| `nebius_vpc_v1alpha1_subnet` | ✅ | |
 
 ## Ephemeral resources
 
@@ -201,7 +201,6 @@ supply real credentials.
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
 | IAM | `federation`, `federation_certificate`, `federated_credentials`, `invitation` (4 resources, 4 data sources), `tenant_user_account` (data source) | [iam.md](services/iam.md) |
-| VPC v1alpha1 | `allocation` (resource and data source); `network`, `pool`, `scope`, `subnet` (data sources) | [vpc.md](services/vpc.md) |
 | Object Storage | `inventory`, `transfer` (v1 and v1alpha1): 3 resources, 3 data sources | [storage.md](services/storage.md) |
 | DNS | `zone`, `record` (2 resources, 2 data sources) | [dns.md](services/dns.md) |
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |

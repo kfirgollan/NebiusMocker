@@ -11,6 +11,7 @@ import (
 	"github.com/nebius/gosdk/proto/fieldmask/mask"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
+	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
@@ -43,6 +44,7 @@ func newEnv(t *testing.T) *env {
 			Routes:         newFakeRepo[*vpcpb.Route](),
 			SecurityGroups: newFakeRepo[*vpcpb.SecurityGroup](),
 			SecurityRules:  newFakeRepo[*vpcpb.SecurityRule](),
+			Scopes:         newFakeRepo[*vpcv1alpha1pb.Scope](),
 		},
 		Ops:       &inlineOps{},
 		IDs:       &seqIDs{},

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
+	commonv1alpha1pb "github.com/nebius/gosdk/proto/nebius/common/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/audit"
 	"github.com/kfirgollan/NebiusMocker/pkg/auth"
@@ -197,6 +198,8 @@ func New(cfg config.Config, log *slog.Logger, modules []Module, opts ...Option) 
 	)
 	commonpb.RegisterOperationServiceServer(srv.Registrar(), opsapi.NewServer(ops))
 	opsapi.RegisterAuthzRules(rules, ops)
+	commonv1alpha1pb.RegisterOperationServiceServer(srv.Registrar(), opsapi.NewAlphaServer(ops)) //nolint:staticcheck // SA1019: v1alpha1 APIs still return v1alpha1 operations
+	opsapi.RegisterAlphaAuthzRules(rules, ops)
 	return &Server{
 		cfg: cfg, log: log, edge: srv, ops: ops, modules: enabled, states: states,
 		deps: Deps{

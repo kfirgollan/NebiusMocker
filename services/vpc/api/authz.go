@@ -34,9 +34,28 @@ func RegisterAuthzRules(r *authz.Rules) {
 			r.Add("/"+pkgPrefix+s.name+"/"+e.method, onField(authz.Perm("vpc", s.resources, authz.VerbList), e.field))
 		}
 	}
+	registerAlphaAuthzRules(r)
 	network := func(m string) string { return "/" + pkgPrefix + "NetworkService/" + m }
 	r.Add(network("GetDefault"), authz.OnParent(authz.Perm("vpc", "networks", authz.VerbGet)))
 	r.Add(network("CreateDefault"), authz.OnMetadataParent(authz.Perm("vpc", "networks", authz.VerbCreate)))
+}
+
+const alphaPrefix = "nebius.vpc.v1alpha1."
+
+// registerAlphaAuthzRules declares the v1alpha1 RPCs: the same permissions as
+// their v1 twins. Everything but allocations is read-only there.
+func registerAlphaAuthzRules(r *authz.Rules) {
+	r.CRUD(alphaPrefix+"AllocationService", "vpc", "allocations")
+	for _, s := range []struct{ name, resources string }{
+		{"PoolService", "pools"}, {"NetworkService", "networks"}, {"SubnetService", "subnets"}, {"ScopeService", "scopes"},
+	} {
+		method := func(m string) string { return "/" + alphaPrefix + s.name + "/" + m }
+		r.Add(method("Get"), authz.OnID(authz.Perm("vpc", s.resources, authz.VerbGet)))
+		r.Add(method("GetByName"), authz.OnParent(authz.Perm("vpc", s.resources, authz.VerbGet)))
+		r.Add(method("List"), authz.OnParent(authz.Perm("vpc", s.resources, authz.VerbList)))
+	}
+	r.Add("/"+alphaPrefix+"NetworkService/GetDefault", authz.OnParent(authz.Perm("vpc", "networks", authz.VerbGet)))
+	r.Add("/"+alphaPrefix+"SubnetService/ListByNetwork", onField(authz.Perm("vpc", "subnets", authz.VerbList), "network_id"))
 }
 
 type (

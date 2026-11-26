@@ -21,7 +21,11 @@
 | `nebius vpc network\|subnet list\|get-by-name` with the official CLI | ✅ e2e: `test/terraform/vpc/cli_test.go` |
 | `status.assignment` of allocations: set by compute for instance network interfaces through `peer.NetworkInterfaces` (dynamic and user allocations, `PRIMARY`/`PUBLIC`/`ALIAS`) | ✅ unit tests (`services/vpc/domain/nic_test.go`), compute contract and Terraform suites |
 | `TargetGroupService` (needs compute instances), load balancer assignments, quotas | Not yet |
-| `vpc.v1alpha1` (scopes, legacy network/subnet/pool shapes, `nebius_vpc_v1alpha1_allocation`) | Not yet |
+| `vpc.v1alpha1` (second view of the same resources, see [v1alpha1](#v1alpha1-a-second-view-of-the-same-resources)): `AllocationService` Get, GetByName, List, Create, Update, Delete; `PoolService`, `SubnetService` (+ ListByNetwork), `NetworkService` (+ GetDefault) Get, GetByName, List; `ScopeService` Get, GetByName, List; `nebius.common.v1alpha1.OperationService` Get, List | ✅ contract: `test/contract/vpc_v1alpha1_*` |
+| `nebius_vpc_v1alpha1_allocation` (resource and data source) and the `network`, `pool`, `scope`, `subnet` data sources with the official Terraform provider | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
+| `nebius vpc v1alpha1 allocation\|network\|pool\|scope\|subnet` with the official CLI | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
+| `filter` on v1alpha1 `List*` requests (upstream format "TBD"): refused with `InvalidArgument` naming `filter` | Not yet |
+| v1alpha1 `SubnetSpec.enable_egress_nat`: v1 has no such setting; always reported `false` | Not yet (read-only view) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100.
 
@@ -33,7 +37,8 @@ Covered by unit tests (`services/vpc/domain` incl. the IPAM primitives, `service
 VPC models IP address management and private networking: **pools** (CIDR sets), **networks** that draw from pools,
 **subnets** inside networks, **allocations** (private or public IP addresses), **security groups and rules**,
 **route tables and routes**, and **target groups** (load-balancer backends). `v1alpha1` adds **scopes** and older
-network/subnet/pool shapes, which the provider exposes as data sources plus `nebius_vpc_v1alpha1_allocation`.
+network/subnet/pool shapes over the same resources, which the provider exposes as data sources plus
+`nebius_vpc_v1alpha1_allocation`.
 
 | Resource kind | Message | NID prefix | Parent | States |
 |---|---|---|---|---|
@@ -46,7 +51,7 @@ network/subnet/pool shapes, which the provider exposes as data sources plus `neb
 | Route table | `RouteTable` | `vpcroutetable` | project (network) | |
 | Route | `Route` | `vpcroute` | route table | |
 | Target group | `TargetGroup` | `vpctargetgroup` | project | |
-| Scope (v1alpha1) | `Scope` | `vpcscope` | project | |
+| Scope (v1alpha1, read-only) | `Scope` | `vpcscope` | project | `READY`; `spec.type` PRIVATE/PUBLIC; two per project, system-managed |
 
 ## Emulation design
 
@@ -143,9 +148,38 @@ several rules may share a priority (DENY is evaluated first), which `status.effe
 compatible pools": those with no subnet whose address lies in the subnet's blocks (or, for a shared family, in the
 network's pools).
 
+### v1alpha1: a second view of the same resources
+Real Nebius serves `vpc.v1` and `vpc.v1alpha1` over the same backing resources, so the mock has **one domain** and
+two API views. A network, subnet, pool or allocation has one NID and one stored form (the v1 message); the
+`services/vpc/api/v1alpha1_*.go` handlers only convert. So a network created through v1 is readable through
+v1alpha1, an allocation created through v1alpha1 is readable, updatable and deletable through v1, and both draw from
+the same IPAM under the same lock: addresses never collide across versions. Mapping:
+
+| v1alpha1 | stored v1 |
+|---|---|
+| `Pool.spec.source_pool_id` / `source_scope_id` | `spec.source_pool_id`; a root pool shows `source_scope_id` = its `status.scope_id` |
+| `PoolCidr{cidr, state, allowed_mask}` | `PoolCidr{cidr, state, max_mask_length}` (same enum numbers) |
+| `Network.spec.pools`, `status.scope_id` | `spec.ipv4_private_pools.pools`; the private pools' scope. Public pools have no v1alpha1 field |
+| `Subnet.spec.pools` | `use_network_pools` → `{pool_id}` per `status.ipv4_private_pools` entry; explicit blocks → `{spec: {version: IPV4, cidrs}}` |
+| `Subnet.status.ipv4_cidrs` | the CIDRs of `status.ipv4_private_pools` |
+| `Allocation.spec` (`ipv4_private{cidr, subnet_id\|pool_id}`, `ipv4_public{cidr, pool_id}`) | 1:1. `ipv4_public = {}` (no pool) takes an address from the project's `default-public-pool`, like v1, and the spec stays empty so Terraform sees no drift. A v1 public allocation made with `subnet_id` shows `ipv4_public` without it |
+| `Allocation.status` | 1:1, except `details.subnet_id`, which v1alpha1 lacks |
+
+v1alpha1 Create/Update/Delete return `nebius.common.v1alpha1.Operation`, served by the shared
+`nebius.common.v1alpha1.OperationService` (`pkg/operations/api/v1alpha1.go`), which reads the same operations as the v1
+service. Allocation updates follow the v1 rules (only name and labels in practice; the provider replaces on any spec
+change, since every spec field is `RequiresReplace`).
+
+**Scopes** exist only in v1alpha1 and the API cannot create or change them. A scope is the address space of a pool
+tree (`pool.proto`: a root pool is "a top-level pool within scope", a child pool gets "the same scope" as its source).
+Undocumented details are chosen conservatively: each project has exactly two system scopes, `default-private-scope`
+(`PRIVATE`) and `default-public-scope` (`PUBLIC`), created the first time a root pool of that visibility is created in
+the project (so with the seeded pools), and deleted with the last pool in it, so they never keep an emptied project
+from being deleted. Every pool records its scope in `status.scope_id`, which v1 now reports too.
+
 ### Permissions and quotas
 - Permissions: `vpc.pools.*`, `vpc.networks.*`, `vpc.subnets.*`, `vpc.allocations.*`, `vpc.securityGroups.*`,
-  `vpc.securityRules.*`, `vpc.routeTables.*`, `vpc.routes.*`. `ListBy*` need `list` on the filtered resource;
+  `vpc.securityRules.*`, `vpc.routeTables.*`, `vpc.routes.*`, `vpc.scopes.*` (v1alpha1 reuses the v1 permissions). `ListBy*` need `list` on the filtered resource;
   `GetDefault` needs `vpc.networks.get` on the project.
 - Quotas: not enforced yet.
 

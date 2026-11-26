@@ -25,7 +25,8 @@ CI with no Nebius account.
 > **MysteryBox (SecretStash) secrets, versions and payloads** work with the official Terraform provider, CLI and Go
 > SDK: see [docs/services/mysterybox.md](docs/services/mysterybox.md#implementation-status).
 > **VPC networking** (pools, networks, subnets, private and public allocations, route tables and routes, security
-> groups and rules, with real IPAM) works with Terraform, the Go SDK and the `nebius vpc` CLI; see
+> groups and rules, with real IPAM; `vpc.v1alpha1` as a second view of the same resources, incl. scopes) works with
+> Terraform, the Go SDK and the `nebius vpc` CLI; see
 > [docs/services/vpc.md](docs/services/vpc.md#implementation-status).
 > **Serverless AI endpoints** keep a real inventory (validation, lifecycle, start/stop/restart, auth token or
 > MysteryBox secret) through Terraform, the Go SDK and the `nebius ai endpoint` CLI. No container runs: each endpoint
@@ -114,10 +115,10 @@ resource "nebius_compute_v1_instance" "gpu" {
 
 ### Terraform notes
 
-- **Coverage:** 62 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
+- **Coverage:** 68 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
   end to end, and 2 more work without a Terraform test. [docs/terraform.md](docs/terraform.md) lists every object with
   its status, compared with the official provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are
-  mk8s, DNS, the managed databases, IAM federation, storage inventory and transfer, and `vpc.v1alpha1`.
+  mk8s, DNS, the managed databases, IAM federation, and storage inventory and transfer.
 - **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
   empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
   apply shows a diff, that is a bug in the mock.

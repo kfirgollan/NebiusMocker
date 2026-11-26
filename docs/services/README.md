@@ -10,7 +10,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Area | Doc | gRPC services | RPCs | Used by Terraform (services / TF objects) | M1 tier | Later |
 |---|---|---|---|---|---|---|
 | IAM | [iam.md](iam.md) | 21 | 115 | 15 / 28 | **T2** | — |
-| VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** | — |
+| VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** (v1 and v1alpha1; v1alpha1 is a view of the v1 resources) | — |
 | Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
 | Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** | k3s backend (T3, M3) |
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, T1 rest | S3 data plane via RustFS (✅ buckets + objects, see storage.md) |

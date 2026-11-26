@@ -239,7 +239,7 @@ func TestNewReposCoversEveryKind(t *testing.T) {
 	t.Parallel()
 	r := dal.NewRepos(store.NewMemory())
 	if r.Pools == nil || r.Networks == nil || r.Subnets == nil || r.Allocations == nil ||
-		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil {
+		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil || r.Scopes == nil {
 		t.Fatalf("NewRepos left a repository nil: %+v", r)
 	}
 	// Kinds are isolated: a pool is not visible as a network.
