@@ -428,6 +428,34 @@ func TestStop(t *testing.T) {
 	}
 }
 
+// TestStopRightAfterStart stops a server before any query has given its
+// serve goroutines a chance to run: Start must return only once both servers
+// serve, or Stop finds them "not started" and waits for them forever.
+func TestStopRightAfterStart(t *testing.T) {
+	t.Parallel()
+	for range 50 {
+		srv := responder.New("127.0.0.1:0", &fakeSource{zone: testZone()}, slog.New(slog.DiscardHandler))
+		if err := srv.Start(t.Context()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		// Stop's own wait is unbounded once shutdown fails, so bound it here:
+		// a regression fails fast instead of hanging the package.
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		stopped := make(chan error, 1)
+		go func() { stopped <- srv.Stop(ctx) }()
+		select {
+		case err := <-stopped:
+			cancel()
+			if err != nil {
+				t.Fatalf("Stop right after Start: %v", err)
+			}
+		case <-ctx.Done():
+			cancel()
+			t.Fatal("Stop right after Start did not return within 10s")
+		}
+	}
+}
+
 func TestStartRejectsBadAddress(t *testing.T) {
 	t.Parallel()
 	srv := responder.New("not-an-address", &fakeSource{zone: testZone()}, slog.New(slog.DiscardHandler))

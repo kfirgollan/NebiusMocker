@@ -50,7 +50,15 @@ func New(listen string, src Source, log *slog.Logger) *Server {
 // bindAttempts bounds the retries when a random UDP port is taken for TCP.
 const bindAttempts = 10
 
-// Start binds both sockets and serves until Stop.
+// errStoppedEarly is a serve loop that returned before it reported serving.
+var errStoppedEarly = errors.New("dns responder stopped before serving")
+
+// Start binds both sockets and returns once both servers serve; they serve
+// until Stop.
+//
+// Waiting matters: a miekg/dns server shut down before its ActivateAndServe
+// has run reports "server not started" and is left to serve forever, so a
+// Stop right after Start would wait for it without bound.
 func (s *Server) Start(ctx context.Context) error {
 	pc, ln, err := bind(ctx, s.listen)
 	if err != nil {
@@ -60,18 +68,48 @@ func (s *Server) Start(ctx context.Context) error {
 	h := dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) { s.serve(ctx, w, req) })
 	udp := &dns.Server{PacketConn: pc, Handler: h}
 	tcp := &dns.Server{Listener: ln, Handler: h}
+	servers := []*dns.Server{udp, tcp}
+	// Each server reports once: nil when it serves, or why it stopped first.
+	ready := make(chan error, len(servers))
+	for _, srv := range servers {
+		var once sync.Once
+		report := func(err error) { once.Do(func() { ready <- err }) }
+		srv.NotifyStartedFunc = func() { report(nil) }
+		s.wg.Go(func() {
+			err := srv.ActivateAndServe()
+			if err != nil {
+				s.log.ErrorContext(ctx, "dns responder stopped", "error", err)
+			}
+			report(errors.Join(errStoppedEarly, err))
+		})
+	}
+	if err := awaitServing(ctx, ready, len(servers)); err != nil {
+		_ = pc.Close() // ends both serve loops, whether or not they got to serve
+		_ = ln.Close()
+		s.wg.Wait()
+		return err
+	}
 	s.mu.Lock()
 	s.udp, s.tcp = udp, tcp
 	s.addr, _ = pc.LocalAddr().(*net.UDPAddr)
 	s.mu.Unlock()
-	for _, srv := range []*dns.Server{udp, tcp} {
-		s.wg.Go(func() {
-			if err := srv.ActivateAndServe(); err != nil {
-				s.log.ErrorContext(ctx, "dns responder stopped", "error", err)
-			}
-		})
-	}
 	s.log.InfoContext(ctx, "dns responder listening", "addr", pc.LocalAddr().String())
+	return nil
+}
+
+// awaitServing waits for n servers to report on ready, failing on the first
+// error or when ctx ends.
+func awaitServing(ctx context.Context, ready <-chan error, n int) error {
+	for range n {
+		select {
+		case err := <-ready:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("dns responder start: %w", ctx.Err())
+		}
+	}
 	return nil
 }
 
