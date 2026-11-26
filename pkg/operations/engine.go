@@ -33,6 +33,8 @@ type Engine struct {
 	mu      sync.Mutex
 	active  map[string]string // resource ID → running operation ID
 	started bool
+	// runCtx is the Start context, canceled by Stop; detached Work runs in it.
+	runCtx context.Context //nolint:containedctx // the engine's lifetime, owned by Start/Stop
 
 	enqueue chan job
 	stop    context.CancelFunc
@@ -66,6 +68,7 @@ func (e *Engine) Start(ctx context.Context) {
 	ctx, e.stop = context.WithCancel(ctx)
 	e.mu.Lock()
 	e.started = true
+	e.runCtx = ctx
 	e.mu.Unlock()
 	e.wg.Go(func() { e.loop(ctx) })
 }
@@ -76,11 +79,13 @@ func (e *Engine) Stop() {
 	if e.stop == nil {
 		return
 	}
-	e.stop()
-	e.wg.Wait()
+	// Refuse new detached work before waiting, so no goroutine joins the
+	// wait group while Wait runs.
 	e.mu.Lock()
 	e.started = false
 	e.mu.Unlock()
+	e.stop()
+	e.wg.Wait()
 }
 
 // Submit runs spec.Prepare under the resource lock and creates the operation.
@@ -92,6 +97,9 @@ func (e *Engine) Submit(ctx context.Context, spec Spec) (*Operation, error) {
 	if err != nil {
 		e.unlock(spec.ResourceID)
 		return nil, err
+	}
+	if spec.Detached {
+		return e.detach(ctx, op, spec.Work)
 	}
 	if e.delay == 0 {
 		e.complete(ctx, op, spec.Work)
@@ -175,6 +183,47 @@ func (e *Engine) schedule(ctx context.Context, op *Operation, work func(context.
 		e.finish(context.WithoutCancel(ctx), j.op, context.Cause(ctx))
 		return nil, context.Cause(ctx)
 	}
+}
+
+// detach stores the running operation and completes it on its own
+// goroutine, after the delay.
+//
+//nolint:contextcheck // detached Work outlives the request: it runs in the engine's Start context
+func (e *Engine) detach(ctx context.Context, op *Operation, work func(context.Context) error) (*Operation, error) {
+	if err := e.repo.Put(ctx, op.clone()); err != nil {
+		e.unlock(op.ResourceID)
+		return nil, fmt.Errorf("store operation %s: %w", op.ID, err)
+	}
+	running := op.clone()
+	e.mu.Lock()
+	if !e.started {
+		e.mu.Unlock()
+		// Fail the stored operation so pollers stop.
+		e.finish(context.WithoutCancel(ctx), running, ErrNotStarted)
+		return nil, ErrNotStarted
+	}
+	runCtx := e.runCtx
+	e.wg.Go(func() {
+		if e.delay > 0 {
+			select {
+			case <-e.clk.After(e.delay):
+			case <-runCtx.Done():
+				e.unlock(running.ResourceID)
+				return
+			}
+		}
+		var err error
+		if work != nil {
+			err = work(runCtx)
+		}
+		if runCtx.Err() != nil {
+			e.unlock(running.ResourceID) // interrupted by Stop: stays unfinished
+			return
+		}
+		e.finish(runCtx, running, err)
+	})
+	e.mu.Unlock()
+	return op.clone(), nil
 }
 
 // complete runs the work and records the result. Work errors fail the operation,

@@ -60,6 +60,9 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := peer.Provide[peer.Networks](deps.Peers, peer.NetworksKey, networksPeer{b: svc.NetworkBindings()}); err != nil {
 		return fmt.Errorf("vpc: %w", err)
 	}
+	if err := peer.Provide[peer.DefaultSubnets](deps.Peers, peer.DefaultSubnetsKey, defaultSubnetsPeer{n: svc.Networks()}); err != nil {
+		return fmt.Errorf("vpc: %w", err)
+	}
 
 	vpcpb.RegisterPoolServiceServer(reg, api.NewPoolHandler(svc.Pools()))
 	vpcpb.RegisterNetworkServiceServer(reg, api.NewNetworkHandler(svc.Networks()))

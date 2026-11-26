@@ -278,6 +278,29 @@ marks no spec attribute computed); everything synthesized lives in `status`.
 - Ordering: NIC addresses are bound first (VPC), then the GPU cluster and filesystems, then disks and the instance in
   one store transaction; a failure undoes the earlier steps. The operations engine serializes per instance.
 
+#### Managed node instances (mk8s)
+
+The nodes of an mk8s node group are ordinary instances in the cluster's project that the node group owns. The mk8s
+module creates and deletes them through the in-process capability `peer.ComputeNodes` (provided by this module, no RPC
+and no IAM check: mk8s authorized its own request):
+
+- `CreateNode` builds the instance spec a node template implies (preset, managed boot disk `<node>-boot` from an image
+  family, one NIC `eth0` with a dynamic private address and optionally a dynamic public one, service account, GPU
+  cluster, filesystems, cloud-init, preemptible) and creates it RUNNING at once, with no operation: the node group's
+  operation is the visible one. It is idempotent per (node group, node name). Labels (the node-group and cluster labels
+  are set by mk8s) are the instance labels. Ownership is a store index (`computenode`: instance to node group and
+  cluster).
+- `CheckTemplate` runs the same validation as `Create` without storing anything and reports violations under the mk8s
+  NodeTemplate's field names (`resources.preset`, `boot_disk.size_bytes`, `network_interfaces[0].subnet_id`,
+  `service_account_id`, `gpu_cluster.id`, `filesystems[i].existing_filesystem.id`). A READ_ONLY filesystem is rejected
+  (`filesystems[i].attach_mode`): compute attaches READ_WRITE only. Whether the GPU cluster or filesystem exists is
+  checked when a node is created, not by `CheckTemplate`.
+- `DeleteNode` removes the instance with its boot disk, addresses, GPU cluster and filesystem attachments; a missing
+  instance is not an error.
+- Reads (`Get`, `GetByName`, `List`, `BatchGet`) are unchanged. `Update`, `Delete`, `Start` and `Stop` of a node fail
+  with `FAILED_PRECONDITION` before an operation is created: `instance <id> is a node of mk8s node group <node-group-id>
+  (cluster <cluster-id>) and is managed by it: change the node group instead`.
+
 ### Disks and snapshots (implemented)
 
 Management APIs only: a disk is a record with a lifecycle. No storage is allocated. Instances set

@@ -13,6 +13,7 @@ import (
 	"github.com/nebius/gosdk/proto/fieldmask/grpcheader"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
+	mk8spb "github.com/nebius/gosdk/proto/nebius/mk8s/v1"
 	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
 	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 )
@@ -64,6 +65,16 @@ func TestValidatePartialUpdates(t *testing.T) {
 			req:   &vpcpb.UpdateAllocationRequest{Metadata: &commonpb.ResourceMetadata{Id: "vpcallocation-e00x"}},
 			reset: "metadata.name",
 			want:  codes.InvalidArgument,
+		},
+		{
+			// What `nebius mk8s node-group update --id X --fixed-node-count 1` previews first.
+			name: "patch preflight check without parent and template passes", method: "/nebius.mk8s.v1.NodeGroupService/PreflightCheck",
+			req: &mk8spb.PreflightCheckNodeGroupRequest{
+				Context:  &commonpb.PreflightCheckContext{Action: commonpb.PreflightCheckContext_UPDATE},
+				Metadata: &commonpb.ResourceMetadata{Id: "mk8snodegroup-e00x"},
+				Spec:     &mk8spb.NodeGroupSpec{Size: &mk8spb.NodeGroupSpec_FixedNodeCount{FixedNodeCount: 1}},
+			},
+			want: codes.OK,
 		},
 		{
 			name: "create without a name is rejected", method: "/nebius.vpc.v1alpha1.AllocationService/Create",

@@ -39,10 +39,12 @@ type InstanceDeps struct {
 	GpuClusters GpuClusterMembership
 	// Filesystems records spec.filesystems attachments.
 	Filesystems FilesystemAttachments
-	Perms       CallerPermissions
-	Ops         Operations
-	IDs         IDGenerator
-	Clock       clock.Clock
+	// Nodes records the instances managed by mk8s node groups (nodes.go).
+	Nodes NodeRepository
+	Perms CallerPermissions
+	Ops   Operations
+	IDs   IDGenerator
+	Clock clock.Clock
 	// PublicIPReleaseAfter is how long a STOPPED instance keeps a dynamic
 	// public address (docs: one hour); must be positive.
 	PublicIPReleaseAfter time.Duration
@@ -50,7 +52,7 @@ type InstanceDeps struct {
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
-		d.Disks == nil || d.GpuClusters == nil || d.Filesystems == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Disks == nil || d.GpuClusters == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
 	}
 	if d.PublicIPReleaseAfter <= 0 {
@@ -67,6 +69,8 @@ type InstanceService struct {
 	d InstanceDeps
 	// nics serializes NIC changes of operations with SweepPublicIPs (see withNICs).
 	nics sync.Mutex
+	// nodes serializes CreateNode, so it is idempotent by (node group, name).
+	nodes sync.Mutex
 }
 
 // NewInstanceService wires an InstanceService.
@@ -207,6 +211,9 @@ func (s *InstanceService) Update(ctx context.Context, cmd UpdateInstanceCmd) (*o
 	if err != nil {
 		return nil, err
 	}
+	if err := s.refuseManaged(ctx, id); err != nil {
+		return nil, err
+	}
 	var target computepb.InstanceStatus_InstanceState
 	return s.submit(ctx, stored.GetMetadata().GetParentId(), operations.Spec{
 		ResourceID: id, Description: "Update instance", CreatedBy: reqctx.PrincipalFrom(ctx).ID, Request: cmd.Request,
@@ -228,6 +235,9 @@ func (s *InstanceService) Delete(ctx context.Context, id string, request proto.M
 	}
 	stored, err := s.d.Instances.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.refuseManaged(ctx, id); err != nil {
 		return nil, err
 	}
 	return s.submit(ctx, stored.GetMetadata().GetParentId(), operations.Spec{
@@ -314,6 +324,9 @@ func (s *InstanceService) power(ctx context.Context, id string, request proto.Me
 	}
 	stored, err := s.d.Instances.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.refuseManaged(ctx, id); err != nil {
 		return nil, err
 	}
 	return s.submit(ctx, stored.GetMetadata().GetParentId(), operations.Spec{

@@ -55,6 +55,12 @@ They are documented in each service doc (for example `NEBIUS_MOCKER_STORAGE_*` i
 VPC: `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` (default `10.0.0.0/13`, the `default-network-pool` of each project) and
 `NEBIUS_MOCKER_VPC_PUBLIC_CIDR` (default `203.0.113.0/24`, the `default-public-pool`); see
 [services/vpc.md](../services/vpc.md#configuration).
+mk8s: `NEBIUS_MOCKER_MK8S_BACKEND` (`mock`, the default, runs no Kubernetes API; `k3s` is not available yet) and
+`NEBIUS_MOCKER_MK8S_VERSIONS` (default `1.34,1.35,1.36`, comma-separated `<major>.<minor>`, the newest is the default
+for new clusters); see [services/mk8s.md](../services/mk8s.md#configuration).
+Applications: `NEBIUS_MOCKER_APPLICATIONS_PRODUCTS` (comma-separated Marketplace product slugs a K8s release may install;
+default `nebius/soperator,nebius/nvidia-gpu-operator,nebius/nvidia-network-operator,nebius/kuberay,nebius/jupyterhub,nebius/mlflow`);
+see [services/applications.md](../services/applications.md#configuration).
 DNS: `NEBIUS_MOCKER_DNS_LISTEN` (default `:4653`, UDP and TCP; `off` disables it) is the address of the DNS responder
 that answers from the mock's zones; see [services/dns.md](../services/dns.md#configuration).
 
@@ -91,7 +97,7 @@ Default catalogs that each module ships (all overridable):
 | Platforms and presets | compute | `cpu-e2`, `cpu-d3`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-b300-sxm`, `gpu-rtx6000`, `gpu-l40s-a`, `gpu-l40s-d`, … with presets such as `2vcpu-8gb`, `8gpu-128vcpu-1600gb`, per region (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) |
 | Public images and families | compute | `ubuntu22.04-driverless`, `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-v-1-31-ubuntu22.04`, … |
 | InfiniBand fabrics of GPU clusters | compute | `fabric-3` (eu-north1, `gpu-h100-sxm`), `fabric-5` (eu-west1, `gpu-h200-sxm`), `us-central1-b` (us-central1, `gpu-b200-sxm`), … from the public docs; **implemented**, replaced with `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` ([format](../services/compute.md#gpu-clusters-implemented)) |
-| Kubernetes versions | mk8s | `1.30`, `1.31`, `1.32` |
+| Kubernetes versions | mk8s | `1.34`, `1.35`, `1.36` |
 | Roles | iam | `admin`, `editor`, `viewer`, narrower roles |
 | Quota defaults | quotas | see [09](09-quotas-limits-faults.md) |
 | Regions | core | `eu-north1`, `eu-west1`, `us-central1`, `me-west1` |

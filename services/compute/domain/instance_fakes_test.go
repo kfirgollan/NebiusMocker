@@ -438,10 +438,13 @@ type instFixture struct {
 	net   *fakeNet
 	gpu   *fakeGpu
 	fs    *fakeFS
-	perms *fakePerms
-	ops   *deferOps
-	idx   *fakeOpIndex
-	clk   *clock.Manual
+	nodes *fakeNodes
+	// images is the image lookup behind managed boot disks (empty unless a test seeds it).
+	images *fakeImageLookup
+	perms  *fakePerms
+	ops    *deferOps
+	idx    *fakeOpIndex
+	clk    *clock.Manual
 }
 
 func newInstFixture(t *testing.T) *instFixture {
@@ -461,13 +464,15 @@ func newInstFixture(t *testing.T) *instFixture {
 	f := &instFixture{
 		ctx:   t.Context(),
 		disks: &fakeDisks{}, net: newFakeNet(), gpu: newFakeGpu("computegpucluster-e00c1"), fs: newFakeFS("computefilesystem-e00f1", "computefilesystem-e00f2"),
-		perms: &fakePerms{deny: map[string]bool{}}, ops: &deferOps{}, idx: &fakeOpIndex{},
+		nodes:  &fakeNodes{},
+		images: &fakeImageLookup{public: map[string]bool{PublicProjectID("e00"): true}},
+		perms:  &fakePerms{deny: map[string]bool{}}, ops: &deferOps{}, idx: &fakeOpIndex{},
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 	f.repo = &fakeInstanceRepo{disks: &f.disks.repo}
 	ids := &fakeIDs{}
 	f.ds, err = NewDiskService(DiskDeps{
-		Disks: f.disks, Snapshots: &fakeSnapshots{}, Images: &fakeImageLookup{}, OpIndex: &fakeOpIndex{},
+		Disks: f.disks, Snapshots: &fakeSnapshots{}, Images: f.images, OpIndex: &fakeOpIndex{},
 		Projects: projects, Ops: f.ops, IDs: ids, Clock: f.clk,
 	})
 	if err != nil {
@@ -475,7 +480,7 @@ func newInstFixture(t *testing.T) *instFixture {
 	}
 	f.svc, err = NewInstanceService(InstanceDeps{
 		Instances: f.repo, OpIndex: f.idx, Projects: projects, Platforms: platforms, Network: f.net, Disks: f.ds,
-		GpuClusters: f.gpu, Filesystems: f.fs, Perms: f.perms, Ops: f.ops, IDs: ids, Clock: f.clk,
+		GpuClusters: f.gpu, Filesystems: f.fs, Nodes: f.nodes, Perms: f.perms, Ops: f.ops, IDs: ids, Clock: f.clk,
 		PublicIPReleaseAfter: time.Hour,
 	})
 	if err != nil {

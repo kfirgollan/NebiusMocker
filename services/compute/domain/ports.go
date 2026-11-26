@@ -277,3 +277,28 @@ type FilesystemExposures interface {
 	// Unexpose removes the record; missing is not an error.
 	Unexpose(ctx context.Context, fsID, bucketID string) error
 }
+
+// NodeRecord says that an instance is a node of an mk8s node group.
+type NodeRecord struct {
+	InstanceID  string
+	NodeGroupID string
+	ClusterID   string
+	// Name is the node instance name, unique per node group.
+	Name string
+}
+
+// NodeRepository records the ownership of managed node instances
+// (peer.ComputeNodes). Records of one node group list in creation order.
+type NodeRepository interface {
+	// Owner returns the record of instanceID; ok is false when the instance
+	// is not a managed node.
+	Owner(ctx context.Context, instanceID string) (rec NodeRecord, ok bool, err error)
+	// ByName returns the node of a node group with the given name.
+	ByName(ctx context.Context, nodeGroupID, name string) (rec NodeRecord, ok bool, err error)
+	List(ctx context.Context, nodeGroupID string) ([]NodeRecord, error)
+	// Put stores a record; a second node of the group with the same name is
+	// errs.AlreadyExists.
+	Put(ctx context.Context, n NodeRecord) error
+	// Delete drops a record; a missing one is not an error.
+	Delete(ctx context.Context, instanceID string) error
+}

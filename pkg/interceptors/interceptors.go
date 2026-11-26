@@ -158,8 +158,13 @@ func Validate() (grpc.UnaryServerInterceptor, error) {
 // empty name that the reset mask does not clear means "keep it"): that is what
 // the official CLI sends for `nebius vpc allocation update --id X --labels k=v`
 // (metadata {id, labels}, no X-ResetMask).
+//
+// PreflightCheck RPCs preview a Create or an Update: their spec is as partial
+// as the request they preview (the CLI runs `nebius mk8s node-group update`'s
+// patch through PreflightCheck first), and the module reports problems as
+// diagnostics, so presence rules are skipped there too.
 func ruleFilter(ctx context.Context, method string, req proto.Message) func(ruleID string) bool {
-	if !strings.HasSuffix(method, "/Update") {
+	if !strings.HasSuffix(method, "/Update") && !strings.HasSuffix(method, "/PreflightCheck") {
 		return func(string) bool { return false }
 	}
 	keepsName := false

@@ -4,7 +4,14 @@
 // itself runs in a Backend (the ports in this file).
 package domain
 
-import "context"
+import (
+	"context"
+
+	mk8spb "github.com/nebius/gosdk/proto/nebius/mk8s/v1"
+
+	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/peer"
+)
 
 // Backend is the Kubernetes data plane behind mk8s clusters and node groups,
 // selected with NEBIUS_MOCKER_MK8S_BACKEND. The control plane is the
@@ -133,4 +140,91 @@ type NodeReadiness struct {
 	Ready bool
 	// Reason says why a node is not ready ("" when ready).
 	Reason string
+}
+
+// Resource type prefixes (NID types) owned by mk8s, and the kinds it refers to.
+const (
+	KindCluster   = "mk8scluster"
+	KindNodeGroup = "mk8snodegroup"
+	// KindNode names node IDs; their last characters suffix node names.
+	KindNode = "mk8snode"
+	// KindProject is the only parent kind a cluster may have (owned by IAM).
+	KindProject = "project"
+)
+
+// Page is one page of a listing.
+type Page[T any] struct {
+	Items         []T
+	NextPageToken string
+}
+
+// ClusterRepository stores clusters. Names are unique per project.
+type ClusterRepository interface {
+	// Get returns the cluster or errs.NotFound.
+	Get(ctx context.Context, id string) (*mk8spb.Cluster, error)
+	// GetByName returns the cluster named name in the project, or errs.NotFound.
+	GetByName(ctx context.Context, parentID, name string) (*mk8spb.Cluster, error)
+	// List returns one page of the project's clusters in creation order.
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (Page[*mk8spb.Cluster], error)
+	// Create fails with errs.AlreadyExists if the name is taken.
+	Create(ctx context.Context, c *mk8spb.Cluster) error
+	// Update fails with errs.NotFound if the cluster does not exist.
+	Update(ctx context.Context, c *mk8spb.Cluster) error
+	Delete(ctx context.Context, id string) error
+}
+
+// NetworkBindingRepository remembers the network each cluster holds, so the
+// binding is released even when the cluster's subnet was deleted first.
+type NetworkBindingRepository interface {
+	// Set records the network of the cluster.
+	Set(ctx context.Context, clusterID, networkID string) error
+	// Get returns the recorded network or errs.NotFound.
+	Get(ctx context.Context, clusterID string) (string, error)
+	// Delete forgets the record; a missing one is not an error.
+	Delete(ctx context.Context, clusterID string) error
+}
+
+// NodeGroupRepository stores node groups. Names are unique per cluster.
+type NodeGroupRepository interface {
+	// Get returns the node group or errs.NotFound.
+	Get(ctx context.Context, id string) (*mk8spb.NodeGroup, error)
+	// GetByName returns the node group named name in the cluster, or errs.NotFound.
+	GetByName(ctx context.Context, clusterID, name string) (*mk8spb.NodeGroup, error)
+	// List returns one page of the cluster's node groups in creation order.
+	List(ctx context.Context, clusterID string, pageSize int, pageToken string) (Page[*mk8spb.NodeGroup], error)
+	// All returns every node group of the cluster in creation order.
+	All(ctx context.Context, clusterID string) ([]*mk8spb.NodeGroup, error)
+	// Create fails with errs.AlreadyExists if the name is taken.
+	Create(ctx context.Context, g *mk8spb.NodeGroup) error
+	// Update fails with errs.NotFound if the node group does not exist.
+	Update(ctx context.Context, g *mk8spb.NodeGroup) error
+	Delete(ctx context.Context, id string) error
+}
+
+// Peers finds the capabilities of other areas at call time (module order is
+// not guaranteed and a provider may be disabled); ok is false when no
+// enabled module provides one. Satisfied by an adapter over pkg/peer.
+type Peers interface {
+	ComputeNodes() (peer.ComputeNodes, bool)
+	DefaultSubnets() (peer.DefaultSubnets, bool)
+	NetworkInterfaces() (peer.NetworkInterfaces, bool)
+	Networks() (peer.Networks, bool)
+	ClusterReleases() (peer.ClusterReleases, bool)
+}
+
+// Hierarchy resolves resource ancestry (satisfied by *authz.Engine). It is
+// how the domain checks that a parent project exists without importing IAM.
+type Hierarchy interface {
+	// Parent returns the parent of id, or errs.NotFound if id does not exist.
+	Parent(ctx context.Context, id string) (string, error)
+}
+
+// Operations starts long-running operations (satisfied by *operations.Engine).
+type Operations interface {
+	Submit(ctx context.Context, spec operations.Spec) (*operations.Operation, error)
+}
+
+// IDGenerator creates NIDs (satisfied by pkg/nid generators).
+type IDGenerator interface {
+	New(typ string) (string, error)
 }

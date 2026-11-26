@@ -36,6 +36,11 @@ CI with no Nebius account.
 > URL points at an HTTPS stub on `:4600` (local CA, trust it with `curl --cacert`) that answers
 > `200 "endpoint was called"` to authorized calls; see
 > [docs/services/ai.md](docs/services/ai.md#implementation-status).
+> **Managed Kubernetes** clusters and node groups (v1 and v1alpha1; each node is a compute instance, with the version
+> catalog, compatibility matrix, preflight checks and `get-credentials` kubeconfig) work with Terraform, the Go SDK and
+> the `nebius mk8s` CLI. The default `mock` backend runs no Kubernetes API; see
+> [docs/services/mk8s.md](docs/services/mk8s.md#implementation-status). **Applications** K8s releases are an inventory
+> (nothing is installed); see [docs/services/applications.md](docs/services/applications.md#implementation-status).
 > **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
 > event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
 > `nebius audit`; see [docs/services/audit.md](docs/services/audit.md#implementation-status).
@@ -120,7 +125,7 @@ resource "nebius_compute_v1_instance" "gpu" {
 
 - **Coverage:** 89 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
   end to end. [docs/terraform.md](docs/terraform.md) lists every object with its status, compared with the official
-  provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are mk8s and the managed databases.
+  provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gap is the managed databases.
 - **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
   empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
   apply shows a diff, that is a bug in the mock.
@@ -192,6 +197,8 @@ process. The credential-helper flow (`nebius registry configure-helper`) and the
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 | `NEBIUS_MOCKER_DNS_LISTEN` | `:4653` | DNS responder for the mock's zones, UDP and TCP (`off` disables it) |
+| `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | Kubernetes data plane of mk8s clusters (`mock` runs no Kubernetes API); `NEBIUS_MOCKER_MK8S_VERSIONS` sets the version catalog (`1.34,1.35,1.36`) |
+| `NEBIUS_MOCKER_APPLICATIONS_PRODUCTS` | six `nebius/*` slugs | Marketplace product slugs an Applications K8s release may install |
 | `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL; TCP ports use `NEBIUS_MOCKER_AI_TCP_LISTEN`, `:4601`) |
 | `NEBIUS_MOCKER_AI_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA of the AI data plane; trust `<dir>/ca.pem` (`curl --cacert`) |
 

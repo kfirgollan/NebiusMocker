@@ -91,6 +91,8 @@ type Config struct {
 	DNS DNSConfig
 	// MK8s configures Managed Kubernetes (NEBIUS_MOCKER_MK8S_*).
 	MK8s MK8sConfig
+	// Applications configures Nebius Applications (NEBIUS_MOCKER_APPLICATIONS_*).
+	Applications ApplicationsConfig
 	// VPC is the seeded VPC address space (NEBIUS_MOCKER_VPC_*).
 	VPC VPCConfig
 	// AI configures the AI endpoints area and its stub data plane.
@@ -221,10 +223,11 @@ func Default() Config {
 			Region:     "eu-north1",
 			PurgeGrace: 7 * 24 * time.Hour,
 		},
-		AI:   defaultAI(),
-		DNS:  defaultDNS(),
-		MK8s: defaultMK8s(),
-		Auth: defaultAuth(),
+		AI:           defaultAI(),
+		DNS:          defaultDNS(),
+		MK8s:         defaultMK8s(),
+		Applications: defaultApplications(),
+		Auth:         defaultAuth(),
 	}
 }
 
@@ -291,6 +294,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, vpcParsers(&c.VPC)...)
 	parsers = append(parsers, dnsParsers(&c.DNS)...)
 	parsers = append(parsers, mk8sParsers(&c.MK8s)...)
+	parsers = append(parsers, applicationsParsers(&c.Applications)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
 	parsers = append(parsers, authParsers(&c.Auth)...)

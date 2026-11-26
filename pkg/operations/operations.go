@@ -53,6 +53,14 @@ type Spec struct {
 	Prepare func(ctx context.Context) error
 	// Work runs when the operation completes. Its error fails the operation.
 	Work func(ctx context.Context) error
+	// Detached runs Work on its own goroutine instead of inline (zero delay)
+	// or on the scheduler goroutine, for work that may block for long, such
+	// as starting containers: Submit returns the operation still running,
+	// and other operations keep completing meanwhile. The per-resource lock
+	// still holds until Work returns. Work's ctx is canceled when the engine
+	// stops; an operation interrupted that way stays unfinished, as after a
+	// control-plane restart. Detached operations need a started engine.
+	Detached bool
 }
 
 // Repository stores operations. Implemented in pkg/operations/dal.

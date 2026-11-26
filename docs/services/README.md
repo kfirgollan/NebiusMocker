@@ -12,7 +12,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | IAM | [iam.md](iam.md) | 21 | 115 | 15 / 28 | **T2** | — |
 | VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** (v1 and v1alpha1; v1alpha1 is a view of the v1 resources) | — |
 | Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
-| Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** | k3s backend (T3, M3) |
+| Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** ✅ implemented (v1 and v1alpha1; nodes are compute instances; `mock` backend) | k3s backend (T3, Phase B) |
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, inventory, transfer (v1, v1alpha1) | S3 data plane via RustFS (✅ buckets, objects, inventory reports, transfers; see storage.md) |
 | Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |
 | MysteryBox (secrets) | [mysterybox.md](mysterybox.md) | 3 | 14 | 3 / 7 | **T2** | — |
@@ -24,7 +24,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | T1 | — |
 | Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | T1 | — |
 | AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
-| Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release, T0 rest | T2 with k3s (M3) |
+| Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release ✅ implemented (inventory only), T0 rest | T2 with k3s (Phase B) |
 | Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 | — |
 | Audit | [audit.md](audit.md) | 2 | 5 | 0 / 0 | **T2** | — |
 | Logging | [logging.md](logging.md) | 2 | 5 | 0 / 0 | T0 | T1 (M4) |
