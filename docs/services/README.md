@@ -25,7 +25,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | T1 | — |
 | AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
 | Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release ✅ implemented (inventory only), T0 rest | T2 with k3s (Phase B) |
-| Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 | — |
+| Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 ✅ implemented (inventory only: no agent can connect) | Data plane if the agent protocol is documented |
 | Audit | [audit.md](audit.md) | 2 | 5 | 0 / 0 | **T2** | — |
 | Logging | [logging.md](logging.md) | 2 | 5 | 0 / 0 | T0 | T1 (M4) |
 | Maintenance | [maintenance.md](maintenance.md) | 1 | 3 | 0 / 0 | T0 | T1 (M4) |

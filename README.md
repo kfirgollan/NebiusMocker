@@ -41,6 +41,9 @@ CI with no Nebius account.
 > the `nebius mk8s` CLI. The default `mock` backend runs no Kubernetes API; see
 > [docs/services/mk8s.md](docs/services/mk8s.md#implementation-status). **Applications** K8s releases are an inventory
 > (nothing is installed); see [docs/services/applications.md](docs/services/applications.md#implementation-status).
+> **Tunnels** (`nebius_tunnel_v1_tunnel`, `nebius tunnel`) are an inventory too: they stay `DISCONNECTED`, because the
+> Nebius tunnel agent speaks an undocumented protocol to the edge; see
+> [docs/services/tunnel.md](docs/services/tunnel.md#implementation-status).
 > **Audit logs**: every mutating call to any service (plus authorization denials) is recorded as a redacted audit
 > event, searchable with the documented filter language and exportable to Object Storage through the Go SDK and
 > `nebius audit`; see [docs/services/audit.md](docs/services/audit.md#implementation-status).

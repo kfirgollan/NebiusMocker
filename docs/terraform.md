@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 42 | 0 | 1 (`nebius_hash`) | 7 |
-| Data sources | 62 | 53 | 0 | 1 (`nebius_parent_id`) | 8 |
+| Resources | 50 | 43 | 0 | 1 (`nebius_hash`) | 6 |
+| Data sources | 62 | 54 | 0 | 1 (`nebius_parent_id`) | 7 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **99** | **0** | **2** | **15** |
+| **Total** | **116** | **101** | **0** | **2** | **13** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -108,7 +108,7 @@ supply real credentials.
 | `nebius_storage_v1_inventory` | ✅ | Reports (CSV/Parquet, manifest) really land in the destination bucket on the mock clock ([storage.md](services/storage.md#inventories)) |
 | `nebius_storage_v1_transfer` | ✅ | Iterations really copy objects (Nebius, S3-compatible and Azure Blob sources) with the RustFS backend ([storage.md](services/storage.md#transfers)) |
 | `nebius_storage_v1alpha1_transfer` | ✅ | Deprecated API; same engine, its transfers are also visible through v1 |
-| `nebius_tunnel_v1_tunnel` | ❌ Missing | |
+| `nebius_tunnel_v1_tunnel` | ✅ | Inventory only: stays `DISCONNECTED`, since no agent can connect ([tunnel.md](services/tunnel.md#not-yet)) |
 | `nebius_vpc_v1_allocation` | ✅ | Real IP address management: private and public addresses come from pool CIDRs ([vpc.md](services/vpc.md)) |
 | `nebius_vpc_v1_network` | ✅ | |
 | `nebius_vpc_v1_pool` | ✅ | |
@@ -170,7 +170,7 @@ supply real credentials.
 | `nebius_storage_v1_inventory` | ✅ | |
 | `nebius_storage_v1_transfer` | ✅ | |
 | `nebius_storage_v1alpha1_transfer` | ✅ | |
-| `nebius_tunnel_v1_tunnel` | ❌ Missing | |
+| `nebius_tunnel_v1_tunnel` | ✅ | |
 | `nebius_vpc_v1_allocation` | ✅ | |
 | `nebius_vpc_v1_default_network` | ✅ | Seeded default network and subnet in each project |
 | `nebius_vpc_v1_network` | ✅ | |
@@ -203,7 +203,7 @@ supply real credentials.
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
 | Capacity | `capacity_allowance` (resource and data source), `capacity_block_group` (data source) | [capacity.md](services/capacity.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |
-| Other | `applications_v1alpha1_k8s_release`, `billing_v1_pricing_policy`, `quotas_v1_quota_allowance`, `tunnel_v1_tunnel` (resource and data source each) | [applications.md](services/applications.md), [billing.md](services/billing.md), [quotas.md](services/quotas.md), [tunnel.md](services/tunnel.md) |
+| Other | `applications_v1alpha1_k8s_release`, `billing_v1_pricing_policy`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [billing.md](services/billing.md), [quotas.md](services/quotas.md) |
 
 Across the supported objects, these are not modeled:
 - **Quotas:** nothing returns `RESOURCE_EXHAUSTED` for a quota.

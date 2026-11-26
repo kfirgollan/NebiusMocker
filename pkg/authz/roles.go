@@ -102,6 +102,11 @@ const (
 	// RoleComputeUseViaObjectStorage gives access to shared filesystems
 	// through Object Storage filesystem buckets.
 	RoleComputeUseViaObjectStorage = "compute.use-via-object-storage"
+	// RoleTunnelAgent is the role a tunnel agent's service account holds on
+	// the tunnel or a parent (Nebius Tunnels docs: applicationtunnel.agent).
+	// In the mock it reads the tunnel; there is no edge for an agent to
+	// connect to (docs/services/tunnel.md).
+	RoleTunnelAgent = "applicationtunnel.agent"
 )
 
 // permMysteryBoxPayloadRead reads decrypted secret payloads. Its verb is not
@@ -153,6 +158,7 @@ func DefaultCatalog() *Catalog {
 		// The auditor views DNS zones but not their records (Nebius DNS docs).
 		Role{Name: RoleAuditor, Grants: append(slices.Clone(read), auditPermissions), Excludes: []string{"dns.records.*"}},
 		Role{Name: RoleComputeUseViaObjectStorage, Grants: []string{"compute.filesystems." + VerbUseViaObjectStorage}},
+		Role{Name: RoleTunnelAgent, Grants: []string{"applicationtunnel.tunnels." + VerbGet}},
 	)
 }
 
