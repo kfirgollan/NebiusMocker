@@ -1,6 +1,9 @@
 package k3s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
@@ -29,6 +32,7 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 	g.Labels = map[string]string{"team": "ml", "node-role.kubernetes.io/gpu": "true", "kubernetes.io/os": "linux"}
 	g.Taints = []domain.NodeTaint{{Key: "dedicated", Value: "gpu", Effect: "NoSchedule"}, {Key: "spot", Effect: "PreferNoSchedule"}}
 	g.Nodes[0].GPUs = 8
+	g.MaxPods = 32
 
 	got := h.ensureNodes(t, g)
 	want := []domain.NodeReadiness{{Name: "n1", Ready: true}, {Name: "n2", Ready: true}, {Name: "n3", Ready: true}}
@@ -55,6 +59,7 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 		"agent", "--server=https://" + serverName(testCluster) + ":6443", "--node-name=n1",
 		"--node-label=kubernetes.io/os=linux", "--node-label=team=ml",
 		"--node-taint=dedicated=gpu:NoSchedule", "--node-taint=spot:PreferNoSchedule",
+		"--kubelet-arg=max-pods=32",
 	}
 	if diff := cmp.Diff(wantCmd, spec.Cmd); diff != "" {
 		t.Errorf("agent command mismatch (-want +got):\n%s", diff)
@@ -135,8 +140,8 @@ func TestEnsureNodesScaleDown(t *testing.T) {
 	}
 }
 
-// Only the image and the GPU count need a new agent; labels and taints are
-// reconciled in place (nodemeta_test.go).
+// Only the image, the GPU count and max pods need a new agent; labels and
+// taints are reconciled in place (nodemeta_test.go).
 func TestEnsureNodesAgentChangeRecreates(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -145,6 +150,7 @@ func TestEnsureNodesAgentChangeRecreates(t *testing.T) {
 	}{
 		{name: "gpus", mutate: func(g *domain.BackendNodeGroup) { g.Nodes[0].GPUs = 2 }},
 		{name: "version", mutate: func(g *domain.BackendNodeGroup) { g.Version = "1.36" }},
+		{name: "max pods", mutate: func(g *domain.BackendNodeGroup) { g.MaxPods = 64 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -323,3 +329,29 @@ func TestEnsureNodesEmptyLabelValue(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// An unset max_pods passes no kubelet flag (the kubelet default, 110, is
+// the MK8s default), and agents started before max_pods existed keep their
+// spec hash, so upgrading the mocker does not recreate them.
+func TestAgentMaxPodsUnset(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	h.ensureCluster(t, testCluster)
+	h.ensureNodes(t, testGroupSpec(testCluster, "n1"))
+	for _, arg := range h.docker.spec(agentName(testCluster, "n1")).Cmd {
+		if strings.Contains(arg, "max-pods") {
+			t.Errorf("agent command has %q with max_pods unset", arg)
+		}
+	}
+	legacy, err := json.Marshal(struct {
+		Image string `json:"image"`
+		GPUs  int    `json:"gpus"`
+	}{"rancher/k3s:v1.35.10-k3s1", 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(legacy)
+	if got, want := specHash(agentSpec{Image: "rancher/k3s:v1.35.10-k3s1", GPUs: 2}), hex.EncodeToString(sum[:8]); got != want {
+		t.Errorf("specHash with max_pods unset = %s, want the pre-max_pods hash %s", got, want)
+	}
+}

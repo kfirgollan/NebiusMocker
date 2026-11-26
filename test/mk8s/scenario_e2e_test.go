@@ -22,6 +22,8 @@ type cpuGroup struct {
 	// workload is a template label and the value of its taint.
 	workload string
 	preset   string
+	// maxPods is the template's max_pods; 0 leaves it unset (110).
+	maxPods int
 }
 
 var cpuStart = cpuGroup{nodes: 2, workload: "batch", preset: "4vcpu-16gb"}
@@ -68,6 +70,7 @@ resource "nebius_mk8s_v1_node_group" "cpu" {
     resources = { platform = "cpu-d3", preset = %[4]q }
     boot_disk = { type = "NETWORK_SSD", size_gibibytes = 64 }
     network_interfaces = [{ subnet_id = nebius_vpc_v1_subnet.sub.id }]
+%[5]s
   }
 }
 
@@ -83,7 +86,14 @@ resource "nebius_mk8s_v1_node_group" "gpu" {
   }
 }
 
-`, project, cpu.nodes, cpu.workload, cpu.preset)
+`, project, cpu.nodes, cpu.workload, cpu.preset, maxPodsLine(cpu.maxPods))
+}
+
+func maxPodsLine(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("    max_pods = %d", n)
 }
 
 // kubeNodes is `kubectl get nodes -o json`, trimmed.
@@ -97,8 +107,9 @@ type kubeNodes struct {
 			Taints []struct{ Key, Value, Effect string } `json:"taints"`
 		} `json:"spec"`
 		Status struct {
-			Capacity   map[string]string               `json:"capacity"`
-			Conditions []struct{ Type, Status string } `json:"conditions"`
+			Capacity    map[string]string               `json:"capacity"`
+			Allocatable map[string]string               `json:"allocatable"`
+			Conditions  []struct{ Type, Status string } `json:"conditions"`
 		} `json:"status"`
 	} `json:"items"`
 }
@@ -168,6 +179,7 @@ func TestK3sScenario(t *testing.T) {
 	scale(t, e, tf, cpuID, clusterID)
 	inPlace(t, e, tf, cpuID)
 	rollout(t, e, tf, cpuID)
+	maxPods(t, e, tf, cpuID, gpuNames)
 
 	tf.Destroy(t)
 	if left := e.d.k3sContainers(t, "nebius-mocker.cluster="+clusterID); len(left) > 0 {
@@ -219,6 +231,10 @@ func checkNodeSpec(t *testing.T, nodes kubeNodes, cpu, gpu []string) {
 	t.Helper()
 	for _, it := range nodes.Items {
 		name := it.Metadata.Name
+		if it.Status.Capacity["pods"] != "110" || it.Status.Allocatable["pods"] != "110" {
+			t.Errorf("node %s pods capacity %q allocatable %q, want 110 (the MK8s default with max_pods unset)",
+				name, it.Status.Capacity["pods"], it.Status.Allocatable["pods"])
+		}
 		switch {
 		case slices.Contains(cpu, name):
 			if it.Metadata.Labels["team"] != "e2e" || it.Metadata.Labels["workload"] != "batch" {

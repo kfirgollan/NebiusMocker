@@ -276,6 +276,7 @@ func backendGroup(g *mk8spb.NodeGroup, nodes []peer.NodeInstance) BackendNodeGro
 		ClusterID: g.GetMetadata().GetParentId(), NodeGroupID: g.GetMetadata().GetId(), Name: g.GetMetadata().GetName(),
 		Version: statusNode(g.GetStatus().GetVersion()).minor, Labels: nodeLabels(g),
 		DrainTimeout: g.GetStatus().GetStrategy().GetDrainTimeout().AsDuration(),
+		MaxPods:      int(t.GetMaxPods()),
 	}
 	for _, tn := range t.GetTaints() {
 		bg.Taints = append(bg.Taints, NodeTaint{Key: tn.GetKey(), Value: tn.GetValue(), Effect: taintEffects[tn.GetEffect()]})

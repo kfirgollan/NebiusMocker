@@ -67,7 +67,6 @@ func checkNodeGroupSupported(spec *mk8spb.NodeGroupSpec) error {
 	add(t.GetFollowsSpotPrice() != nil, p+"follows_spot_price", "spot pricing")
 	add(t.GetContainerRuntime().GetSociPullMode() != mk8spb.ContainerRuntime_SOCI_PULL_MODE_UNSPECIFIED,
 		p+"container_runtime.soci_pull_mode", "the SOCI snapshotter")
-	add(t.GetMaxPods() != 0, p+"max_pods", "a custom pod limit")
 	add(t.GetGpuSettings().GetDra(), p+"gpu_settings.dra", "Dynamic Resource Allocation")
 	add(len(spec.GetAutoRepair().GetConditions()) > 0, "spec.auto_repair.conditions", "custom auto-repair conditions")
 	return violations(v)

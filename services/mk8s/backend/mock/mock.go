@@ -79,7 +79,9 @@ func (b *Backend) DeleteCluster(_ context.Context, clusterID string) error {
 	return nil
 }
 
-// EnsureNodes implements domain.Backend: every node is ready.
+// EnsureNodes implements domain.Backend: every node is ready. No kubelet
+// runs, so the node-level settings (labels, taints, GPUs, MaxPods) have
+// nothing to apply to; the control plane still stores and echoes them.
 func (*Backend) EnsureNodes(_ context.Context, g domain.BackendNodeGroup) ([]domain.NodeReadiness, error) {
 	out := make([]domain.NodeReadiness, 0, len(g.Nodes))
 	for _, n := range g.Nodes {

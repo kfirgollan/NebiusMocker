@@ -27,7 +27,7 @@ func TestPreflightCreate(t *testing.T) {
 	badPreset := func() *mk8spb.NodeGroupSpec {
 		s := fixedSpec(1)
 		s.Template.Resources = preset("cpu-d3", "1vcpu-1gb")
-		s.Template.MaxPods = 32
+		s.Template.LocalDisks = &mk8spb.LocalDisksSpec{}
 		return s
 	}
 	tests := []struct {
@@ -42,16 +42,16 @@ func TestPreflightCreate(t *testing.T) {
 		{"inferred create", commonpb.PreflightCheckContext_UNSPECIFIED, "", "", fixedSpec(1), nil},
 		{
 			"every problem is reported", commonpb.PreflightCheckContext_CREATE, "", "", badPreset(),
-			[]string{"spec.template.max_pods", "spec.template.resources.preset"},
+			[]string{"spec.template.local_disks", "spec.template.resources.preset"},
 		},
 		{
 			"unknown preset is not checked", commonpb.PreflightCheckContext_CREATE, "spec.template.resources.preset", "", badPreset(),
-			[]string{"spec.template.max_pods"},
+			[]string{"spec.template.local_disks"},
 		},
 		{"everything unknown", commonpb.PreflightCheckContext_CREATE, "*", "", badPreset(), nil},
 		{
 			"unknown cluster skips cluster checks", commonpb.PreflightCheckContext_CREATE, "metadata.parent_id", "mk8scluster-e00later", badPreset(),
-			[]string{"spec.template.max_pods"},
+			[]string{"spec.template.local_disks"},
 		},
 		{"missing cluster", commonpb.PreflightCheckContext_CREATE, "", "mk8scluster-e00nope", fixedSpec(1), []string{""}},
 		{"delete", commonpb.PreflightCheckContext_DELETE, "", "", badPreset(), nil},

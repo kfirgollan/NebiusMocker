@@ -157,7 +157,6 @@ func TestCreateNodeGroupRejections(t *testing.T) {
 		{"soci", edit(func(s *mk8spb.NodeGroupSpec) {
 			s.Template.ContainerRuntime = &mk8spb.ContainerRuntime{SociPullMode: mk8spb.ContainerRuntime_LAZY}
 		}), "spec.template.container_runtime.soci_pull_mode"},
-		{"max pods", edit(func(s *mk8spb.NodeGroupSpec) { s.Template.MaxPods = 64 }), "spec.template.max_pods"},
 		{"dra", edit(func(s *mk8spb.NodeGroupSpec) { s.Template.GpuSettings = &mk8spb.GpuSettings{Dra: true} }), "spec.template.gpu_settings.dra"},
 		{"auto repair conditions", edit(func(s *mk8spb.NodeGroupSpec) {
 			s.AutoRepair = &mk8spb.NodeGroupAutoRepairSpec{Conditions: []*mk8spb.NodeAutoRepairCondition{{Type: "Ready"}}}
@@ -209,6 +208,7 @@ func TestCreateNodeGroupHonorsSupportedSettings(t *testing.T) {
 	spec.Template.Os = "ubuntu22.04"
 	spec.Template.NetworkInterfaces = []*mk8spb.NetworkInterfaceTemplate{{SubnetId: sameNetSubnet}}
 	spec.Template.Preemptible = &mk8spb.PreemptibleSpec{}
+	spec.Template.MaxPods = 48
 	spec.Template.ReservationPolicy = &mk8spb.ReservationPolicy{} // AUTO with no reservations: the default
 	spec.Strategy = &mk8spb.NodeGroupDeploymentStrategy{MaxSurge: &mk8spb.PercentOrCount{Value: &mk8spb.PercentOrCount_Percent{Percent: 25}}, DrainTimeout: durationpb.New(0)}
 	id := done(t)(e.createGroup(t.Context(), c.GetMetadata().GetId(), "gpu", spec))
@@ -218,6 +218,12 @@ func TestCreateNodeGroupHonorsSupportedSettings(t *testing.T) {
 	}
 	if gpus := e.backend.group(id).Nodes[0].GPUs; gpus != 8 {
 		t.Errorf("backend node GPUs = %d, want 8", gpus)
+	}
+	if mp := e.backend.group(id).MaxPods; mp != 48 {
+		t.Errorf("backend MaxPods = %d, want the template's 48", mp)
+	}
+	if mp := e.group(t, id).GetSpec().GetTemplate().GetMaxPods(); mp != 48 {
+		t.Errorf("spec.template.max_pods = %d, want 48 echoed", mp)
 	}
 	st := e.group(t, id).GetStatus().GetStrategy()
 	if st.GetMaxSurge().GetPercent() != 25 || st.GetMaxUnavailable().GetCount() != 1 || st.GetDrainTimeout().AsDuration() != 0 {
@@ -306,6 +312,7 @@ func TestUpdateNodeGroupRollout(t *testing.T) {
 			s.Template.InstanceMetadata = &mk8spb.InstanceMetadataTemplate{Labels: map[string]string{"a": "b"}}
 		}, true},
 		{"version", func(s *mk8spb.NodeGroupSpec) { s.Version = "1.35" }, true},
+		{"max pods", func(s *mk8spb.NodeGroupSpec) { s.Template.MaxPods = 64 }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -339,10 +346,10 @@ func TestUpdateNodeGroupRejections(t *testing.T) {
 	newer.Version = "1.36"
 	_, err := e.update(t.Context(), g, newer)
 	assertErr(t, err, errs.KindBadRequest, "spec.version")
-	karp := fixedSpec(1)
-	karp.Template.MaxPods = 32
-	_, err = e.update(t.Context(), g, karp)
-	assertErr(t, err, errs.KindBadRequest, "spec.template.max_pods")
+	disks := fixedSpec(1)
+	disks.Template.LocalDisks = &mk8spb.LocalDisksSpec{}
+	_, err = e.update(t.Context(), g, disks)
+	assertErr(t, err, errs.KindBadRequest, "spec.template.local_disks")
 	moved := proto.CloneOf(g.GetMetadata())
 	moved.ParentId = "mk8scluster-e00other"
 	_, err = e.svc.UpdateNodeGroup(t.Context(), domain.UpdateNodeGroupCmd{Metadata: moved, Spec: fixedSpec(1)})

@@ -144,7 +144,7 @@ nebius --profile admin iam auth-public-key generate --service-account-id %s --ou
 func scale(t *testing.T, e *env, tf *tfharness.Run, cpuID, clusterID string) {
 	t.Helper()
 	// 2 CPU + 1 GPU agents run; 4 CPU nodes would make 5 > maxAgents.
-	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{4, "batch", "4vcpu-16gb"}))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{4, "batch", "4vcpu-16gb", 0}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -162,7 +162,7 @@ func scale(t *testing.T, e *env, tf *tfharness.Run, cpuID, clusterID string) {
 	}
 	waitNodes(t, e, "", maxAgents)
 
-	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "batch", "4vcpu-16gb"}))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "batch", "4vcpu-16gb", 0}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -248,7 +248,7 @@ func rollout(t *testing.T, e *env, tf *tfharness.Run, cpuID string) {
 		}
 	}
 
-	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "2vcpu-8gb"}))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "2vcpu-8gb", 0}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -300,7 +300,7 @@ func inPlace(t *testing.T, e *env, tf *tfharness.Run, cpuID string) {
 	nodes := e.nodeNames(t, cpuID)
 	agents := e.d.k3sContainers(t, "nebius-mocker.node-group="+cpuID)
 	e.user.sh(t, "kubectl label node "+nodes[0]+" team.example.com/owner=alice") // a user's own label stays
-	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "4vcpu-16gb"}))
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "4vcpu-16gb", 0}))
 	tf.ExpectPlan(t, scalePlan)
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
@@ -329,4 +329,44 @@ func inPlace(t *testing.T, e *env, tf *tfharness.Run, cpuID string) {
 		}
 		return nil
 	})
+}
+
+// maxPods sets the CPU group's max_pods. It is a template field, so the
+// node is rolled out: the new node's kubelet runs with the limit, which
+// Kubernetes reports as the Node's pods capacity and allocatable. The GPU
+// group, without max_pods, keeps the default 110.
+func maxPods(t *testing.T, e *env, tf *tfharness.Run, cpuID string, gpuNodes []string) {
+	t.Helper()
+	const limit = 32
+	oldNodes := e.nodeNames(t, cpuID)
+	tf.Write(t, hcl(e.inst.ProjectID, cpuGroup{1, "stream", "2vcpu-8gb", limit}))
+	tf.ExpectPlan(t, scalePlan)
+	tf.Apply(t)
+	tf.ExpectNoChanges(t)
+	ng := e.nodeGroup(t, cpuID, func(s *mk8spb.NodeGroupStatus) bool {
+		return s.GetNodeCount() == 1 && s.GetReadyNodeCount() == 1 && s.GetOutdatedNodeCount() == 0
+	})
+	if got := ng.GetSpec().GetTemplate().GetMaxPods(); got != limit {
+		t.Fatalf("spec.template.max_pods = %d, want %d", got, limit)
+	}
+	newNodes := e.nodeNames(t, cpuID)
+	if len(newNodes) != 1 || slices.Contains(oldNodes, newNodes[0]) {
+		t.Fatalf("CPU nodes after the max_pods change = %v, want one new node (old %v)", newNodes, oldNodes)
+	}
+	nodes := waitNodes(t, e, "", 1+len(gpuNodes))
+	want := map[string]string{newNodes[0]: fmt.Sprint(limit)}
+	for _, n := range gpuNodes {
+		want[n] = "110"
+	}
+	for _, it := range nodes.Items {
+		w, ok := want[it.Metadata.Name]
+		if !ok {
+			t.Errorf("unexpected node %s after the max_pods rollout", it.Metadata.Name)
+			continue
+		}
+		if it.Status.Capacity["pods"] != w || it.Status.Allocatable["pods"] != w {
+			t.Errorf("node %s pods capacity %q allocatable %q, want %s", it.Metadata.Name,
+				it.Status.Capacity["pods"], it.Status.Allocatable["pods"], w)
+		}
+	}
 }

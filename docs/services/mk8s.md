@@ -22,7 +22,8 @@
 | `nebius_mk8s_v1_{cluster,node_group}` and `nebius_mk8s_v1alpha1_{cluster,node_group}` resources and data sources with the official provider | ✅ e2e: `test/terraform/mk8s` |
 | A working Kubernetes API: `k3s` backend (a k3s server per cluster, a k3s agent per node, bounded by the Docker host), Nebius IAM tokens through a TokenReview webhook mapped to `nebius:viewer`/`editor`/`admin`, GPU capacity | ✅ e2e: `test/mk8s` (`make e2e-mk8s`), see [k3s backend](#k3s-backend-real-kubernetes) |
 | Rolling node replacement in batches that honour `strategy` (`max_surge`, `max_unavailable`), progress in `status` | ✅ |
-| Quotas, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, `max_pods`, container runtime | Not yet (see [Not yet](#not-yet)) |
+| `template.max_pods` (8–256, default 110): stored and echoed, a change rolls the nodes out; the k3s backend runs each kubelet with it | ✅ e2e: `test/terraform/mk8s`, `make e2e-mk8s` |
+| Quotas, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, container runtime | Not yet (see [Not yet](#not-yet)) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 
@@ -89,7 +90,8 @@ happens, the mock's choice is marked *(mock)*.
   the mock's reading of the docs, the same for every minor)*.
 - **Update** scales the group (the fixed count, or the current count clamped to the autoscaling bounds) and **rolls the
   nodes out** when the template or the version changes. `taints` and `metadata` (the Kubernetes node labels) do not roll
-  out, as the proto says. `Upgrade` moves the group to the latest node image and the cluster's patch version, rolling its
+  out, as the proto says. `template.max_pods` is a template field like any other: setting, changing or unsetting it
+  rolls the nodes out, and the provider plans it as an in-place update (no `RequiresReplace`). `Upgrade` moves the group to the latest node image and the cluster's patch version, rolling its
   nodes out; it does nothing when the group is already there.
 - **Rollouts** replace the outdated nodes in batches, like a Kubernetes rolling update, per `status.strategy`:
   up to `max_surge` new nodes above the target are added first (a percentage rounds up), and old nodes are removed
@@ -100,6 +102,10 @@ happens, the mock's choice is marked *(mock)*.
   mocker's clock (default 0: one after the other); with a step, the operation runs detached and finishes with the last
   batch. A rollout that can neither add nor remove a node (new nodes never get ready) fails after ten checks, leaving the
   counts as they are. `NodeGroupStatus` has no progress tracker field; the counts are the progress.
+- **`max_pods`** must be 8–256 (`buf.validate`, `InvalidArgument` naming `max_pods`). Unset (0) means the service
+  default of 110 pods per node; like the service, the spec keeps 0 (the field is not `NON_EMPTY_DEFAULT` and the
+  provider attribute is not computed) and `NodeGroupStatus` has no field for it. It reaches the backend as
+  `BackendNodeGroup.MaxPods`; the `mock` backend runs no kubelet, so there is nothing to apply it to.
 - **Draining** (`drain_timeout`): removed nodes leave the backend's node set before their instances are deleted, and
   `BackendNodeGroup.DrainTimeout` carries the effective `status.strategy.drain_timeout` (0: no limit), so a Kubernetes
   backend drains them inside `EnsureNodes`, bounded by it. The `mock` backend runs no pods and has nothing to drain.
@@ -166,7 +172,7 @@ Create, Update and PreflightCheck. Nothing is silently ignored:
 
 - Cluster: `spec.control_plane.audit_logs`, `spec.control_plane.karpenter`, `spec.control_plane.authentication.oidc`.
 - Node group, under `spec.template.`: `nvlink`, `reservation_policy` (anything but `AUTO` with no reservation IDs),
-  `local_disks`, `spot_pricing_policy`, `follows_spot_price`, `container_runtime.soci_pull_mode`, `max_pods`,
+  `local_disks`, `spot_pricing_policy`, `follows_spot_price`, `container_runtime.soci_pull_mode`,
   `gpu_settings.dra`; and `spec.auto_repair.conditions`.
 
 #### Operations and errors
@@ -191,14 +197,13 @@ write (`test/contract/mk8s_authz_test.go`).
 ### Not yet
 
 - Quotas (`mk8s.cluster.count`, `mk8s.nodegroup.count`) and node-level compute quotas.
-- Audit logs, Karpenter and OIDC authentication; NVLink, capacity reservations, local disks, spot pricing, SOCI pull mode,
-  `max_pods` and DRA (all rejected, see above).
+- Audit logs, Karpenter and OIDC authentication; NVLink, capacity reservations, local disks, spot pricing, SOCI pull mode
+  and DRA (all rejected, see above).
 - Auto-repair: the setting is stored, but nodes never fail in the mock, so nothing is repaired (like compute's
   `recovery_policy`); `auto_repair.conditions` is rejected.
 - Real node images and GPU drivers: nodes are management-plane compute instances (no VM boots), and Kubernetes nodes
   exist only with a Kubernetes backend.
-- k3s backend: `public_endpoint.allowed_cidrs` is rejected, `etcd_cluster_size` 3 runs one server, `max_pods` is
-  rejected by the control plane (the agents could take `--max-pods`), and the mocker must run on the Docker host (it
+- k3s backend: `public_endpoint.allowed_cidrs` is rejected, `etcd_cluster_size` 3 runs one server, and the mocker must run on the Docker host (it
   reaches each API server on its published port).
 
 ## Terraform
@@ -275,7 +280,12 @@ the Docker Engine API (`pkg/dockerhost`, no `k3d` binary):
 - **Template labels and taints** are applied to the existing nodes in place (no rollout, as the service does): the
   backend records the group's labels and taints in Node annotations (`nebius-mocker/node-group-labels`,
   `nebius-mocker/node-group-taints`), so ones the group drops are removed and labels or taints others added stay. A new
-  version or a different GPU count recreates the agent.
+  version, a different GPU count or a different `max_pods` recreates the agent.
+- **`max_pods`** is passed to each agent as `--kubelet-arg=max-pods=N` (unset: no flag, the kubelet default 110, which
+  is the MK8s default), so the Node's `status.capacity.pods` and `allocatable.pods` are N. A change reaches the nodes the
+  way Nebius applies it, through a rollout: new nodes start with the new limit. *Approximated:* MK8s sizes each node's
+  pod CIDR from `max_pods` (`32 - ceil(log2(2 * max_pods))`); k3s gives every node a `/24` from `10.42.0.0/16`, so a
+  limit above 254 pods is bounded by the node's pod IPs.
 - **Nodes are node-group nodes only:** the server runs with `--disable-agent`, so `kubectl get nodes` lists exactly the
   node groups' compute instances, by name, and DaemonSets count only them.
 

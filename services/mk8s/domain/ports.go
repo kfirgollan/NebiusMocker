@@ -114,6 +114,12 @@ type BackendNodeGroup struct {
 	// status.strategy.drain_timeout; 0 means no limit. A backend that runs
 	// no pods (mock) has nothing to drain.
 	DrainTimeout time.Duration
+	// MaxPods is spec.template.max_pods, the kubelet's pod limit on every
+	// node of the group; 0 (unset) is the backend's default, 110 like the
+	// MK8s default. A change rolls the nodes out, so a backend applies it
+	// when it starts a node. A backend that runs no kubelet (mock) has
+	// nothing to apply it to.
+	MaxPods int
 }
 
 // BackendNode is one node: a compute instance the domain created for the

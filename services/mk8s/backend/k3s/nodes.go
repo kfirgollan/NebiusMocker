@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -47,7 +48,7 @@ func (b *Backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 	}
 	want := map[string]agentSpec{}
 	for _, n := range g.Nodes {
-		want[n.Name] = agentSpec{Image: image, Labels: g.Labels, Taints: g.Taints, GPUs: n.GPUs}
+		want[n.Name] = agentSpec{Image: image, Labels: g.Labels, Taints: g.Taints, GPUs: n.GPUs, MaxPods: g.MaxPods}
 	}
 	have, stale, unwanted := classifyAgents(existing, want)
 	if len(g.Nodes) == 0 {
@@ -81,7 +82,7 @@ func (b *Backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 
 // classifyAgents sorts the group's agent containers: have are running with
 // the wanted spec; stale are wanted nodes stopped or started with another
-// image, labels, taints or GPU count (recreated under the same name);
+// image, GPU count or max pods (recreated under the same name);
 // unwanted are nodes that left the group.
 func classifyAgents(existing []dockerhost.Container, want map[string]agentSpec) (have map[string]dockerhost.Container, stale, unwanted []dockerhost.Container) {
 	have = map[string]dockerhost.Container{}
@@ -172,6 +173,9 @@ func (b *Backend) startAgent(ctx context.Context, g domain.BackendNodeGroup, n d
 	}
 	for _, t := range spec.Taints {
 		cmd = append(cmd, "--node-taint="+taintString(t))
+	}
+	if spec.MaxPods > 0 {
+		cmd = append(cmd, "--kubelet-arg=max-pods="+strconv.Itoa(spec.MaxPods))
 	}
 	labels := b.clusterLabels(g.ClusterID, roleAgent)
 	labels[LabelNodeGroup] = g.NodeGroupID

@@ -64,6 +64,7 @@ type groupView struct {
 	TemplateLabels                       map[string]string
 	Platform, Preset, DiskType, ParentID string
 	DiskGiB                              int64
+	MaxPods                              int64 // v1 only
 }
 
 // sdkAPI reads clusters and node groups through the Go SDK.
@@ -107,6 +108,7 @@ func (a v1API) group(t *testing.T, id string) groupView {
 		TemplateLabels: sp.GetTemplate().GetMetadata().GetLabels(),
 		Platform:       sp.GetTemplate().GetResources().GetPlatform(), Preset: sp.GetTemplate().GetResources().GetPreset(),
 		DiskType: sp.GetTemplate().GetBootDisk().GetType().String(), DiskGiB: sp.GetTemplate().GetBootDisk().GetSizeGibibytes(),
+		MaxPods: sp.GetTemplate().GetMaxPods(),
 	}
 }
 
@@ -189,6 +191,7 @@ type cfg struct {
 	TemplateLabels               string
 	DataSources                  bool
 	DiskGiB                      int // boot disk size; changing it rolls the nodes out
+	MaxPods                      int // template max_pods (v1 only), 0 omits it; changing it rolls the nodes out
 }
 
 var cfgTmpl = template.Must(template.New("cfg").Parse(`
@@ -236,6 +239,9 @@ resource "nebius_mk8s_{{.V}}_node_group" "g" {
       type           = "NETWORK_SSD"
     }
     network_interfaces = [{ public_ip_address = {} }]
+{{- if .MaxPods}}
+    max_pods = {{.MaxPods}}
+{{- end}}
   }
 }
 {{if .DataSources}}
@@ -296,7 +302,8 @@ func runLifecycle(t *testing.T, inst *testkit.Instance, v string, api sdkAPI) {
 		}
 		g := api.group(t, ids["g"])
 		if g.State != "RUNNING" || g.ParentID != ids["c"] || g.Node != g.Ready || g.Node != g.Target || !wantNodes(g.Node) ||
-			g.Platform != "cpu-d3" || g.Preset != "2vcpu-8gb" || g.DiskType != "NETWORK_SSD" || g.DiskGiB != int64(c.DiskGiB) {
+			g.Platform != "cpu-d3" || g.Preset != "2vcpu-8gb" || g.DiskType != "NETWORK_SSD" || g.DiskGiB != int64(c.DiskGiB) ||
+			g.MaxPods != int64(c.MaxPods) {
 			t.Errorf("%s: node group = %+v", step, g)
 		}
 		if autoscale && (g.Min != 1 || g.Max != 3 || g.Fixed != 0) || !autoscale && (g.Fixed != fixed || g.Max != 0) {
@@ -352,6 +359,27 @@ func runLifecycle(t *testing.T, inst *testkit.Instance, v string, api sdkAPI) {
 	for _, id := range nodeIDs(t, instances, inst.ProjectID, firstGroup) {
 		if slices.Contains(before, id) {
 			t.Errorf("rollout: node instance %s was not replaced", id)
+		}
+	}
+
+	// max_pods (v1 only) is a template field: setting it, changing it and
+	// unsetting it each roll the nodes out, in place for the node group.
+	if v == "v1" {
+		for _, mp := range []int{64, 32, 0} {
+			before := nodeIDs(t, instances, inst.ProjectID, firstGroup)
+			c.MaxPods = mp
+			tf.writeConfig(t, c.render(t))
+			tf.expectPlan(t, map[string]string{cName: "no-op", gName: "update"})
+			tf.apply(t)
+			check(fmt.Sprintf("max_pods %d", mp), exactly(3), nil, map[string]string{"pool": "b"}, false, 3)
+			for _, id := range nodeIDs(t, instances, inst.ProjectID, firstGroup) {
+				if slices.Contains(before, id) {
+					t.Errorf("max_pods %d: node instance %s was not replaced", mp, id)
+				}
+			}
+		}
+		if got := tf.stateIDs(t)["g"]; got != firstGroup {
+			t.Errorf("node group was replaced by a max_pods change: %s -> %s", firstGroup, got)
 		}
 	}
 

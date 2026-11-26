@@ -115,7 +115,8 @@ func TestMK8sNodeGroupCreateErrors(t *testing.T) {
 		{"bad platform", func(s *mk8spb.NodeGroupSpec) { s.Template.Resources.Platform = "cpu-nope" }, "spec.template.resources"},
 		{"nvlink", func(s *mk8spb.NodeGroupSpec) { s.Template.Nvlink = &mk8spb.NVLinkSpec{} }, "spec.template.nvlink"},
 		{"local disks", func(s *mk8spb.NodeGroupSpec) { s.Template.LocalDisks = &mk8spb.LocalDisksSpec{} }, "spec.template.local_disks"},
-		{"max pods", func(s *mk8spb.NodeGroupSpec) { s.Template.MaxPods = 50 }, "spec.template.max_pods"},
+		{"max pods too low", func(s *mk8spb.NodeGroupSpec) { s.Template.MaxPods = 7 }, "max_pods"},
+		{"max pods too high", func(s *mk8spb.NodeGroupSpec) { s.Template.MaxPods = 257 }, "max_pods"},
 		{"version too new", func(s *mk8spb.NodeGroupSpec) { s.Version = "1.40" }, "spec.version"},
 		{"unknown subnet", func(s *mk8spb.NodeGroupSpec) {
 			s.Template.NetworkInterfaces = []*mk8spb.NetworkInterfaceTemplate{{SubnetId: "vpcsubnet-e00missing000000000"}}
@@ -267,12 +268,35 @@ func TestMK8sNodeGroupUpdateUpgradeDelete(t *testing.T) {
 		}
 	}
 
+	// max_pods is part of the template: a change rolls the nodes too, and
+	// the spec echoes it (unset stays 0, the service default 110 is not
+	// written back).
+	if got := e.getGroup(t, gid).GetSpec().GetTemplate().GetMaxPods(); got != 0 {
+		t.Errorf("max_pods before it is set = %d, want 0", got)
+	}
+	rolled := map[string]bool{}
+	for _, n := range e.nodes(t, gid) {
+		rolled[n.GetMetadata().GetId()] = true
+	}
+	g = e.getGroup(t, gid)
+	spec = g.GetSpec()
+	spec.Template.MaxPods = 64
+	opWait(t)(e.groups.Update(ctx, &mk8spb.UpdateNodeGroupRequest{Metadata: g.GetMetadata(), Spec: spec}))
+	if got := e.getGroup(t, gid).GetSpec().GetTemplate().GetMaxPods(); got != 64 {
+		t.Errorf("max_pods after update = %d, want 64", got)
+	}
+	for _, n := range e.nodes(t, gid) {
+		if rolled[n.GetMetadata().GetId()] {
+			t.Errorf("node %s was not replaced by the max_pods change", n.GetMetadata().GetName())
+		}
+	}
+
 	// Rejected updates.
 	g = e.getGroup(t, gid)
 	spec = g.GetSpec()
-	spec.Template.MaxPods = 10
+	spec.Template.MaxPods = 300
 	_, err := e.groups.Update(ctx, &mk8spb.UpdateNodeGroupRequest{Metadata: g.GetMetadata(), Spec: spec})
-	wantFailure(t, "max_pods update", err, codes.InvalidArgument, "max_pods")
+	wantFailure(t, "max_pods out of range", err, codes.InvalidArgument, "max_pods")
 	_, err = e.groups.Update(ctx, &mk8spb.UpdateNodeGroupRequest{Metadata: &commonpb.ResourceMetadata{Id: "mk8snodegroup-e00unknown000000000"}, Spec: fixedGroup(1)})
 	wantFailure(t, "update unknown", err, codes.NotFound)
 
