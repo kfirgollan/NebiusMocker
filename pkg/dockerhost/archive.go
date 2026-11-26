@@ -17,6 +17,8 @@ import (
 type File struct {
 	Path    string // absolute, in the container
 	Mode    int64
+	UID     int // owner of the file in the container (0 = root)
+	GID     int
 	Content []byte
 }
 
@@ -73,7 +75,7 @@ func buildTar(files []File) ([]byte, error) {
 		if mode == 0 {
 			mode = 0o644
 		}
-		hdr := &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Size: int64(len(f.Content))}
+		hdr := &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Uid: f.UID, Gid: f.GID, Size: int64(len(f.Content))}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, fmt.Errorf("docker: tar header %s: %w", name, err)
 		}

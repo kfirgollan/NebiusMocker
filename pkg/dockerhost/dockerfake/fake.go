@@ -35,6 +35,11 @@ type Fake struct {
 	failNext   map[string][]error
 	seq        int
 	nextPort   int
+
+	execs       []ExecCall
+	execHandler func(id string, e dockerhost.ExecSpec) dockerhost.ExecResult
+	specs       []dockerhost.ContainerSpec
+	autoExit    map[string]autoExit // by container name prefix
 }
 
 // New returns an empty fake daemon.
@@ -363,6 +368,7 @@ func (f *Fake) CreateContainer(_ context.Context, spec dockerhost.ContainerSpec)
 		c.files[file.Path] = slices.Clone(file.Content)
 	}
 	f.containers[id] = c
+	f.specs = append(f.specs, spec)
 	return id, nil
 }
 
@@ -396,6 +402,11 @@ func (f *Fake) StartContainer(_ context.Context, id string) error {
 	}
 	c.started = true
 	c.c.Running, c.c.Status = true, "running"
+	for prefix, ae := range f.autoExit {
+		if strings.HasPrefix(c.c.Name, prefix) {
+			c.c.Running, c.c.Status, c.c.ExitCode, c.logs = false, "exited", ae.code, ae.logs
+		}
+	}
 	return nil
 }
 

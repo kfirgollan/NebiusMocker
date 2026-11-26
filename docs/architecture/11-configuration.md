@@ -8,7 +8,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | Env | Default | Description |
 |---|---|---|
 | `NEBIUS_MOCKER_PROFILE` | `dev` | `dev` \| `ci` \| `strict` (see [06](06-iam-and-authorization.md#profiles-nebius_mocker_profile)) |
-| `NEBIUS_MOCKER_SERVICES` | all (all-in-one) | Comma list of areas: `iam,vpc,compute,mk8s,storage,registry,mysterybox,kms,dns,quotas,billing,capacity,msp,ai,applications,audit,logging,maintenance,tunnel` |
+| `NEBIUS_MOCKER_SERVICES` | all (all-in-one) | Comma list of areas: `iam,vpc,compute,mk8s,storage,registry,mysterybox,kms,dns,quotas,billing,capacity,msp-postgresql,msp-mlflow,ai,applications,audit,logging,maintenance,tunnel` |
 | `NEBIUS_MOCKER_LAZY` | `0` | Start modules on first request |
 | `NEBIUS_MOCKER_LISTEN` | `:4566` | Edge listener |
 | `NEBIUS_MOCKER_ADMIN_LISTEN` | `:4567` | Admin API |
@@ -89,6 +89,22 @@ answer.
 | `NEBIUS_MOCKER_MK8S_K3S_MEMORY_RESERVE` | `1Gi` | Host memory admission always leaves free |
 | `NEBIUS_MOCKER_MK8S_K3S_MAX_AGENTS` | unlimited | Cap on agents across all clusters |
 | `NEBIUS_MOCKER_MK8S_K3S_START_TIMEOUT` | `3m` | How long a server or agent may take to become ready |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND` | `mock` | Managed PostgreSQL data plane: `mock` or `docker` (real PostgreSQL + PgBouncer per cluster) |
+| `NEBIUS_MOCKER_MSP_MLFLOW_BACKEND` | `mock` | Managed MLflow data plane: `mock` or `docker` (a real MLflow tracking server per cluster) |
+| `NEBIUS_MOCKER_MSP_DOCKER_HOST` | `DOCKER_HOST` (only with a `docker` backend), else `/var/run/docker.sock`, else `~/.docker/run/docker.sock` | Docker Engine endpoint of the MSP docker backends |
+| `NEBIUS_MOCKER_MSP_BIND_IP` | `127.0.0.1` | Host address the clusters' ports are published on |
+| `NEBIUS_MOCKER_MSP_ENDPOINT_HOST` | `127.0.0.1` | Host in the clusters' endpoints and TLS certificates. `host.docker.internal` for clients in containers |
+| `NEBIUS_MOCKER_MSP_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA signing the clusters' certificates; clients trust `<dir>/ca.pem` |
+| `NEBIUS_MOCKER_MSP_START_TIMEOUT` | `3m` | How long a cluster's containers may take to become ready |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_IMAGES` | `16=postgres:16.11-alpine` | `version=image,…`: PostgreSQL version catalog and images (entries replace the defaults of the same version) |
+| `NEBIUS_MOCKER_MSP_PGBOUNCER_IMAGE` | `edoburu/pgbouncer:v1.25.2-p0` | Connection pooler image |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS` | `cpu-e2=2vcpu-8gb\|4vcpu-16gb\|…\|80vcpu-320gb` | `platform=<n>vcpu-<m>gb\|…;…`: resources catalog (listed platforms replace the defaults) |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_TYPES` | `network-ssd` | Accepted disk types, comma-separated |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS` | `3` | Largest `hosts.count` |
+| `NEBIUS_MOCKER_MSP_MLFLOW_IMAGE` | `ghcr.io/mlflow/mlflow:v2.22.0` | Official MLflow image the tracking servers are built from |
+| `NEBIUS_MOCKER_MSP_MLFLOW_VERSION` | `2.22.0` | `status.mlflow_version` (must match the image) |
+| `NEBIUS_MOCKER_MSP_MLFLOW_SIZES` | `medium=8vcpu-32gb` | `size=<n>vcpu-<m>gb,…`, smallest (the default) first |
+| `NEBIUS_MOCKER_MSP_S3_ENDPOINT` | `http://host.docker.internal:<S3 front port>` | Where MLflow containers reach the Object Storage S3 front |
 
 ## Seed data
 

@@ -18,6 +18,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/iam"
 	"github.com/kfirgollan/NebiusMocker/services/kms"
 	"github.com/kfirgollan/NebiusMocker/services/mk8s"
+	"github.com/kfirgollan/NebiusMocker/services/mspmlflow"
+	"github.com/kfirgollan/NebiusMocker/services/msppostgresql"
 	"github.com/kfirgollan/NebiusMocker/services/mysterybox"
 	"github.com/kfirgollan/NebiusMocker/services/quotas"
 	"github.com/kfirgollan/NebiusMocker/services/registry"
@@ -27,5 +29,5 @@ import (
 )
 
 func main() {
-	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New(), audit.New(), dns.New(), mk8s.New(), applications.New(), tunnel.New(), capacity.New(), billing.New(), quotas.New()))
+	os.Exit(mocker.Main(iam.New(), compute.New(), registry.New(), kms.New(), storage.New(), mysterybox.New(), vpc.New(), ai.New(), audit.New(), dns.New(), mk8s.New(), applications.New(), tunnel.New(), capacity.New(), billing.New(), quotas.New(), mspmlflow.New(), msppostgresql.New()))
 }

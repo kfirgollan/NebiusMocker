@@ -175,6 +175,9 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	if err := peer.Provide[peer.AccessKeys](deps.Peers, peer.AccessKeysKey, keys); err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
+	if err := peer.Provide[peer.SystemAccessKeys](deps.Peers, peer.SystemAccessKeysKey, keys); err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
 	if err := peer.Provide[peer.GroupMembers](deps.Peers, peer.GroupMembersKey, domain.NewGroupMembers(r.memberships, deps.Clock)); err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}

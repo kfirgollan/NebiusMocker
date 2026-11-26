@@ -7,7 +7,7 @@ run:
   timeout: 5m
   relative-path-mode: gomod
   tests: true
-  build-tags: [e2e, e2e_storage, e2e_images, e2e_registry] # lint the end-to-end tests too
+  build-tags: [e2e, e2e_storage, e2e_images, e2e_registry, e2e_msp] # lint the end-to-end tests too
 
 issues:
   # Report everything: one finding must never hide another on the same line.

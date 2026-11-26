@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PortBinding publishes one container port on the host.
@@ -24,6 +25,8 @@ type ContainerSpec struct {
 	Name       string
 	Image      string
 	Cmd        []string
+	Entrypoint []string // overrides the image entrypoint; nil keeps it
+	User       string   // container user ("70", "postgres"); "" keeps the image's
 	Env        []string // "K=V"
 	Labels     map[string]string
 	Privileged bool
@@ -33,6 +36,7 @@ type ContainerSpec struct {
 	Ports      []PortBinding
 	ExtraHosts []string
 	Memory     int64    // bytes, 0 = unlimited
+	NanoCPUs   int64    // CPU limit in 1e-9 CPUs, 0 = unlimited
 	Binds      []string // HostConfig.Binds, e.g. "volume:/path"
 	Files      []File
 }
@@ -53,6 +57,8 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 	payload := map[string]any{
 		"Image":        spec.Image,
 		"Cmd":          spec.Cmd,
+		"Entrypoint":   spec.Entrypoint,
+		"User":         spec.User,
 		"Env":          spec.Env,
 		"Labels":       spec.Labels,
 		"ExposedPorts": exposed,
@@ -62,6 +68,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 			"PortBindings": bindings,
 			"ExtraHosts":   spec.ExtraHosts,
 			"Memory":       spec.Memory,
+			"NanoCpus":     spec.NanoCPUs,
 			"Binds":        spec.Binds,
 			"NetworkMode":  spec.Network,
 		},
@@ -96,6 +103,17 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 func (c *Client) StartContainer(ctx context.Context, id string) error {
 	return c.do(ctx, request{
 		method: http.MethodPost, path: "/containers/" + url.PathEscape(id) + "/start",
+		accept: []int{http.StatusNotModified},
+	}, nil)
+}
+
+// StopContainer stops a running container, waiting up to timeout before Docker
+// kills it. A container that is already stopped is not an error; a missing one
+// is ErrNotFound.
+func (c *Client) StopContainer(ctx context.Context, id string, timeout time.Duration) error {
+	return c.do(ctx, request{
+		method: http.MethodPost, path: "/containers/" + url.PathEscape(id) + "/stop",
+		query:  url.Values{"t": {strconv.Itoa(int(timeout.Seconds()))}},
 		accept: []int{http.StatusNotModified},
 	}, nil)
 }

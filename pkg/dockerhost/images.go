@@ -1,6 +1,7 @@
 package dockerhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,60 @@ func readPullStream(ref string, body io.Reader) error {
 			return fmt.Errorf("docker: pull %s: %s", ref, line.Error)
 		case line.ErrorDetail != nil:
 			return fmt.Errorf("docker: pull %s: %s", ref, line.ErrorDetail.Message)
+		}
+	}
+}
+
+// ImageExists reports whether the daemon already has ref.
+func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
+	err := c.do(ctx, request{method: http.MethodGet, path: "/images/" + escapePath(ref) + "/json"}, nil)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// BuildImage builds an image tagged tag from dockerfile alone (no other files
+// in the build context) and labels it.
+func (c *Client) BuildImage(ctx context.Context, tag, dockerfile string, labels map[string]string) error {
+	archive, err := buildTar([]File{{Path: "/Dockerfile", Content: []byte(dockerfile)}})
+	if err != nil {
+		return err
+	}
+	rawLabels, err := json.Marshal(labels)
+	if err != nil {
+		return fmt.Errorf("docker: encode labels: %w", err)
+	}
+	q := url.Values{"t": {tag}, "labels": {string(rawLabels)}, "rm": {"1"}}
+	return c.do(ctx, request{
+		method: http.MethodPost, path: "/build", query: q,
+		body: bytes.NewReader(archive), contentType: "application/x-tar",
+	}, func(body io.Reader) error {
+		return readBuildStream(tag, body)
+	})
+}
+
+// readBuildStream consumes the JSON-lines build output and fails on an error line.
+func readBuildStream(tag string, body io.Reader) error {
+	dec := json.NewDecoder(io.LimitReader(body, maxBody))
+	for {
+		var line struct {
+			Error       string `json:"error"`
+			ErrorDetail *struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := dec.Decode(&line); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("docker: build %s: read stream: %w", tag, err)
+		}
+		switch {
+		case line.Error != "":
+			return fmt.Errorf("docker: build %s: %s", tag, line.Error)
+		case line.ErrorDetail != nil:
+			return fmt.Errorf("docker: build %s: %s", tag, line.ErrorDetail.Message)
 		}
 	}
 }

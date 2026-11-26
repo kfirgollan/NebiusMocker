@@ -93,6 +93,8 @@ type Config struct {
 	MK8s MK8sConfig
 	// Applications configures Nebius Applications (NEBIUS_MOCKER_APPLICATIONS_*).
 	Applications ApplicationsConfig
+	// MSP configures Managed PostgreSQL and Managed MLflow (NEBIUS_MOCKER_MSP_*).
+	MSP MSPConfig
 	// MK8sK3s configures the k3s backend of Managed Kubernetes
 	// (NEBIUS_MOCKER_MK8S_K3S_*).
 	MK8sK3s MK8sK3sConfig
@@ -236,6 +238,7 @@ func Default() Config {
 		DNS:          defaultDNS(),
 		MK8s:         defaultMK8s(),
 		Applications: defaultApplications(),
+		MSP:          defaultMSP(),
 		MK8sK3s:      defaultMK8sK3s(),
 		Auth:         defaultAuth(),
 	}
@@ -306,6 +309,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, billingParsers(&c.Billing)...)
 	parsers = append(parsers, mk8sParsers(&c.MK8s)...)
 	parsers = append(parsers, applicationsParsers(&c.Applications)...)
+	parsers = append(parsers, mspParsers(&c.MSP)...)
 	parsers = append(parsers, mk8sK3sParsers(&c.MK8sK3s)...)
 	parsers = append(parsers, tlsParsers(&c.TLS)...)
 	parsers = append(parsers, iamParsers(&c.IAM)...)
@@ -322,7 +326,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("NEBIUS_MOCKER_%s: %w", p.name, err)
 		}
 	}
-	if err := applyDockerHost(lookup, &c.MK8sK3s); err != nil {
+	if err := applyDockerHosts(lookup, &c); err != nil {
 		return Config{}, err
 	}
 	if _, err := c.SeededProjects(); err != nil {

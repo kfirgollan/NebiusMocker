@@ -109,6 +109,9 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := peer.Provide[peer.BucketResolver](deps.Peers, peer.BucketResolverKey, svc); err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
+	if err := peer.Provide[peer.Buckets](deps.Peers, peer.BucketsKey, svc); err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
 	storagepb.RegisterBucketServiceServer(reg, api.NewBucketHandler(svc))
 
 	reports, ok := deps.ObjStore.(domain.ReportStore)

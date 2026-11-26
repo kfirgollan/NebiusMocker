@@ -230,11 +230,29 @@ kubectl get nodes
 
 Details, the IAM → Kubernetes group mapping, capacity limits and Linux notes are in
 [docs/services/mk8s.md](docs/services/mk8s.md#k3s-backend-real-kubernetes).
+
+### Real PostgreSQL and MLflow clusters (MSP on Docker)
+
+With `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND=docker`, each Managed PostgreSQL cluster is real PostgreSQL (a primary,
+streaming replicas, PgBouncer) from the official `postgres` image; with `NEBIUS_MOCKER_MSP_MLFLOW_BACKEND=docker`, each
+Managed MLflow cluster is a real MLflow tracking server whose artifacts land in the cluster's Object Storage bucket.
+Both serve TLS from the mocker's local CA (`<user config dir>/nebius-mocker/ca/ca.pem`), and their endpoints are
+`127.0.0.1:<port>`:
+
+```bash
+NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND=docker NEBIUS_MOCKER_MSP_MLFLOW_BACKEND=docker make run
+# create a cluster with Terraform or `nebius msp postgresql v1alpha1 cluster create …`, then:
+psql "host=127.0.0.1 port=<port of status.connection_endpoints.private_read_write> sslmode=verify-full sslrootcert=<ca.pem> dbname=<db> user=<user>"
+```
+
+Details in [docs/services/msp-postgresql.md](docs/services/msp-postgresql.md#docker-backend-real-postgresql) and
+[docs/services/msp-mlflow.md](docs/services/msp-mlflow.md#docker-backend-a-real-tracking-server).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
 | `NEBIUS_MOCKER_DNS_LISTEN` | `:4653` | DNS responder for the mock's zones, UDP and TCP (`off` disables it) |
 | `NEBIUS_MOCKER_QUOTAS_LIMITS` | catalog defaults | Default quota limits, e.g. `compute.instance.count=2,compute.disk.size.network-ssd=4Ti` |
 | `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | Kubernetes data plane of mk8s clusters (`mock` runs no Kubernetes API); `NEBIUS_MOCKER_MK8S_VERSIONS` sets the version catalog (`1.34,1.35,1.36`) |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND` / `NEBIUS_MOCKER_MSP_MLFLOW_BACKEND` | `mock` | `docker` runs real PostgreSQL / MLflow clusters in Docker |
 | `NEBIUS_MOCKER_APPLICATIONS_PRODUCTS` | six `nebius/*` slugs | Marketplace product slugs an Applications K8s release may install |
 | `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL; TCP ports use `NEBIUS_MOCKER_AI_TCP_LISTEN`, `:4601`) |
 | `NEBIUS_MOCKER_AI_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA of the AI data plane; trust `<dir>/ca.pem` (`curl --cacert`) |
@@ -245,6 +263,7 @@ Details, the IAM → Kubernetes group mapping, capacity limits and Linux notes a
 make hooks   # once: install the pre-commit gate
 make check   # lint (layering rules included) + unit/contract/architecture tests with -race
 make e2e     # real terraform + official nebius provider against the mock
+make e2e-msp     # Managed PostgreSQL and MLflow on real containers: Terraform, psql, the mlflow client, the nebius CLI (Docker)
 make e2e-images  # compute images on RustFS with the Go SDK and the nebius CLI (Docker)
 make e2e-filesystems  # shared filesystems on RustFS mounted with rclone (FUSE in Docker) via a filesystem bucket
 make e2e-registry  # Harbor + nebius CLI + docker push/pull (needs Docker; Harbor is started and removed)

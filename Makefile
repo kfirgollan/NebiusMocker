@@ -5,7 +5,7 @@ GO        ?= go
 LINT      := $(GO) tool -modfile=tools/go.mod golangci-lint
 BIN_DIR   := bin
 
-.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-filesystems e2e-registry e2e-mk8s docker-image check hooks run tidy clean
+.PHONY: all build fmt lint test e2e e2e-storage e2e-images e2e-filesystems e2e-registry e2e-mk8s e2e-msp docker-image check hooks run tidy clean
 
 all: check
 
@@ -81,6 +81,18 @@ e2e-mk8s: ## Managed Kubernetes on k3s (needs Docker + terraform): Terraform, ge
 	@$(MK8S_CLEANUP)
 	@status=0; $(GO) test -tags e2e_mk8s -count=1 -timeout 60m -v ./test/mk8s/... || status=$$?; \
 	$(MK8S_CLEANUP); exit $$status
+
+# e2e-msp runs Managed PostgreSQL and Managed MLflow on the docker backends:
+# the in-process mocker starts real PostgreSQL, PgBouncer and MLflow
+# containers, and the user's tools (psql, nebius CLI, MLflow client, AWS CLI)
+# reach them through the published endpoints with the mocker's CA. The two
+# backend packages' own e2e_msp tests run first.
+MSP_CLEANUP := for l in nebius-mocker.test=msp nebius-mocker.backend=msp-postgresql nebius-mocker.backend=msp-mlflow; do docker ps -aq --filter label=$$l | xargs docker rm -f -v >/dev/null 2>&1 || true; done
+
+e2e-msp: ## Managed PostgreSQL + MLflow on Docker (needs Docker + terraform): Terraform, psql, CLI, MLflow client, S3
+	@$(MSP_CLEANUP)
+	@status=0; $(GO) test -tags e2e_msp -count=1 -timeout 60m -v ./services/msppostgresql/backend/... ./services/mspmlflow/backend/... ./test/msp/... || status=$$?; \
+	$(MSP_CLEANUP); exit $$status
 
 check: lint test ## Everything the pre-commit hook runs
 

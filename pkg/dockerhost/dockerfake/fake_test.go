@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost"
 	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost/dockerfake"
@@ -30,6 +31,10 @@ type api interface {
 	ReadFile(ctx context.Context, id, path string) ([]byte, error)
 	MemoryUsage(ctx context.Context, id string) (int64, error)
 	Logs(ctx context.Context, id string, tail int) (string, error)
+	Exec(ctx context.Context, id string, e dockerhost.ExecSpec) (dockerhost.ExecResult, error)
+	StopContainer(ctx context.Context, id string, timeout time.Duration) error
+	ImageExists(ctx context.Context, ref string) (bool, error)
+	BuildImage(ctx context.Context, tag, dockerfile string, labels map[string]string) error
 }
 
 var (

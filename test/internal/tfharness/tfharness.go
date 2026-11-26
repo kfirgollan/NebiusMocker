@@ -8,6 +8,7 @@ package tfharness
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -171,6 +172,25 @@ func (r *Run) Destroy(t *testing.T) {
 	if err := r.tf.Destroy(t.Context()); err != nil {
 		t.Fatalf("terraform destroy: %v", err)
 	}
+}
+
+// Output returns the value of the root module output name as a string
+// (`terraform output -json`).
+func (r *Run) Output(t *testing.T, name string) string {
+	t.Helper()
+	outs, err := r.tf.Output(t.Context())
+	if err != nil {
+		t.Fatalf("terraform output: %v", err)
+	}
+	meta, ok := outs[name]
+	if !ok {
+		t.Fatalf("terraform output %q is not defined", name)
+	}
+	var v string
+	if err := json.Unmarshal(meta.Value, &v); err != nil {
+		t.Fatalf("terraform output %q = %s: not a string: %v", name, meta.Value, err)
+	}
+	return v
 }
 
 // State returns address → attribute values of every resource and data source.

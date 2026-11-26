@@ -21,8 +21,8 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | Quotas | [quotas.md](quotas.md) | 1 | 6 | 1 / 2 | **T2** allowances with live usage, enforced across areas | — |
 | Billing | [billing.md](billing.md) | 5 | 14 | 1 / 2 | **T1** ✅ pricing policies, spot prices, calculator (v1, v1alpha1) from a configurable price list; one-time export `UNIMPLEMENTED` | — |
 | Capacity | [capacity.md](capacity.md) | 4 | 14 | 2 / 3 | **T2** ✅ implemented (seeded block groups and intervals on the mock clock, project allowances, resource advice) | Compute instances drawing from reservations (`followup-compute-reservations`) |
-| Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | T1 | — |
-| Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | T1 | — |
+| Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | **T2** ✅ implemented (clusters, backups, restore/PITR; `mock` backend); **T3** ✅ `docker` backend: real PostgreSQL + PgBouncer (`make e2e-msp`) | — |
+| Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | **T2** ✅ implemented (`mock` backend); **T3** ✅ `docker` backend: real MLflow tracking server, artifacts in Object Storage (`make e2e-msp`) | — |
 | AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
 | Applications | [applications.md](applications.md) | 2 | 7 | 1 / 2 | T1 k8s release ✅ implemented (inventory only), T0 rest | T2 with k3s (Phase B) |
 | Tunnel | [tunnel.md](tunnel.md) | 1 | 5 | 1 / 2 | T1 ✅ implemented (inventory only: no agent can connect) | Data plane if the agent protocol is documented |
