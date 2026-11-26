@@ -12,7 +12,7 @@
 | `nebius.capacity.v1.CapacityIntervalService`: Get, List (paged) | ✅ T2 |
 | `nebius.capacity.v1.ResourceAdviceService`: List (paged): reserved availability from the block groups | ✅ T1 (on-demand and preemptible: `UNKNOWN`, see below) |
 | Seeded catalog of block groups and intervals (`NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE`), with limits, states and continuous intervals computed from the mock clock | ✅ |
-| Reservations capability `peer.CapacityReservations` (`pkg/peer/capacity.go`): draws GPUs within the block group's limit and the project's allowance, and feeds `status.usage` and `ListResources` | ✅ provided; no consumer yet (see Not yet) |
+| Reservations capability `peer.CapacityReservations` (`pkg/peer/capacity.go`): draws GPUs within the block group's limit and the project's allowance, and feeds `status.usage` and `ListResources` | ✅ consumed by compute instances (`spec.reservation_policy`, see [compute](compute.md#instances-implemented)) |
 | Authorization: rules for every RPC (`capacity.allowances.*`, `capacity.blockGroups.*`, `capacity.intervals.*`, `capacity.resourceAdvice.list`); allowances checked on the project, block groups and advice on the tenant | ✅ |
 | `nebius_capacity_v1_capacity_allowance` resource and data source, `nebius_capacity_v1_capacity_block_group` data source with the official provider | ✅ e2e: `test/terraform/capacity` |
 | `nebius capacity capacity-block-group` / `capacity-interval` / `capacity-allowance` / `resource-advice` CLI flows from the docs | ✅ e2e: `test/cli/capacity` |
@@ -75,11 +75,10 @@ mock's choice is marked *(mock)*.
 
 ### Not yet
 
-- **Compute instances drawing from reservations: pending follow-up `followup-compute-reservations`.**
-  `peer.CapacityReservations` is provided. Compute will call `Reserve` when a non-preemptible GPU instance is created
-  or started under `AUTO`/`STRICT`, and `Release` when it is deleted (reservations stay held while a VM is stopped).
-  Until then, compute rejects `reservation_policy.reservation_ids` and `STRICT`, so `status.usage` is 0 and
-  `ListResources` is empty, which is true. mk8s node groups (`template.reservation_policy`) follow compute.
+- mk8s node groups: a `template.reservation_policy` other than the default (`AUTO`, no IDs) is still rejected by name
+  in mk8s. GPU nodes are compute instances under the default `AUTO`, so they draw from a matching block group like any
+  other instance.
+- Reservations are not re-checked when a block group's interval ends: instances keep the GPUs they hold.
 - On-demand and preemptible availability in resource advice: needs a physical-capacity model.
 - `ListByCapacityBlockGroup` does not list default allowances of projects that have none: the mocker has no
   tenant-to-projects lookup.
@@ -107,7 +106,8 @@ service (suggestions for where capacity exists).
 - An allowance is unique per (parent, block group), which is why the provider uses `GetByParentAndCapacityBlockGroup` for
   lookup. Its limit is not bounded at write time: the effective limit is `min(limit, current_limit)`, and it is enforced
   where capacity is consumed (`peer.CapacityReservations.Reserve`), as the project-limit docs describe.
-- Compute consumers draw GPUs through `peer.CapacityReservations` (pending `followup-compute-reservations`): `Reserve`
+- Compute instances draw GPUs through `peer.CapacityReservations` on create and start and release them on delete
+  (held while stopped; see compute.md): `Reserve`
   checks the block group's current limit and the project's effective limit, and an exhausted one is
   `RESOURCE_EXHAUSTED`. Reservations are stored per consumer and drive `status.usage` and `ListResources`.
 - `ResourceAdviceService` (T0 → M4) returns advice computed from the seeded pools.

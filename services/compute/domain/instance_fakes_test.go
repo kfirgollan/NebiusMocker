@@ -333,6 +333,17 @@ func (f *fakeGpu) Join(_ context.Context, clusterID, instanceID, projectID, plat
 	return []string{"spine-1", "leaf-" + clusterID}, nil
 }
 
+// Fabric returns fabric-2 (the fabric of the seeded H100 block group) for a
+// known cluster.
+func (f *fakeGpu) Fabric(_ context.Context, clusterID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.clusters[clusterID] {
+		return "", errs.NotFound(clusterID)
+	}
+	return "fabric-2", nil
+}
+
 func (f *fakeGpu) Leave(_ context.Context, clusterID, instanceID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -439,7 +450,9 @@ type instFixture struct {
 	gpu   *fakeGpu
 	// nvl holds testNVLGroup (GB200, size 2, testProject); NVL membership
 	// is the real NVLMembers over it.
-	nvl   *fakeNVLGroups
+	nvl *fakeNVLGroups
+	// res is the capacity reservations capability (instance_reservation_test.go).
+	res   *fakeReservations
 	fs    *fakeFS
 	nodes *fakeNodes
 	// images is the image lookup behind managed boot disks (empty unless a test seeds it).
@@ -471,7 +484,7 @@ func newInstFixture(t *testing.T) *instFixture {
 	f := &instFixture{
 		ctx:   t.Context(),
 		disks: &fakeDisks{}, net: newFakeNet(), gpu: newFakeGpu("computegpucluster-e00c1"), fs: newFakeFS("computefilesystem-e00f1", "computefilesystem-e00f2"),
-		nodes:  &fakeNodes{},
+		nodes: &fakeNodes{}, res: newFakeReservations(),
 		images: &fakeImageLookup{public: map[string]bool{PublicProjectID("e00"): true}},
 		perms:  &fakePerms{deny: map[string]bool{}}, ops: &deferOps{}, idx: &fakeOpIndex{},
 		clk: clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), gate: &fakeQuotaGate{},
@@ -493,7 +506,7 @@ func newInstFixture(t *testing.T) *instFixture {
 	}
 	f.svc, err = NewInstanceService(InstanceDeps{
 		Instances: f.repo, OpIndex: f.idx, Projects: projects, Platforms: platforms, Network: f.net, Disks: f.ds,
-		GpuClusters: f.gpu, NVLGroups: nvlMembers, Filesystems: f.fs, Nodes: f.nodes, Perms: f.perms, Quota: f.gate, Ops: f.ops, IDs: ids, Clock: f.clk,
+		GpuClusters: f.gpu, NVLGroups: nvlMembers, Reservations: f.res, Filesystems: f.fs, Nodes: f.nodes, Perms: f.perms, Quota: f.gate, Ops: f.ops, IDs: ids, Clock: f.clk,
 		PublicIPReleaseAfter: time.Hour,
 	})
 	if err != nil {

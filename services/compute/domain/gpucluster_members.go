@@ -70,6 +70,15 @@ func (m *GpuClusterMembers) Join(ctx context.Context, clusterID, instanceID, pro
 	return path, nil
 }
 
+// Fabric implements GpuClusterMembership.
+func (m *GpuClusterMembers) Fabric(ctx context.Context, clusterID string) (string, error) {
+	c, err := m.clusters.Get(ctx, clusterID)
+	if err != nil {
+		return "", err
+	}
+	return c.GetSpec().GetInfinibandFabric(), nil
+}
+
 // Leave implements GpuClusterMembership.
 func (m *GpuClusterMembers) Leave(ctx context.Context, clusterID, instanceID string) error {
 	if clusterID == "" {

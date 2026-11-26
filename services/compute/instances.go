@@ -30,7 +30,7 @@ func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 	svc, err := domain.NewInstanceService(domain.InstanceDeps{
 		Instances: instances, OpIndex: dal.NewInstanceOpIndex(deps.Store), Projects: deps.Authz,
 		Platforms: w.platforms, Network: peerNetwork{dir: deps.Peers}, Disks: w.disks,
-		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
+		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Reservations: peerReservations{dir: deps.Peers}, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
 		Perms: callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
 		Quota: peer.QuotaGateFor(deps.Peers),
 		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
@@ -114,6 +114,13 @@ type peerNetwork struct{ dir *peer.Directory }
 
 func (p peerNetwork) NetworkInterfaces() (peer.NetworkInterfaces, bool) {
 	return peer.Lookup(p.dir, peer.NetworkInterfacesKey)
+}
+
+// peerReservations finds the capacity reservations capability at call time.
+type peerReservations struct{ dir *peer.Directory }
+
+func (p peerReservations) CapacityReservations() (peer.CapacityReservations, bool) {
+	return peer.Lookup(p.dir, peer.CapacityReservationsKey)
 }
 
 // callerPerms checks the caller's own permission on a resource with the

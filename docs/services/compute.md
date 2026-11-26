@@ -35,6 +35,7 @@
 | Instances in GPU clusters (`spec.gpu_cluster`, `allow_gpu_clustering` presets, `status.infiniband_topology_path`; cluster delete refused while it has instances) | ✅ contract (`test/contract/compute_instance_gpucluster_test.go`) and Terraform |
 | Instances in NVL instance groups (`spec.nvl_instance_group_id` on `gpu-gb200` / `gpu-gb300`, immutable; `recovery_policy = ALWAYS` only in a group; group delete refused while it has instances) | ✅ domain, contract and Terraform |
 | Instances with shared filesystems (`spec.filesystems` through `FilesystemAttachments`; adding needs STOPPED, unique `mount_tag`, READ_WRITE only; removal and instance delete detach) | ✅ domain unit tests, contract (`test/contract/compute_instance_filesystem_test.go`), Terraform e2e (`test/terraform/compute/instance_filesystem_test.go`) |
+| Instances on capacity reservations (`spec.reservation_policy` `AUTO`/`FORBID`/`STRICT`, `reservation_ids` = capacity block group IDs, `status.reservation_id`; drawn on create/start through `peer.CapacityReservations`, held while stopped, released on delete) | ✅ domain, contract (`test/contract/compute_instance_reservation_test.go`), Terraform (`test/terraform/compute/reservation_test.go`), CLI (`test/computeinstance/reservation_e2e_test.go`) |
 | `nebius.compute.v1.PlatformService`: GetByName, List (paged) from a per-region catalog (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) | ✅ T2 |
 | Instance/platform authorization: `compute.instances.{get,list,create,update,delete,start,stop}`, `compute.platforms.{get,list}` on the project | ✅ |
 | `nebius_compute_v1_instance` resource and data source (CPU and GPU platforms, GPU cluster) with the official Terraform provider | ✅ e2e: `test/terraform/compute/instance_test.go` (`make e2e`) |
@@ -114,8 +115,9 @@ object-storage/objects/upload-download); they never write into the object store,
   reached; no
   capacity simulation (`NotEnoughResources`, `RESOURCE_EXHAUSTED`); no preemption, maintenance events
   (`MaintenanceService`, `status.maintenance_event_id`) or host recovery (so `recovery_policy = ALWAYS` has nothing to
-  retry); `NodeService`, capacity reservations, spot pricing policies and local disk passthrough are not implemented (their spec fields are
-  rejected by name, see above).
+  retry); `NodeService`, spot pricing policies and local disk passthrough are not implemented (their spec fields are
+  rejected by name, see above). Capacity reservations are implemented (see Scheduling fields), but reserved intervals
+  that end while an instance holds GPUs do not evict or stop it.
 - Platform presets, GPU memory, quota type names and region availability are illustrative.
 - Filesystems:
   - no VM mounts (virtiofs with the `mount_tag`): there are no VMs; mounts go through filesystem buckets and rclone;
@@ -276,24 +278,40 @@ marks no spec attribute computed); everything synthesized lives in `status`.
   (`FilesystemAttachments`: same project, `READY`, `READ_WRITE` only). Adding one on Update needs the instance
   `STOPPED` (docs `compute/storage/use`); removing one, or deleting the instance, detaches it (never deletes it).
 - **Scheduling fields**: `preemptible` needs a platform with `allowed_for_preemptibles` and `recovery_policy = FAIL`
-  (docs); `on_preemption` is `STOP`. Nothing is ever preempted (no capacity simulation). `reservation_policy`: `AUTO`
-  and `FORBID` are accepted and hold trivially (there are no reservations); `STRICT` is `FAILED_PRECONDITION` because
-  no reservation can exist. `on_demand` / `follows_spot_price` are echoed (no billing). `recovery_policy`
-  `RECOVER`/`FAIL` are echoed (hosts never fail).
+  (docs); `on_preemption` is `STOP`. Nothing is ever preempted (no capacity simulation). `on_demand` /
+  `follows_spot_price` are echoed (no billing). `recovery_policy` `RECOVER`/`FAIL` are echoed (hosts never fail).
+- **Capacity reservations** (`reservation_policy`, docs `compute/virtual-machines/reservations`;
+  `domain/instance_reservation.go`): `reservation_ids` are capacity block group IDs (services/capacity), tried in order.
+  GPUs are drawn through `peer.CapacityReservations`, which enforces the group's current limit and the project's
+  capacity allowance, and shows up in the group's `status.usage` and `ListResources`.
+  - `AUTO` (default) draws from a reservation that fits (the named ones, else any active matching group of the tenant:
+    region, platform, and the GPU cluster's fabric) and otherwise runs in the common pool. `FORBID` uses only the pool;
+    `reservation_ids` with `FORBID` is `INVALID_ARGUMENT`. `STRICT` fails the request with `RESOURCE_EXHAUSTED` when no
+    reservation fits (`FAILED_PRECONDITION` when the capacity module is disabled).
+  - An unknown ID is `NOT_FOUND` and one for another platform, region or fabric is `INVALID_ARGUMENT` on
+    `spec.reservation_policy.reservation_ids[i]`, under `AUTO` too: the docs only describe falling back for exhausted or
+    inactive reservations.
+  - Only regular GPU instances use reservations: `STRICT` or `reservation_ids` on a CPU or preemptible instance is
+    `INVALID_ARGUMENT`. Quantity is the preset's GPU count.
+  - Drawn on Create and on Start (also an Update that starts the instance) when the instance holds none. Held while
+    `STOPPED` (docs: reserved GPUs "remain available, even if a VM is stopped"), released on Delete and on a failed
+    Create. `status.reservation_id` is the block group drawn from (empty: the common pool).
+  - `reservation_policy` can change only while `STOPPED` (`FAILED_PRECONDITION` otherwise, docs: stop the VM first);
+    changing it or the preset drops the held reservation, and the next start draws again.
 - **NVL instance groups**: `spec.nvl_instance_group_id` joins the group on Create (`NVLMembership`: same project, the
   platform's `nvl_instance_group_type` equals the group's `spec.type`, fewer than `spec.size` members, else
   `NOT_FOUND` / `INVALID_ARGUMENT` on `spec.nvl_instance_group_id` / `FAILED_PRECONDITION`); Delete leaves it. The field
   is immutable on Update. `recovery_policy = ALWAYS` is `INVALID_ARGUMENT` without a group (instance.proto: "Available
   only for instances in nvlinstancegroup").
 - **Rejected by name** (`INVALID_ARGUMENT`, "… is not implemented in NebiusMocker yet"):
-  `reservation_policy.reservation_ids`, `spot_pricing_policy`, `local_disks.passthrough_group.requested = true`.
+  `spot_pricing_policy`, `local_disks.passthrough_group.requested = true`.
 - `cloud_init_user_data` (sensitive) is stored and echoed, redacted in audit events, and never executed.
 - `BatchGet` (up to 1000 IDs) authorizes each ID (`compute.instances.get`) and returns a `google.rpc.Status`
   (`NOT_FOUND`, `PERMISSION_DENIED`) in place of each unreadable instance. `ListInstancesByNVLInstanceGroup` lists a
   group's members in creation order (`NOT_FOUND` for an unknown group). `ListOperationsByParent` lists a project's instance operations,
   newest first, including deleted instances.
-- Ordering: NIC addresses are bound first (VPC), then the GPU cluster, the NVL group and filesystems, then disks and the instance in
-  one store transaction; a failure undoes the earlier steps. The operations engine serializes per instance.
+- Ordering: NIC addresses are bound first (VPC), then the GPU cluster, the NVL group and filesystems, then the capacity
+  reservation, then disks and the instance in one store transaction; a failure undoes the earlier steps. The operations engine serializes per instance.
 
 #### Managed node instances (mk8s)
 
@@ -546,8 +564,11 @@ NVLink domain; nothing is allocated.
   - GPU clusters: `compute.gpucluster.count`.
 
   The check runs in each create's or update's synchronous step, so an exceeded quota is the RPC's `RESOURCE_EXHAUSTED`.
-  There is no memory quota (Nebius documents none). GPUs are never skipped as "with reservations", since capacity
-  reservations are not implemented.
+  There is no memory quota (Nebius documents none). GPUs drawn from a capacity reservation (`status.reservation_id`
+  set) are not charged to `compute.instance.gpu.<family>` (docs: "GPUs allocated from reservations do not count towards
+  quotas on the number of GPUs"); the reservation is decided before the quota claim, and a refused claim releases it.
+  The instance and its disks are still charged. Changing the policy of a stopped reserved VM so that it leaves the
+  reservation claims its GPUs.
 
 ## Terraform
 

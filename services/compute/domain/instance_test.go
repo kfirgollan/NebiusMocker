@@ -427,15 +427,15 @@ func TestInstanceCreateValidation(t *testing.T) {
 			s.LocalDisks = &computepb.LocalDisksSpec{Request: &computepb.LocalDisksSpec_PassthroughGroup{PassthroughGroup: &computepb.PassthroughGroupRequest{Requested: true}}}
 		}, errs.KindBadRequest, "spec.local_disks.passthrough_group"},
 		{"recovery ALWAYS", func(s *computepb.InstanceSpec) { s.RecoveryPolicy = computepb.InstanceRecoveryPolicy_ALWAYS }, errs.KindBadRequest, "spec.recovery_policy"},
-		{"reservation ids", func(s *computepb.InstanceSpec) {
+		{"reservation ids on a CPU platform", func(s *computepb.InstanceSpec) {
 			s.ReservationPolicy = &computepb.ReservationPolicy{Policy: computepb.ReservationPolicy_AUTO, ReservationIds: []string{"r1"}}
 		}, errs.KindBadRequest, "spec.reservation_policy.reservation_ids"},
 		{"reservation ids with FORBID", func(s *computepb.InstanceSpec) {
 			s.ReservationPolicy = &computepb.ReservationPolicy{Policy: computepb.ReservationPolicy_FORBID, ReservationIds: []string{"r1"}}
 		}, errs.KindBadRequest, "spec.reservation_policy.reservation_ids"},
-		{"reservation STRICT", func(s *computepb.InstanceSpec) {
+		{"reservation STRICT on a CPU platform", func(s *computepb.InstanceSpec) {
 			s.ReservationPolicy = &computepb.ReservationPolicy{Policy: computepb.ReservationPolicy_STRICT}
-		}, errs.KindBadState, ""},
+		}, errs.KindBadRequest, "spec.reservation_policy.policy"},
 		{"preemptible on CPU platform", func(s *computepb.InstanceSpec) {
 			s.Preemptible = &computepb.PreemptibleSpec{OnPreemption: computepb.PreemptibleSpec_STOP}
 			s.RecoveryPolicy = computepb.InstanceRecoveryPolicy_FAIL

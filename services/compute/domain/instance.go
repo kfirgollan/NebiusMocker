@@ -39,6 +39,9 @@ type InstanceDeps struct {
 	GpuClusters GpuClusterMembership
 	// NVLGroups is joined by instances with spec.nvl_instance_group_id.
 	NVLGroups NVLMembership
+	// Reservations draws GPUs from capacity block groups
+	// (spec.reservation_policy, instance_reservation.go).
+	Reservations Reservations
 	// Filesystems records spec.filesystems attachments.
 	Filesystems FilesystemAttachments
 	// Nodes records the instances managed by mk8s node groups (nodes.go).
@@ -57,7 +60,7 @@ type InstanceDeps struct {
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
-		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Reservations == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
 	}
 	if d.PublicIPReleaseAfter <= 0 {
@@ -336,18 +339,26 @@ func (s *InstanceService) preparePower(ctx context.Context, id string, m powerMo
 	if st := cur.GetStatus().GetState(); st != m.from {
 		return errs.BadState(id, fmt.Sprintf("instance is %s: only a %s instance can be %s", st, m.from, m.verb))
 	}
+	held := cur.GetStatus().GetReservationId()
+	reservation := held
+	if m.to == computepb.InstanceStatus_RUNNING {
+		if reservation, err = s.reservationOnStart(ctx, cur); err != nil {
+			return err
+		}
+	}
 	nics, err := s.bindAll(ctx, cur, cur.GetSpec(), m.to, nil)
 	if err != nil {
-		return err
+		return errors.Join(err, s.restoreReservation(ctx, cur, held, reservation))
 	}
 	err = s.mutate(ctx, id, func(_ InstanceTx, cur *computepb.Instance) error {
 		cur.Status.NetworkInterfaces = nics
+		cur.Status.ReservationId = reservation
 		setInstanceState(cur, m.via)
 		return nil
 	})
 	if err != nil {
 		_, restoreErr := s.bindAll(ctx, cur, cur.GetSpec(), m.from, nil)
-		return errors.Join(err, restoreErr)
+		return errors.Join(err, restoreErr, s.restoreReservation(ctx, cur, held, reservation))
 	}
 	return nil
 }
@@ -472,7 +483,8 @@ func (s *InstanceService) prepareCreate(ctx context.Context, inst *computepb.Ins
 	inst.Status.NetworkInterfaces = nics
 	id := inst.GetMetadata().GetId()
 	undo := func(err error, fs []string) error {
-		return errors.Join(err, s.detachFilesystems(ctx, id, fs), s.leaveGpuCluster(ctx, inst), s.leaveNVLGroup(ctx, inst), s.releaseAll(ctx, id, inst.GetSpec()))
+		return errors.Join(err, s.detachFilesystems(ctx, id, fs), s.leaveGpuCluster(ctx, inst), s.leaveNVLGroup(ctx, inst),
+			s.releaseReservation(ctx, id), s.releaseAll(ctx, id, inst.GetSpec()))
 	}
 	if err := s.joinGpuCluster(ctx, inst); err != nil {
 		return undo(err, nil)
@@ -486,6 +498,9 @@ func (s *InstanceService) prepareCreate(ctx context.Context, inst *computepb.Ins
 	}
 	plan, err := s.planDisks(ctx, inst, nil, inst.GetSpec())
 	if err != nil {
+		return undo(err, fs)
+	}
+	if inst.Status.ReservationId, err = s.drawReservation(ctx, inst); err != nil {
 		return undo(err, fs)
 	}
 	err = s.admitCreate(ctx, inst, plan, func(ctx context.Context) error {
@@ -521,6 +536,9 @@ func (s *InstanceService) remove(ctx context.Context, id string) error {
 		return err
 	}
 	if err := s.leaveNVLGroup(ctx, cur); err != nil {
+		return err
+	}
+	if err := s.releaseReservation(ctx, id); err != nil {
 		return err
 	}
 	return s.d.Instances.Txn(ctx, func(tx InstanceTx) error {

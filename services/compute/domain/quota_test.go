@@ -102,11 +102,19 @@ func TestInstanceCreateClaims(t *testing.T) {
 			},
 		},
 		{
-			name: "gpu vm charges its gpus and no vcpus",
-			spec: gpuSpec(),
+			name: "gpu vm in the common pool charges its gpus and no vcpus",
+			spec: reservationSpec(computepb.ReservationPolicy_FORBID),
 			want: map[string]int64{
 				quota.ComputeInstanceCount: 1, "compute.instance.gpu.h100": 8,
 				quota.ComputeDiskCount: 1, ssdQuota: 20 * gib,
+			},
+		},
+		{
+			name: "gpu vm drawing from a reservation takes no gpu quota",
+			spec: gpuSpec(), // AUTO: the fake H100 block group has room
+			want: map[string]int64{
+				quota.ComputeInstanceCount: 1,
+				quota.ComputeDiskCount:     1, ssdQuota: 20 * gib,
 			},
 		},
 		{
@@ -142,6 +150,9 @@ func TestInstanceCreateClaims(t *testing.T) {
 			}
 			if n := r.diskCount(); n != 0 {
 				t.Fatalf("%d disks stored after a refused claim, want none", n)
+			}
+			if n := len(r.res.holds); n != 0 {
+				t.Fatalf("%d reservations held after a refused claim, want none", n)
 			}
 		})
 	}
@@ -454,9 +465,12 @@ func TestQuotaUsageCountsCreatesAndDeletes(t *testing.T) {
 		t.Fatalf("usage of an empty store = %v", got)
 	}
 	cpu := f.mustCreate(t, "cpu", baseSpec())
-	gpu := gpuSpec()
+	gpu := reservationSpec(computepb.ReservationPolicy_FORBID) // the common pool: charges its GPUs
 	gpu.BootDisk = managedDisk("gpu-boot", 20)
 	f.mustCreate(t, "gpu", gpu)
+	reserved := gpuSpec() // AUTO, draws from the fake H100 block group: no GPU quota
+	reserved.BootDisk = managedDisk("reserved-boot", 20)
+	f.mustCreate(t, "reserved", reserved)
 	pre := baseSpec()
 	pre.Resources = &computepb.ResourcesSpec{Platform: "gpu-l40s-a", Size: presetSize("1gpu-8vcpu-32gb")}
 	pre.Preemptible = &computepb.PreemptibleSpec{OnPreemption: computepb.PreemptibleSpec_STOP}
@@ -482,9 +496,9 @@ func TestQuotaUsageCountsCreatesAndDeletes(t *testing.T) {
 	}
 
 	want := map[string]uint64{
-		quota.ComputeInstanceCount: 2, quota.ComputeInstancePreemptibleCount: 1,
+		quota.ComputeInstanceCount: 3, quota.ComputeInstancePreemptibleCount: 1,
 		quota.ComputeInstanceNonGPUVCPU: 2, "compute.instance.gpu.h100": 8,
-		quota.ComputeDiskCount: 4, ssdQuota: uint64(67 * gib),
+		quota.ComputeDiskCount: 5, ssdQuota: uint64(87 * gib),
 		quota.ComputeDiskSnapshotCount: 1, quota.ComputeDiskSnapshotSize: uint64(3 * gib),
 		quota.ComputeFilesystemCount: 1, fsQuota: uint64(12 * gib),
 		quota.ComputeGPUClusterCount: 1,
@@ -497,10 +511,10 @@ func TestQuotaUsageCountsCreatesAndDeletes(t *testing.T) {
 	if err := f.remove(cpu.GetMetadata().GetId()); err != nil {
 		t.Fatal(err)
 	}
-	want[quota.ComputeInstanceCount] = 1
+	want[quota.ComputeInstanceCount] = 2
 	delete(want, quota.ComputeInstanceNonGPUVCPU)
-	want[quota.ComputeDiskCount] = 3
-	want[ssdQuota] = uint64(47 * gib)
+	want[quota.ComputeDiskCount] = 4
+	want[ssdQuota] = uint64(67 * gib)
 	if diff := cmp.Diff(want, usageMap(t, u)); diff != "" {
 		t.Fatalf("usage after a delete (-want +got):\n%s", diff)
 	}

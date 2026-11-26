@@ -45,6 +45,8 @@ type PlatformPage struct {
 type PlatformPreset struct {
 	Platform *computepb.Platform
 	Preset   *computepb.Preset
+	// Region is the project's region the platform was resolved in.
+	Region string
 }
 
 type regionPlatforms struct {
@@ -235,7 +237,7 @@ func (s *PlatformService) Resolve(ctx context.Context, projectID, platform, pres
 		var names []string
 		for _, pr := range p.GetSpec().GetPresets() {
 			if pr.GetName() == preset {
-				return PlatformPreset{Platform: forProject(p, projectID), Preset: proto.CloneOf(pr)}, nil
+				return PlatformPreset{Platform: forProject(p, projectID), Preset: proto.CloneOf(pr), Region: rp.name}, nil
 			}
 			names = append(names, pr.GetName())
 		}

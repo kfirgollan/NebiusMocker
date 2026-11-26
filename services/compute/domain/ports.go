@@ -203,6 +203,10 @@ type GpuClusterMembership interface {
 	// Leave removes instanceID from the cluster. A missing cluster or member
 	// is not an error.
 	Leave(ctx context.Context, clusterID, instanceID string) error
+	// Fabric returns the cluster's InfiniBand fabric (errs.NotFound for a
+	// missing cluster). Reservations of instances in the cluster draw from
+	// capacity block groups on that fabric.
+	Fabric(ctx context.Context, clusterID string) (string, error)
 }
 
 // KindFilesystem is the NID type prefix of shared filesystems.

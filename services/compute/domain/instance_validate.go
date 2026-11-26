@@ -72,12 +72,8 @@ func checkUnsupported(spec *computepb.InstanceSpec) error {
 	case spec.GetLocalDisks().GetPassthroughGroup().GetRequested():
 		return notImplemented("spec.local_disks.passthrough_group", "Local disk passthrough")
 	}
-	rp := spec.GetReservationPolicy()
-	switch {
-	case len(rp.GetReservationIds()) > 0 && rp.GetPolicy() == computepb.ReservationPolicy_FORBID:
-		return errs.BadRequest(errs.Violation{Field: "spec.reservation_policy.reservation_ids", Message: "must be empty when policy is FORBID"})
-	case len(rp.GetReservationIds()) > 0:
-		return notImplemented("spec.reservation_policy.reservation_ids", "Capacity reservations (capacity blocks)")
+	if rp := spec.GetReservationPolicy(); len(rp.GetReservationIds()) > 0 && rp.GetPolicy() == computepb.ReservationPolicy_FORBID {
+		return errs.BadRequest(errs.Violation{Field: reservationIDsField, Message: "must be empty when policy is FORBID"})
 	}
 	return nil
 }
@@ -100,12 +96,7 @@ func checkScheduling(spec *computepb.InstanceSpec, pp PlatformPreset) error {
 			return errs.BadRequest(errs.Violation{Field: "spec.reservation_policy.policy", Message: "preemptible instances cannot use reservations"})
 		}
 	}
-	if rp.GetPolicy() == computepb.ReservationPolicy_STRICT {
-		// STRICT runs the instance only in a reservation. The mocker has
-		// none (no capacity service), so it can never be satisfied.
-		return errs.BadState("", "reservation_policy STRICT: no capacity reservation is available to this project (NebiusMocker has no capacity blocks)")
-	}
-	return nil
+	return checkReservationPolicy(spec, pp)
 }
 
 // checkServiceAccount requires a service account of the instance's project.

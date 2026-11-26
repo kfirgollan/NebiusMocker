@@ -78,13 +78,14 @@ func snapshotAmounts(s *computepb.DiskSnapshot) map[string]int64 {
 	return map[string]int64{quota.ComputeDiskSnapshotCount: 1, quota.ComputeDiskSnapshotSize: s.GetStatus().GetStorageSizeBytes()}
 }
 
-// presetAmounts is the consumption of one instance of spec running on preset
-// pp: a preemptible VM counts apart from a regular one; non-GPU platforms
-// charge their vCPUs, and GPU platforms their GPUs (regular VMs only). The
-// mocker has no capacity reservations, so no instance draws from one and none
-// is exempt from the GPU quota.
-func presetAmounts(spec *computepb.InstanceSpec, pp PlatformPreset) map[string]int64 {
-	res := pp.Preset.GetResources()
+// presetAmounts is the consumption of inst running on preset pp: a
+// preemptible VM counts apart from a regular one; non-GPU platforms charge
+// their vCPUs, and GPU platforms their GPUs (regular VMs only, and not while
+// the VM draws from a capacity reservation, status.reservation_id: docs
+// "GPUs allocated from reservations do not count towards quotas on the
+// number of GPUs").
+func presetAmounts(inst *computepb.Instance, pp PlatformPreset) map[string]int64 {
+	spec, res := inst.GetSpec(), pp.Preset.GetResources()
 	out := map[string]int64{quota.ComputeInstanceCount: 1}
 	if spec.GetPreemptible() != nil {
 		delete(out, quota.ComputeInstanceCount)
@@ -94,26 +95,27 @@ func presetAmounts(spec *computepb.InstanceSpec, pp PlatformPreset) map[string]i
 	switch {
 	case gpu == "":
 		out[quota.ComputeInstanceNonGPUVCPU] = int64(res.GetVcpuCount())
-	case spec.GetPreemptible() == nil:
+	case spec.GetPreemptible() == nil && inst.GetStatus().GetReservationId() == "":
 		out[gpu] = int64(res.GetGpuCount())
 	}
 	return out
 }
 
-// instanceAmounts resolves the preset of spec in projectID.
-func (s *InstanceService) instanceAmounts(ctx context.Context, projectID string, spec *computepb.InstanceSpec) (map[string]int64, error) {
-	pp, err := s.d.Platforms.Resolve(ctx, projectID, spec.GetResources().GetPlatform(), spec.GetResources().GetPreset())
+// instanceAmounts resolves the preset of inst in its project.
+func (s *InstanceService) instanceAmounts(ctx context.Context, inst *computepb.Instance) (map[string]int64, error) {
+	spec := inst.GetSpec()
+	pp, err := s.d.Platforms.Resolve(ctx, inst.GetMetadata().GetParentId(), spec.GetResources().GetPlatform(), spec.GetResources().GetPreset())
 	if err != nil {
 		return nil, err
 	}
-	return presetAmounts(spec, pp), nil
+	return presetAmounts(inst, pp), nil
 }
 
 // admitCreate claims the instance and the managed disks its plan creates,
 // then runs apply, the transaction that stores them.
 func (s *InstanceService) admitCreate(ctx context.Context, inst *computepb.Instance, plan diskPlan, apply func(ctx context.Context) error) error {
 	project := inst.GetMetadata().GetParentId()
-	amounts, err := s.instanceAmounts(ctx, project, inst.GetSpec())
+	amounts, err := s.instanceAmounts(ctx, inst)
 	if err != nil {
 		return err
 	}
@@ -130,11 +132,11 @@ func (s *InstanceService) admitCreate(ctx context.Context, inst *computepb.Insta
 // apply, the transaction that stores them.
 func (s *InstanceService) admitUpdate(ctx context.Context, stored, updated *computepb.Instance, plan diskPlan, apply func(ctx context.Context) error) error {
 	project := stored.GetMetadata().GetParentId()
-	prev, err := s.instanceAmounts(ctx, project, stored.GetSpec())
+	prev, err := s.instanceAmounts(ctx, stored)
 	if err != nil {
 		return err
 	}
-	next, err := s.instanceAmounts(ctx, project, updated.GetSpec())
+	next, err := s.instanceAmounts(ctx, updated)
 	if err != nil {
 		return err
 	}
@@ -239,7 +241,7 @@ func (u *QuotaUsage) countInstances(ctx context.Context, add func(project string
 		pp, err := u.platforms.Resolve(ctx, project, spec.GetResources().GetPlatform(), spec.GetResources().GetPreset())
 		switch {
 		case err == nil:
-			add(project, presetAmounts(spec, pp))
+			add(project, presetAmounts(inst, pp))
 		case errs.IsKind(err, errs.KindBadRequest) || errs.IsKind(err, errs.KindNotFound):
 			add(project, map[string]int64{quota.ComputeInstanceCount: 1})
 		default:

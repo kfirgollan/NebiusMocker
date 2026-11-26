@@ -59,13 +59,18 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 	if target != none {
 		after = target
 	}
-	nics, err := s.bindAll(ctx, updated, next, after, prev)
+	reservation, commitReservation, undoReservation, err := s.reservationOnUpdate(ctx, stored, updated, target)
 	if err != nil {
 		return none, err
 	}
+	updated.Status.ReservationId = reservation
+	nics, err := s.bindAll(ctx, updated, next, after, prev)
+	if err != nil {
+		return none, errors.Join(err, undoReservation())
+	}
 	restore := func(err error, fs []string) error {
 		_, restoreErr := s.bindAll(ctx, stored, prev, state, next)
-		return errors.Join(err, restoreErr, s.detachFilesystems(ctx, id, fs))
+		return errors.Join(err, restoreErr, s.detachFilesystems(ctx, id, fs), undoReservation())
 	}
 	addedFS, err := s.attachFilesystems(ctx, updated, prev, next)
 	if err != nil {
@@ -81,6 +86,9 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 		return none, restore(err, addedFS)
 	}
 	if err := s.detachFilesystems(ctx, id, removedFilesystems(prev, next)); err != nil {
+		return none, err
+	}
+	if err := commitReservation(); err != nil {
 		return none, err
 	}
 	return target, nil
@@ -137,6 +145,9 @@ func (s *InstanceService) checkUpdate(ctx context.Context, stored *computepb.Ins
 		case state != computepb.InstanceStatus_STOPPED:
 			return errs.BadState(id, "the preset can be changed only while the instance is STOPPED: stop it first")
 		}
+	}
+	if err := checkReservationUpdate(id, state, prev, next); err != nil {
+		return err
 	}
 	if len(removedFilesystems(next, prev)) > 0 && state != computepb.InstanceStatus_STOPPED {
 		return errs.BadState(id, "filesystems can be attached only while the instance is STOPPED: stop it first")
