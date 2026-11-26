@@ -7,10 +7,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/nebius/gosdk/proto/fieldmask/grpcheader"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	computepb "github.com/nebius/gosdk/proto/nebius/compute/v1"
+	vpcpb "github.com/nebius/gosdk/proto/nebius/vpc/v1"
+	vpcv1alpha1pb "github.com/nebius/gosdk/proto/nebius/vpc/v1alpha1"
 )
 
 func TestValidatePartialUpdates(t *testing.T) {
@@ -24,6 +28,7 @@ func TestValidatePartialUpdates(t *testing.T) {
 		name   string
 		method string
 		req    any
+		reset  string // X-ResetMask of the call, if any
 		want   codes.Code
 	}{
 		{
@@ -42,11 +47,41 @@ func TestValidatePartialUpdates(t *testing.T) {
 			req:  &computepb.UpdateImageRequest{Metadata: &commonpb.ResourceMetadata{Id: "computeimage-e00x"}, Spec: &computepb.ImageSpec{Description: strings.Repeat("x", 2000)}},
 			want: codes.InvalidArgument,
 		},
+		{
+			// What `nebius vpc v1alpha1 allocation update --id X --labels k=v` sends:
+			// no name and no X-ResetMask, so the name is kept.
+			name: "patch update without name passes the name format rule", method: "/nebius.vpc.v1alpha1.AllocationService/Update",
+			req:  &vpcv1alpha1pb.UpdateAllocationRequest{Metadata: &commonpb.ResourceMetadata{Id: "vpcallocation-e00x", Labels: map[string]string{"k": "v"}}},
+			want: codes.OK,
+		},
+		{
+			name: "update with a malformed name is rejected", method: "/nebius.vpc.v1.AllocationService/Update",
+			req:  &vpcpb.UpdateAllocationRequest{Metadata: &commonpb.ResourceMetadata{Id: "vpcallocation-e00x", Name: "-bad"}},
+			want: codes.InvalidArgument,
+		},
+		{
+			name: "update clearing the name through the reset mask is rejected", method: "/nebius.vpc.v1.AllocationService/Update",
+			req:   &vpcpb.UpdateAllocationRequest{Metadata: &commonpb.ResourceMetadata{Id: "vpcallocation-e00x"}},
+			reset: "metadata.name",
+			want:  codes.InvalidArgument,
+		},
+		{
+			name: "create without a name is rejected", method: "/nebius.vpc.v1alpha1.AllocationService/Create",
+			req: &vpcv1alpha1pb.CreateAllocationRequest{
+				Metadata: &commonpb.ResourceMetadata{ParentId: "project-e00x"},
+				Spec:     &vpcv1alpha1pb.AllocationSpec{IpSpec: &vpcv1alpha1pb.AllocationSpec_Ipv4Public{Ipv4Public: &vpcv1alpha1pb.IPv4PublicAllocationSpec{}}},
+			},
+			want: codes.InvalidArgument,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := validate(t.Context(), tt.req, &grpc.UnaryServerInfo{FullMethod: tt.method}, ok)
+			ctx := t.Context()
+			if tt.reset != "" {
+				ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(grpcheader.ResetMask, tt.reset))
+			}
+			_, err := validate(ctx, tt.req, &grpc.UnaryServerInfo{FullMethod: tt.method}, ok)
 			if got := status.Code(err); got != tt.want {
 				t.Fatalf("Validate(%s) code = %v, want %v (err: %v)", tt.method, got, tt.want, err)
 			}

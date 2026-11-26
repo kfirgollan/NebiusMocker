@@ -24,6 +24,8 @@
 | `vpc.v1alpha1` (second view of the same resources, see [v1alpha1](#v1alpha1-a-second-view-of-the-same-resources)): `AllocationService` Get, GetByName, List, Create, Update, Delete; `PoolService`, `SubnetService` (+ ListByNetwork), `NetworkService` (+ GetDefault) Get, GetByName, List; `ScopeService` Get, GetByName, List; `nebius.common.v1alpha1.OperationService` Get, List | ✅ contract: `test/contract/vpc_v1alpha1_*` |
 | `nebius_vpc_v1alpha1_allocation` (resource and data source) and the `network`, `pool`, `scope`, `subnet` data sources with the official Terraform provider | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
 | `nebius vpc v1alpha1 allocation\|network\|pool\|scope\|subnet` with the official CLI | ✅ e2e: `test/terraform/vpc/v1alpha1_*` |
+| Partial updates from the official CLI (`nebius vpc [v1alpha1] <kind> update --id X --labels k=v` sends `metadata {id, labels}` and no `X-ResetMask`): the name is kept. The `metadata_name` format rule applies only to a name that is set, or cleared through the reset mask | ✅ e2e: `test/terraform/vpc/v1alpha1_cli_test.go` |
+| `nebius vpc [v1alpha1] network get-default` needs `--parent-id`: the CLI marks it `[required]` and does not fill it from the profile (it sends an empty request), and the proto requires `parent_id`, so the request is refused with `InvalidArgument` as upstream | ✅ (CLI behaviour, documented) |
 | `filter` on v1alpha1 `List*` requests (upstream format "TBD"): refused with `InvalidArgument` naming `filter` | Not yet |
 | v1alpha1 `SubnetSpec.enable_egress_nat`: v1 has no such setting; always reported `false` | Not yet (read-only view) |
 

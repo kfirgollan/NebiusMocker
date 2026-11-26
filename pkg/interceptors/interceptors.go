@@ -19,6 +19,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nebius/gosdk/proto/fieldmask/grpcheader"
+	"github.com/nebius/gosdk/proto/fieldmask/mask"
+
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
@@ -138,7 +141,7 @@ func Validate() (grpc.UnaryServerInterceptor, error) {
 			return next(ctx, req)
 		}
 		if err := v.Validate(msg); err != nil {
-			if bad := toBadRequest(err, ruleFilter(info.FullMethod)); bad != nil {
+			if bad := toBadRequest(err, ruleFilter(ctx, info.FullMethod, msg)); bad != nil {
 				return nil, serviceerror.FromDomain(ctx, bad)
 			}
 		}
@@ -146,13 +149,39 @@ func Validate() (grpc.UnaryServerInterceptor, error) {
 	}, nil
 }
 
-// ruleFilter returns which violations to ignore for method: presence rules
-// for standard (partial) Update RPCs, nothing otherwise.
-func ruleFilter(method string) func(ruleID string) bool {
-	if strings.HasSuffix(method, "/Update") {
-		return isPresenceRule
+// ruleFilter returns which violations to ignore for method: nothing, except
+// for standard Update RPCs, which are partial (X-ResetMask) patches. There
+// presence rules are skipped, and so is the "metadata_name" format rule of
+// VPC, DNS and mk8s Update requests when the patch leaves the name alone (an
+// empty name that the reset mask does not clear means "keep it"): that is what
+// the official CLI sends for `nebius vpc allocation update --id X --labels k=v`
+// (metadata {id, labels}, no X-ResetMask).
+func ruleFilter(ctx context.Context, method string, req proto.Message) func(ruleID string) bool {
+	if !strings.HasSuffix(method, "/Update") {
+		return func(string) bool { return false }
 	}
-	return func(string) bool { return false }
+	keepsName := false
+	if m, ok := req.(metadataGetter); ok && m.GetMetadata().GetName() == "" {
+		keepsName = !resetsName(ctx)
+	}
+	return func(ruleID string) bool {
+		return isPresenceRule(ruleID) || (keepsName && ruleID == metadataNameRule)
+	}
+}
+
+// metadataNameRule is the CEL rule ID upstream uses for the metadata.name
+// format on Create and Update requests.
+const metadataNameRule = "metadata_name"
+
+// resetsName reports whether the request's X-ResetMask clears metadata.name.
+// A malformed header counts as not clearing it; the handler rejects it.
+func resetsName(ctx context.Context) bool {
+	m, err := grpcheader.GetResetMaskFromIncomingContext(ctx)
+	if err != nil || m == nil {
+		return false
+	}
+	sub, err := m.GetSubMaskByPath(mask.NewFieldPath("metadata", "name"))
+	return err == nil && sub != nil
 }
 
 // toBadRequest converts a validation error, dropping violations whose rule ID

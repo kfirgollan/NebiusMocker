@@ -60,6 +60,13 @@ func TestV1alpha1CLI(t *testing.T) {
 		Subnet  cliAlphaResource `json:"subnet"`
 	}
 	cli.JSON(t, &byName, "vpc", "v1alpha1", "network", "get-by-name", "--name", "default-network")
+	// get-default takes --parent-id explicitly: `nebius vpc v1alpha1 network
+	// get-default --help` lists "--parent-id (string) [required]", and without
+	// it the CLI sends an empty GetDefaultNetworkRequest (it does not fill the
+	// profile's parent_id here, unlike list and get-by-name; the Go SDK does
+	// not either). The proto marks parent_id required, so the API rejects that
+	// request with InvalidArgument "parent_id: value is required", as the mock
+	// does.
 	cli.JSON(t, &def, "vpc", "v1alpha1", "network", "get-default", "--parent-id", p)
 	if byName.Metadata.ID != net.Metadata.ID || def.Network.Metadata.ID != net.Metadata.ID || def.Subnet.Metadata.Name != "default-subnet" {
 		t.Fatalf("network ids: list %s get-by-name %s get-default %+v, want identical and the default subnet", net.Metadata.ID, byName.Metadata.ID, def)
@@ -132,12 +139,22 @@ func TestV1alpha1CLI(t *testing.T) {
 		t.Fatalf("allocation get = %+v, want id %s ALLOCATED", gotCLI, id)
 	}
 
-	if _, err := cli.Run(ctx, "vpc", "v1alpha1", "allocation", "update", "--id", id, "--name", "cli-alpha-alloc", "--labels", "team=cli2,env=dev"); err != nil {
+	// The CLI sends a patch, metadata {id, labels} with no X-ResetMask: the
+	// name must be kept, not rejected by the name format rule or cleared.
+	if _, err := cli.Run(ctx, "vpc", "v1alpha1", "allocation", "update", "--id", id, "--labels", "team=cli2,env=dev"); err != nil {
 		t.Fatalf("allocation update: %v", err)
 	}
 	got = a.allocation(t, id)
-	if got.GetMetadata().GetId() != id || got.GetMetadata().GetLabels()["team"] != "cli2" || got.GetMetadata().GetLabels()["env"] != "dev" {
-		t.Fatalf("after CLI update metadata = %v, want same id and labels team=cli2 env=dev", got.GetMetadata())
+	if got.GetMetadata().GetId() != id || got.GetMetadata().GetName() != "cli-alpha-alloc" ||
+		got.GetMetadata().GetLabels()["team"] != "cli2" || got.GetMetadata().GetLabels()["env"] != "dev" {
+		t.Fatalf("after CLI update metadata = %v, want same id, name cli-alpha-alloc, labels team=cli2 env=dev", got.GetMetadata())
+	}
+	// The v1 command sends the same patch.
+	if _, err := cli.Run(ctx, "vpc", "allocation", "update", "--id", id, "--labels", "team=cli3"); err != nil {
+		t.Fatalf("v1 allocation update: %v", err)
+	}
+	if got = a.allocation(t, id); got.GetMetadata().GetName() != "cli-alpha-alloc" || got.GetMetadata().GetLabels()["team"] != "cli3" {
+		t.Fatalf("after v1 CLI update metadata = %v, want name cli-alpha-alloc, label team=cli3", got.GetMetadata())
 	}
 
 	if _, err := cli.Run(ctx, "vpc", "v1alpha1", "allocation", "delete", "--id", id); err != nil {
