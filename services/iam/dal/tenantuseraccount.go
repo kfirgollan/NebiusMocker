@@ -65,9 +65,54 @@ func (r *TenantUserAccountRepo) Update(ctx context.Context, a *iampb.TenantUserA
 	return write(ctx, r.st, domain.KindTenantUserAccount, a, false, nil)
 }
 
-// Delete removes the account or returns errs.NotFound.
+// Delete removes the account and its attributes, or returns errs.NotFound.
 func (r *TenantUserAccountRepo) Delete(ctx context.Context, id string) error {
-	return remove(ctx, r.st, domain.KindTenantUserAccount, id)
+	err := r.st.Update(ctx, func(tx store.Tx) error {
+		if err := tx.Delete(domain.KindTenantUserAccount, id); err != nil {
+			return err
+		}
+		if err := tx.Delete(kindUserAttributes, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		return nil
+	})
+	return toDomain(err, id)
+}
+
+// kindUserAttributes is the internal record kind holding a tenant user
+// account's attributes. It is not an authz resource kind.
+const kindUserAttributes = "tenantuseraccountattributes"
+
+var _ domain.UserAttributesRepository = (*TenantUserAccountRepo)(nil)
+
+// Attributes returns the stored attributes of an account, or empty attributes when none.
+func (r *TenantUserAccountRepo) Attributes(ctx context.Context, accountID string) (*iampb.UserAttributes, error) {
+	var rec store.Record
+	err := r.st.View(ctx, func(tx store.Tx) error {
+		var gerr error
+		rec, gerr = tx.Get(kindUserAttributes, accountID)
+		return gerr
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return &iampb.UserAttributes{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("attributes of %s: %w", accountID, err)
+	}
+	return decode(rec, func() *iampb.UserAttributes { return &iampb.UserAttributes{} })
+}
+
+// SetAttributes stores (replaces) the attributes of an account.
+func (r *TenantUserAccountRepo) SetAttributes(ctx context.Context, accountID string, a *iampb.UserAttributes) error {
+	data, err := marshal.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encode attributes of %s: %w", accountID, err)
+	}
+	err = r.st.Update(ctx, func(tx store.Tx) error {
+		_, perr := tx.Put(store.Record{Kind: kindUserAttributes, ID: accountID, Data: data})
+		return perr
+	})
+	return toDomain(err, accountID)
 }
 
 // CountByFederation scans every account for those linked to federationID.

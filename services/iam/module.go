@@ -3,7 +3,10 @@
 // Implemented: seeded tenant/project and default groups, GroupService,
 // GroupMembershipService, AccessPermitService (and the authorization bindings
 // they define), ServiceAccountService and v2 AccessKeyService (the S3
-// credentials Object Storage authenticates with). See docs/services/iam.md.
+// credentials Object Storage authenticates with), auth public keys and the
+// token exchange (including federated credentials), federations and their
+// certificates, invitations and tenant user accounts, and session revocation.
+// See docs/services/iam.md.
 package iam
 
 import (
@@ -45,6 +48,7 @@ type repos struct {
 	keys        *dal.AccessKeyRepo
 	authKeys    *dal.AuthPublicKeyRepo
 	users       *dal.TenantUserAccountRepo
+	invitations *dal.InvitationRepo
 }
 
 // Register seeds IAM data, installs authorization bindings and registers the
@@ -60,6 +64,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 		keys:        dal.NewAccessKeyRepo(deps.Store),
 		authKeys:    dal.NewAuthPublicKeyRepo(deps.Store),
 		users:       dal.NewTenantUserAccountRepo(deps.Store),
+		invitations: dal.NewInvitationRepo(deps.Store),
 	}
 	if err := seed(ctx, r, deps); err != nil {
 		return err
@@ -73,7 +78,11 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
-	memberships, err := domain.NewMembershipService(r.memberships, r.groups, deps.Ops, deps.IDs, deps.Clock)
+	members, err := domain.NewMemberDirectory(r.users, r.users, r.invitations, r.sas, deps.Clock)
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	memberships, err := domain.NewMembershipService(r.memberships, r.groups, members, deps.Ops, deps.IDs, deps.Clock)
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
@@ -116,7 +125,7 @@ func registerContainers(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) er
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
-	tenants, err := domain.NewTenantService(r.tenants, vis)
+	tenants, err := domain.NewTenantService(r.tenants, vis, deps.Ops, deps.Clock)
 	if err != nil {
 		return fmt.Errorf("iam: %w", err)
 	}
@@ -176,6 +185,12 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 	iamv2pb.RegisterAccessKeyServiceServer(reg, api.NewAccessKeyHandler(keys))
 	iampb.RegisterAuthPublicKeyServiceServer(reg, api.NewAuthPublicKeyHandler(authKeys))
 	api.RegisterAuthPublicKeyRules(deps.Rules)
+	sessions, err := domain.NewSessionService(r.sas, r.users, deps.Tokens)
+	if err != nil {
+		return fmt.Errorf("iam: %w", err)
+	}
+	iampb.RegisterSessionManagementServiceServer(reg, api.NewSessionHandler(sessions))
+	api.RegisterSessionRules(deps.Rules)
 	return registerTokenExchange(reg, r, authKeys, deps)
 }
 
@@ -183,9 +198,13 @@ func registerCredentials(reg grpc.ServiceRegistrar, r repos, deps mocker.Deps) e
 // exchange as POST /oauth2/token/exchange on the edge port. Both are exempt
 // from authentication (the request carries its own credentials).
 func registerTokenExchange(reg grpc.ServiceRegistrar, r repos, keys *domain.AuthPublicKeyService, deps mocker.Deps) error {
+	fed, err := registerFederatedCredentials(reg, r, deps)
+	if err != nil {
+		return err
+	}
 	svc, err := domain.NewTokenExchangeService(domain.TokenExchangeDeps{
 		Keys: keys, ServiceAccounts: r.sas, Projects: r.projects, Minter: deps.Tokens, Actors: deps.Authenticator,
-		Permissions: deps.Authz, Mode: deps.Config.Authz, Clock: deps.Clock,
+		Permissions: deps.Authz, FederatedCredentials: fed.creds, OIDC: fed.oidc, Mode: deps.Config.Authz, Clock: deps.Clock,
 		MaxAssertionTTL: deps.Config.Auth.JWTMaxTTL, Log: deps.Log,
 	})
 	if err != nil {
@@ -259,6 +278,6 @@ func registerAuthz(r repos, deps mocker.Deps) {
 		k, err := r.authKeys.Get(ctx, id)
 		return k.GetMetadata().GetParentId(), err
 	})
-	e.SetBindings(domain.NewBindings(r.memberships, r.permits, deps.Clock))
+	e.SetBindings(domain.NewBindings(r.memberships, r.permits, r.users, deps.Clock))
 	api.RegisterAuthzRules(deps.Rules, deps.Config.TenantID)
 }

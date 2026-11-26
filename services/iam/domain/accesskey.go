@@ -275,6 +275,45 @@ func (s *AccessKeyService) Deactivate(ctx context.Context, id string, request pr
 	})
 }
 
+// DeleteByAwsID removes the key with the given AWS access key ID (errs.NotFound
+// when unknown).
+func (s *AccessKeyService) DeleteByAwsID(ctx context.Context, awsID string, request proto.Message) (*operations.Operation, error) {
+	id, err := s.idOfAwsID(ctx, awsID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Delete(ctx, id, request)
+}
+
+// ActivateByAwsID is Activate for the key with the given AWS access key ID.
+func (s *AccessKeyService) ActivateByAwsID(ctx context.Context, awsID string, request proto.Message) (*operations.Operation, error) {
+	id, err := s.idOfAwsID(ctx, awsID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Activate(ctx, id, request)
+}
+
+// DeactivateByAwsID is Deactivate for the key with the given AWS access key ID.
+func (s *AccessKeyService) DeactivateByAwsID(ctx context.Context, awsID string, request proto.Message) (*operations.Operation, error) {
+	id, err := s.idOfAwsID(ctx, awsID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Deactivate(ctx, id, request)
+}
+
+func (s *AccessKeyService) idOfAwsID(ctx context.Context, awsID string) (string, error) {
+	if awsID == "" {
+		return "", errs.BadRequest(errs.Violation{Field: "aws_access_key_id", Message: "required"})
+	}
+	k, err := s.keys.GetByAwsID(ctx, awsID)
+	if err != nil {
+		return "", err
+	}
+	return k.GetMetadata().GetId(), nil
+}
+
 // ResolveAccessKey implements peer.AccessKeys for S3 data planes: only
 // active, unexpired keys of existing, active service accounts resolve.
 func (s *AccessKeyService) ResolveAccessKey(ctx context.Context, awsID string) (peer.AccessKey, error) {

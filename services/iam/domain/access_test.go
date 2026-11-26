@@ -14,14 +14,19 @@ import (
 )
 
 const (
-	userID = "tenantuseraccount-e00test0000000000001"
-	saID   = "serviceaccount-e00test00000000000001"
+	userID  = "tenantuseraccount-e00test0000000000001"
+	userID2 = "tenantuseraccount-e00test0000000000002"
+	saID    = "serviceaccount-e00test00000000000001"
 )
 
 type accessFixture struct {
 	groups      *fakeGroups
 	memberships *fakeMemberships
 	permits     *fakePermits
+	users       *fakeTUAs
+	sas         *fakeSAs
+	invites     *fakeInvitations
+	dir         *domain.MemberDirectory
 	members     *domain.MembershipService
 	grants      *domain.PermitService
 	clk         *clock.Manual
@@ -34,13 +39,24 @@ func newAccess(t *testing.T) *accessFixture {
 		groups:      &fakeGroups{byID: map[string]*iampb.Group{}},
 		memberships: newFakeMemberships(),
 		permits:     newFakePermits(),
+		users:       newFakeTUAs(),
+		sas:         &fakeSAs{},
+		invites:     newFakeInvitations(),
 		clk:         clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 		groupID:     "group-e00test0000000000001",
 	}
 	f.groups.byID[f.groupID] = &iampb.Group{Metadata: &commonpb.ResourceMetadata{Id: f.groupID, ParentId: tenantID, Name: "g"}}
 	ids := &seqIDs{}
 	var err error
-	if f.members, err = domain.NewMembershipService(f.memberships, f.groups, inlineOps{}, ids, f.clk); err != nil {
+	for _, id := range []string{userID, userID2} {
+		if err := domain.SeedTenantUserAccount(t.Context(), f.users, f.clk, tenantID, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.dir, err = domain.NewMemberDirectory(f.users, f.users, f.invites, f.sas, f.clk); err != nil {
+		t.Fatal(err)
+	}
+	if f.members, err = domain.NewMembershipService(f.memberships, f.groups, f.dir, inlineOps{}, ids, f.clk); err != nil {
 		t.Fatal(err)
 	}
 	f.grants, err = domain.NewPermitService(domain.PermitDeps{
@@ -130,7 +146,7 @@ func TestBindingsRolesOn(t *testing.T) {
 	if err := f.grant(t, tenantID, authz.RoleEditor); err != nil {
 		t.Fatal(err)
 	}
-	b := domain.NewBindings(f.memberships, f.permits, f.clk)
+	b := domain.NewBindings(f.memberships, f.permits, f.users, f.clk)
 
 	roles, err := b.RolesOn(t.Context(), userID, tenantID)
 	if err != nil || len(roles) != 1 || roles[0] != authz.RoleEditor {

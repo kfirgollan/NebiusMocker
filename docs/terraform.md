@@ -7,16 +7,16 @@ objects work today compared with the full list in the official provider docs.
 Checked against provider **0.6.91**, the newest release on the Terraform Registry (2026-11-25), and its documentation at
 [registry.terraform.io](https://registry.terraform.io/providers/nebius/nebius/latest/docs) and
 [docs.nebius.com/terraform-provider](https://docs.nebius.com/terraform-provider/reference). Status as of 2026-11-26
-(`main` at `c97ec5b`).
+(`main` at `a4c320a`, plus the IAM federation work).
 
 ## Summary
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 30 | 0 | 1 (`nebius_hash`) | 19 |
-| Data sources | 62 | 38 | 2 | 1 (`nebius_parent_id`) | 21 |
+| Resources | 50 | 34 | 0 | 1 (`nebius_hash`) | 15 |
+| Data sources | 62 | 45 | 0 | 1 (`nebius_parent_id`) | 16 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **72** | **2** | **2** | **40** |
+| **Total** | **116** | **83** | **0** | **2** | **31** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -83,12 +83,12 @@ supply real credentials.
 | `nebius_hash` | ➖ Provider-local | Computed by the provider, with no API call |
 | `nebius_iam_v1_access_permit` | ✅ | Enforced under `NEBIUS_MOCKER_AUTHZ=enforce` |
 | `nebius_iam_v1_auth_public_key` | ✅ | Usable as provider `service_account` credentials |
-| `nebius_iam_v1_federated_credentials` | ❌ Missing | |
-| `nebius_iam_v1_federation` | ❌ Missing | |
-| `nebius_iam_v1_federation_certificate` | ❌ Missing | |
+| `nebius_iam_v1_federated_credentials` | ✅ | Workload identity: an OIDC JWT exchanges for a service-account token (gosdk, CLI profile, `/oauth2/token/exchange`). The mock serves a fake OIDC issuer at `/_mocker/oidc/<name>`. `federated_subject_id` is required ([iam.md](services/iam.md#federated-credentials-workload-identity)) |
+| `nebius_iam_v1_federation` | ✅ | SAML settings are stored, but no SAML sign-in runs. Deactivate the federation before `terraform destroy`: an active one cannot be deleted ([iam.md](services/iam.md#federations-and-certificates)) |
+| `nebius_iam_v1_federation_certificate` | ✅ | `data` must be a PEM X.509 certificate. Status (fingerprint, validity) is computed from it |
 | `nebius_iam_v1_group` | ✅ | |
 | `nebius_iam_v1_group_membership` | ✅ | |
-| `nebius_iam_v1_invitation` | ❌ Missing | |
+| `nebius_iam_v1_invitation` | ✅ | No email is sent. Accept with `POST /_mocker/iam/invitations/<id>/accept` ([iam.md](services/iam.md#invitations-and-tenant-user-accounts)) |
 | `nebius_iam_v1_service_account` | ✅ | |
 | `nebius_iam_v2_access_key` | ✅ | Works as S3 credentials on the mock's S3 front |
 | `nebius_iam_v2_project` | ✅ | |
@@ -137,18 +137,18 @@ supply real credentials.
 | `nebius_compute_v1_nvl_instance_group` | ❌ Missing | |
 | `nebius_dns_v1_record` | ✅ | |
 | `nebius_dns_v1_zone` | ✅ | |
-| `nebius_iam_v1_access_permit` | ⚠️ No Terraform test | The RPC (`Get`) is implemented and covered by contract tests |
+| `nebius_iam_v1_access_permit` | ✅ | |
 | `nebius_iam_v1_auth_public_key` | ✅ | |
-| `nebius_iam_v1_federated_credentials` | ❌ Missing | |
-| `nebius_iam_v1_federation` | ❌ Missing | |
-| `nebius_iam_v1_federation_certificate` | ❌ Missing | |
+| `nebius_iam_v1_federated_credentials` | ✅ | By ID, or by `parent_id` and `name` |
+| `nebius_iam_v1_federation` | ✅ | By ID, or by `parent_id` and `name` |
+| `nebius_iam_v1_federation_certificate` | ✅ | |
 | `nebius_iam_v1_group` | ✅ | Tested in `make e2e-filesystems` |
-| `nebius_iam_v1_group_membership` | ⚠️ No Terraform test | The RPC (`Get`) is implemented and covered by contract tests |
-| `nebius_iam_v1_invitation` | ❌ Missing | |
+| `nebius_iam_v1_group_membership` | ✅ | |
+| `nebius_iam_v1_invitation` | ✅ | |
 | `nebius_iam_v1_project` | ✅ | |
 | `nebius_iam_v1_service_account` | ✅ | |
 | `nebius_iam_v1_tenant` | ✅ | |
-| `nebius_iam_v1_tenant_user_account` | ❌ Missing | |
+| `nebius_iam_v1_tenant_user_account` | ✅ | The static-token users and invited users |
 | `nebius_iam_v2_access_key` | ✅ | |
 | `nebius_iam_v2_project` | ✅ | |
 | `nebius_iam_v2_tenant` | ✅ | Reading by name needs `parent_id = <tenant ID>` |
@@ -200,7 +200,6 @@ supply real credentials.
 | Area | Missing objects | Service doc |
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
-| IAM | `federation`, `federation_certificate`, `federated_credentials`, `invitation` (4 resources, 4 data sources), `tenant_user_account` (data source) | [iam.md](services/iam.md) |
 | Object Storage | `inventory`, `transfer` (v1 and v1alpha1): 3 resources, 3 data sources | [storage.md](services/storage.md) |
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
 | Capacity | `capacity_allowance` (resource and data source), `capacity_block_group` (data source) | [capacity.md](services/capacity.md) |

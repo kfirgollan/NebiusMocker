@@ -50,6 +50,21 @@ func (f apKeys) Get(_ context.Context, id string) (*iampb.AuthPublicKey, error) 
 	return f.key, nil
 }
 
+// apNoFederated has no federated credentials and reaches no OIDC issuer.
+type apNoFederated struct{}
+
+func (apNoFederated) ListBySubject(context.Context, string) ([]*iampb.FederatedCredentials, error) {
+	return nil, nil
+}
+
+func (apNoFederated) KeySet(_ context.Context, issuerURL string) ([]byte, error) {
+	return nil, errors.New("no issuer " + issuerURL)
+}
+
+func (apNoFederated) RefreshKeySet(_ context.Context, issuerURL string) ([]byte, error) {
+	return nil, errors.New("no issuer " + issuerURL)
+}
+
 // apSAs implements domain.ServiceAccountRepository for one account.
 type apSAs struct{ sa *iampb.ServiceAccount }
 
@@ -136,7 +151,8 @@ func newApFixture(t *testing.T, impersonationAllowed bool) *apFixture {
 		}},
 		Projects: apProjects{}, Minter: issuer,
 		Actors:      auth.NewAuthenticator(map[string]string{apActor: "user-actor"}, issuer),
-		Permissions: apPerms{allowed: impersonationAllowed}, Mode: authz.ModeEnforce,
+		Permissions: apPerms{allowed: impersonationAllowed}, FederatedCredentials: apNoFederated{}, OIDC: apNoFederated{},
+		Mode:  authz.ModeEnforce,
 		Clock: clk, MaxAssertionTTL: 10 * time.Minute, Log: log,
 	})
 	if err != nil {

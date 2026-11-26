@@ -122,6 +122,8 @@ type txFixture struct {
 	keys   *txKeyGetter
 	sas    *txSARepo
 	perms  *txPerms
+	fed    *txFedCreds
+	oidc   *txOIDC
 	clk    *clock.Manual
 	priv   *rsa.PrivateKey
 	// actorToken is a valid static dev token of principal txActor.
@@ -167,11 +169,13 @@ func newTxFixture(t *testing.T, mode authz.Mode) *txFixture {
 			Status:   &iampb.ServiceAccountStatus{Active: true},
 		}}},
 		perms: &txPerms{allowed: true},
+		fed:   &txFedCreds{},
+		oidc:  &txOIDC{docs: map[string][]byte{}},
 	}
 	svc, err := domain.NewTokenExchangeService(domain.TokenExchangeDeps{
 		Keys: f.keys, ServiceAccounts: f.sas, Projects: txProjects{}, Minter: issuer,
 		Actors:      auth.NewAuthenticator(map[string]string{f.actorToken: txActor}, issuer),
-		Permissions: f.perms, Mode: mode, Clock: clk, MaxAssertionTTL: txMaxTTL,
+		Permissions: f.perms, FederatedCredentials: f.fed, OIDC: f.oidc, Mode: mode, Clock: clk, MaxAssertionTTL: txMaxTTL,
 		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -455,7 +459,7 @@ func TestExchangeImpersonationRefusals(t *testing.T) {
 			code: domain.OAuthInvalidRequest, kind: errs.KindBadRequest, mention: "actor_token",
 		},
 		{
-			name: "wrong actor token type", mutate: func(r *domain.ExchangeRequest) { r.ActorTokenType = domain.TokenTypeJWT },
+			name: "wrong actor token type", mutate: func(r *domain.ExchangeRequest) { r.ActorTokenType = "urn:ietf:params:oauth:token-type:id_token" },
 			code: domain.OAuthInvalidRequest, kind: errs.KindBadRequest, mention: "actor_token_type",
 		},
 		{
@@ -541,7 +545,7 @@ func TestNewTokenExchangeServiceRequiresDeps(t *testing.T) {
 	f := newTxFixture(t, authz.ModeOff)
 	_, err := domain.NewTokenExchangeService(domain.TokenExchangeDeps{
 		Keys: f.keys, ServiceAccounts: f.sas, Projects: txProjects{}, Minter: f.issuer,
-		Actors: auth.NewAuthenticator(nil, f.issuer), Permissions: f.perms, Clock: f.clk,
+		Actors: auth.NewAuthenticator(nil, f.issuer), Permissions: f.perms, FederatedCredentials: f.fed, OIDC: f.oidc, Clock: f.clk,
 		Log: slog.New(slog.DiscardHandler),
 	})
 	if err == nil {

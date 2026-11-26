@@ -12,7 +12,6 @@ import (
 )
 
 // MembershipHandler implements nebius.iam.v1.GroupMembershipService.
-// The *WithAttributes RPCs are not implemented yet (UNIMPLEMENTED).
 type MembershipHandler struct {
 	iampb.UnimplementedGroupMembershipServiceServer
 	svc *domain.MembershipService
@@ -70,4 +69,23 @@ func (h *MembershipHandler) ListMemberOf(ctx context.Context, req *iampb.ListMem
 		return nil, serviceerror.FromDomain(ctx, err)
 	}
 	return &iampb.ListMemberOfResponse{Items: groups}, nil
+}
+
+// GetWithAttributes returns a membership with its member's kind and attributes.
+func (h *MembershipHandler) GetWithAttributes(ctx context.Context, req *iampb.GetGroupMembershipRequest) (*iampb.GroupMembershipWithAttributes, error) {
+	m, err := h.svc.GetWithAttributes(ctx, req.GetId())
+	if err != nil {
+		return nil, serviceerror.FromDomain(ctx, err)
+	}
+	return m, nil
+}
+
+// ListMembersWithAttributes returns one page of a group's memberships with
+// their members' kinds and attributes.
+func (h *MembershipHandler) ListMembersWithAttributes(ctx context.Context, req *iampb.ListGroupMembershipsRequest) (*iampb.ListGroupMembershipsWithAttributesResponse, error) {
+	page, err := h.svc.ListMembersWithAttributes(ctx, req.GetParentId(), req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, serviceerror.FromDomain(ctx, err)
+	}
+	return &iampb.ListGroupMembershipsWithAttributesResponse{Memberships: page.Items, NextPageToken: page.NextPageToken}, nil
 }

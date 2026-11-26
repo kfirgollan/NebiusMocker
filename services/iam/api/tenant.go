@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 
+	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
+	opsapi "github.com/kfirgollan/NebiusMocker/pkg/operations/api"
 	"github.com/kfirgollan/NebiusMocker/pkg/serviceerror"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
@@ -46,8 +48,8 @@ func (h *TenantHandler) List(ctx context.Context, req *iampb.ListTenantsRequest)
 	return &iampb.ListTenantsResponse{Items: page.Items, NextPageToken: page.NextPageToken}, nil
 }
 
-// TenantV2Handler implements nebius.iam.v2.TenantService. Update stays
-// UNIMPLEMENTED: tenants are seeded.
+// TenantV2Handler implements nebius.iam.v2.TenantService. Tenants are seeded;
+// Update renames and relabels one.
 type TenantV2Handler struct {
 	iamv2pb.UnimplementedTenantServiceServer
 	svc *domain.TenantService
@@ -91,6 +93,21 @@ func (h *TenantV2Handler) List(ctx context.Context, req *iamv2pb.ListTenantsRequ
 	return &iamv2pb.ListTenantsResponse{Items: items, NextPageToken: page.NextPageToken}, nil
 }
 
+// Update starts a tenant update; X-ResetMask selects fields to clear.
+func (h *TenantV2Handler) Update(ctx context.Context, req *iamv2pb.UpdateTenantRequest) (*commonpb.Operation, error) {
+	resetMask, err := resetMaskOf(ctx)
+	if err != nil {
+		return nil, serviceerror.FromDomain(ctx, err)
+	}
+	op, err := h.svc.Update(ctx, domain.UpdateTenantCmd{
+		Metadata: req.GetMetadata(), NamePrefix: req.GetNamePrefix(), ResetMask: resetMask, Request: req,
+	})
+	if err != nil {
+		return nil, serviceerror.FromDomain(ctx, err)
+	}
+	return opsapi.ToProto(ctx, op), nil
+}
+
 // toV2Tenant is the v2 view of a stored tenant.
 func toV2Tenant(c *iampb.Container) *iamv2pb.Tenant {
 	state := iamv2pb.TenantStatus_STATE_UNSPECIFIED
@@ -106,8 +123,7 @@ func toV2Tenant(c *iampb.Container) *iamv2pb.Tenant {
 
 // RegisterTenantAuthzRules declares the permissions of the v1 and v2
 // TenantService RPCs. List is open to every authenticated caller and filtered
-// to the tenants the caller may read. v2 Update has a rule so that an
-// authorized caller gets UNIMPLEMENTED rather than a denial.
+// to the tenants the caller may read.
 func RegisterTenantAuthzRules(r *authz.Rules, tenantIDOf NameLookup) {
 	perm := func(verb string) authz.Permission { return authz.Perm("iam", "tenants", verb) }
 	for _, svc := range []string{tenantService, tenantV2Service} {

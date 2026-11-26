@@ -20,6 +20,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_TOKEN_SECRET` | random per boot | HMAC secret of issued access tokens (at least 32 bytes). Set it explicitly for split deployments and persistence |
 | `NEBIUS_MOCKER_TOKEN_TTL` | `12h` | Access-token lifetime (`expires_in` of the token exchange) |
 | `NEBIUS_MOCKER_IAM_JWT_MAX_TTL` | `1h` | Longest `exp` (from now) accepted on service-account JWTs in the token exchange |
+| `NEBIUS_MOCKER_IAM_FAKE_OIDC` | `true` | Serve a fake OIDC issuer at `/_mocker/oidc/<name>` on the edge port, for federated credentials ([iam.md](../services/iam.md#federated-credentials-workload-identity)). `false` removes it |
 | `NEBIUS_MOCKER_TIMING` | profile | `instant` \| `fast` \| `realistic` \| path to a durations YAML |
 | `NEBIUS_MOCKER_IDS` | `random` | `random` \| `sequential` \| `seeded:<int>` |
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Region → NID routing code (configurable; the defaults are placeholders). **Implemented**: the first region is the default; Compute seeds a public image catalog per region |

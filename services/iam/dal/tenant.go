@@ -18,7 +18,10 @@ func newContainer() *iampb.Container { return &iampb.Container{} }
 // TenantRepo stores tenants (roots: records have no parent).
 type TenantRepo struct{ st store.Store }
 
-var _ domain.TenantRepository = (*TenantRepo)(nil)
+var (
+	_ domain.TenantRepository = (*TenantRepo)(nil)
+	_ domain.TenantStore      = (*TenantRepo)(nil)
+)
 
 // NewTenantRepo returns a TenantRepo over st.
 func NewTenantRepo(st store.Store) *TenantRepo { return &TenantRepo{st: st} }
@@ -57,6 +60,11 @@ func (r *TenantRepo) Ensure(ctx context.Context, t *iampb.Container) error {
 		return perr
 	})
 	return toDomain(err, md.GetId())
+}
+
+// Update replaces an existing tenant; the name must stay unique among tenants.
+func (r *TenantRepo) Update(ctx context.Context, t *iampb.Container) error {
+	return write(ctx, r.st, domain.KindTenant, t, false, nil)
 }
 
 // ProjectRepo stores projects (records are children of their tenant).

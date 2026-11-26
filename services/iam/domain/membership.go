@@ -25,17 +25,18 @@ import (
 type MembershipService struct {
 	memberships MembershipRepository
 	groups      GroupRepository
+	members     *MemberDirectory
 	ops         Operations
 	ids         IDGenerator
 	clk         clock.Clock
 }
 
 // NewMembershipService wires a MembershipService. All dependencies are required.
-func NewMembershipService(memberships MembershipRepository, groups GroupRepository, ops Operations, ids IDGenerator, clk clock.Clock) (*MembershipService, error) {
-	if memberships == nil || groups == nil || ops == nil || ids == nil || clk == nil {
+func NewMembershipService(memberships MembershipRepository, groups GroupRepository, members *MemberDirectory, ops Operations, ids IDGenerator, clk clock.Clock) (*MembershipService, error) {
+	if memberships == nil || groups == nil || members == nil || ops == nil || ids == nil || clk == nil {
 		return nil, errors.New("iam: membership service dependencies must not be nil")
 	}
-	return &MembershipService{memberships: memberships, groups: groups, ops: ops, ids: ids, clk: clk}, nil
+	return &MembershipService{memberships: memberships, groups: groups, members: members, ops: ops, ids: ids, clk: clk}, nil
 }
 
 // CreateMembershipCmd is the input of Create.
@@ -48,7 +49,50 @@ type CreateMembershipCmd struct {
 
 // Get returns a membership by ID.
 func (s *MembershipService) Get(ctx context.Context, id string) (*iampb.GroupMembership, error) {
-	return s.memberships.Get(ctx, id)
+	m, err := s.memberships.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.fillStatus(ctx, m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// fillStatus sets the member's current status on a membership (computed on
+// read, never stored): the tenant user account status for users, and the
+// service account status for service accounts that exist.
+func (s *MembershipService) fillStatus(ctx context.Context, m *iampb.GroupMembership) error {
+	memberID := m.GetSpec().GetMemberId()
+	if m.GetStatus() == nil {
+		m.Status = &iampb.GroupMembershipStatus{GroupMemberMetadata: &commonpb.ResourceMetadata{Id: memberID}}
+	}
+	if strings.HasPrefix(memberID, KindServiceAccount+"-") {
+		sa, err := s.members.sas.Get(ctx, memberID)
+		switch {
+		case errs.IsKind(err, errs.KindNotFound):
+			m.Status.GroupMemberStatus = nil
+		case err != nil:
+			return err
+		default:
+			m.Status.GroupMemberStatus = &iampb.GroupMembershipStatus_ServiceAccountStatus{
+				ServiceAccountStatus: &iampb.ServiceAccountStatus{Active: sa.GetStatus().GetActive()},
+			}
+		}
+		return nil
+	}
+	tua, err := s.members.users.Get(ctx, memberID)
+	switch {
+	case errs.IsKind(err, errs.KindNotFound):
+		m.Status.GroupMemberStatus = nil
+	case err != nil:
+		return err
+	default:
+		m.Status.GroupMemberStatus = &iampb.GroupMembershipStatus_TenantUserAccountStatus{
+			TenantUserAccountStatus: tua.GetStatus(),
+		}
+	}
+	return nil
 }
 
 // ListMembers returns one page of a group's memberships.
@@ -57,7 +101,16 @@ func (s *MembershipService) ListMembers(ctx context.Context, groupID string, pag
 	if err != nil {
 		return MembershipPage{}, err
 	}
-	return s.memberships.ListByGroup(ctx, groupID, size, pageToken)
+	page, err := s.memberships.ListByGroup(ctx, groupID, size, pageToken)
+	if err != nil {
+		return MembershipPage{}, err
+	}
+	for _, m := range page.Items {
+		if err := s.fillStatus(ctx, m); err != nil {
+			return MembershipPage{}, err
+		}
+	}
+	return page, nil
 }
 
 // ListMemberOf returns the groups a principal belongs to.
@@ -113,11 +166,15 @@ func (s *MembershipService) newMembership(ctx context.Context, cmd CreateMembers
 		return nil, errs.BadRequest(errs.Violation{Field: "metadata.id", Message: "must not be set on create"})
 	}
 	groupID := md.GetParentId()
-	if _, err := s.groups.Get(ctx, groupID); err != nil {
+	group, err := s.groups.Get(ctx, groupID)
+	if err != nil {
 		return nil, fmt.Errorf("membership group %s: %w", groupID, err)
 	}
 	memberID := cmd.Spec.GetMemberId()
 	if err := validateMember(memberID); err != nil {
+		return nil, err
+	}
+	if err := s.members.checkGroupMember(ctx, group.GetMetadata().GetParentId(), memberID); err != nil {
 		return nil, err
 	}
 	if cmd.RevokeAfterHours < 0 {
@@ -142,8 +199,8 @@ func (s *MembershipService) newMembership(ctx context.Context, cmd CreateMembers
 	return m, nil
 }
 
-// validateMember checks that id is a user account or service account NID.
-// The mocker does not model user accounts yet, so existence is not checked.
+// validateMember checks that id is a tenant user account or service account
+// NID. Existence of user accounts is checked separately (see checkGroupMember).
 func validateMember(id string) error {
 	if id == "" {
 		return errs.BadRequest(errs.Violation{Field: "spec.member_id", Message: "required"})
@@ -191,4 +248,81 @@ func pageSizeOf(pageSize int64) (int, error) {
 		return defaultPageSize, nil
 	}
 	return int(pageSize), nil
+}
+
+// MembershipWithAttributesPage is one page of memberships with attributes.
+type MembershipWithAttributesPage struct {
+	Items         []*iampb.GroupMembershipWithAttributes
+	NextPageToken string
+}
+
+// GetWithAttributes returns a membership with its member's attributes.
+func (s *MembershipService) GetWithAttributes(ctx context.Context, id string) (*iampb.GroupMembershipWithAttributes, error) {
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.withAttributes(ctx, m)
+}
+
+// ListMembersWithAttributes returns one page of a group's memberships with
+// their members' attributes.
+func (s *MembershipService) ListMembersWithAttributes(ctx context.Context, groupID string, pageSize int64, pageToken string) (MembershipWithAttributesPage, error) {
+	page, err := s.ListMembers(ctx, groupID, pageSize, pageToken)
+	if err != nil {
+		return MembershipWithAttributesPage{}, err
+	}
+	out := MembershipWithAttributesPage{NextPageToken: page.NextPageToken}
+	for _, m := range page.Items {
+		item, err := s.withAttributes(ctx, m)
+		if err != nil {
+			return MembershipWithAttributesPage{}, err
+		}
+		out.Items = append(out.Items, item)
+	}
+	return out, nil
+}
+
+// withAttributes adds the member kind and attributes. A member that cannot be
+// resolved (for example a service account deleted since) is reported in the
+// per-item error, as the API does, rather than failing the call.
+func (s *MembershipService) withAttributes(ctx context.Context, m *iampb.GroupMembership) (*iampb.GroupMembershipWithAttributes, error) {
+	memberID := m.GetSpec().GetMemberId()
+	out := &iampb.GroupMembershipWithAttributes{GroupMembership: m}
+	if strings.HasPrefix(memberID, KindServiceAccount+"-") {
+		out.GroupMemberKind = &iampb.GroupMemberKind{Kind: iampb.GroupMemberKind_SERVICE_ACCOUNT}
+		sa, err := s.members.sas.Get(ctx, memberID)
+		if err != nil {
+			return memberLookupFailed(out, err)
+		}
+		out.AttributesOptional = &iampb.GroupMembershipWithAttributes_ServiceAccountAttributes{
+			ServiceAccountAttributes: &iampb.ServiceAccountAttributes{
+				Name: sa.GetMetadata().GetName(), Description: sa.GetSpec().GetDescription(),
+			},
+		}
+		return out, nil
+	}
+	tua, err := s.members.users.Get(ctx, memberID)
+	if err != nil {
+		return memberLookupFailed(out, err)
+	}
+	kind := iampb.GroupMemberKind_ORDINARY_TENANT_USER_ACCOUNT
+	if tua.GetStatus().GetInvitationId() != "" {
+		kind = iampb.GroupMemberKind_INVITED_TENANT_USER_ACCOUNT
+	}
+	out.GroupMemberKind = &iampb.GroupMemberKind{Kind: kind}
+	attrs, err := s.members.userAttributes(ctx, tua)
+	if err != nil {
+		return nil, err
+	}
+	out.AttributesOptional = &iampb.GroupMembershipWithAttributes_UserAttributes{UserAttributes: attrs}
+	return out, nil
+}
+
+func memberLookupFailed(out *iampb.GroupMembershipWithAttributes, err error) (*iampb.GroupMembershipWithAttributes, error) {
+	if !errs.IsKind(err, errs.KindNotFound) {
+		return nil, err
+	}
+	out.AttributesOptional = &iampb.GroupMembershipWithAttributes_Error{Error: &iampb.Error{Message: "member not found"}}
+	return out, nil
 }

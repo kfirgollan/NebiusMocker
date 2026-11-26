@@ -41,3 +41,25 @@ func TestFromLookupAuth(t *testing.T) {
 		}
 	}
 }
+
+func TestFromLookupFakeOIDC(t *testing.T) {
+	t.Parallel()
+	if !Default().Auth.FakeOIDC {
+		t.Fatal("the fake OIDC issuer is off by default, want on")
+	}
+	lookup := func(v string) func(string) (string, bool) {
+		return func(k string) (string, bool) {
+			if k == "NEBIUS_MOCKER_IAM_FAKE_OIDC" {
+				return v, true
+			}
+			return "", false
+		}
+	}
+	c, err := FromLookup(lookup("false"))
+	if err != nil || c.Auth.FakeOIDC {
+		t.Fatalf("NEBIUS_MOCKER_IAM_FAKE_OIDC=false: FakeOIDC = %v, err %v, want false", c.Auth.FakeOIDC, err)
+	}
+	if _, err := FromLookup(lookup("maybe")); err == nil {
+		t.Error("NEBIUS_MOCKER_IAM_FAKE_OIDC=maybe accepted")
+	}
+}

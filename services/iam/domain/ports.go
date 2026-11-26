@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
@@ -255,6 +256,123 @@ type FederationUserCounter interface {
 
 // ---- Federations and federation certificates ----
 
+// FederationPage is one page of a federation listing.
+type FederationPage struct {
+	Items         []*iampb.Federation
+	NextPageToken string
+}
+
+// FederationRepository stores federations (children of their tenant; names
+// are unique per tenant). Status counts are not stored: the service fills them.
+type FederationRepository interface {
+	Get(ctx context.Context, id string) (*iampb.Federation, error)
+	GetByName(ctx context.Context, tenantID, name string) (*iampb.Federation, error)
+	List(ctx context.Context, tenantID string, pageSize int, pageToken string) (FederationPage, error)
+	Create(ctx context.Context, f *iampb.Federation) error
+	// Update fails with errs.NotFound if the federation does not exist.
+	Update(ctx context.Context, f *iampb.Federation) error
+	Delete(ctx context.Context, id string) error
+}
+
+// FederationCertificatePage is one page of a federation certificate listing.
+type FederationCertificatePage struct {
+	Items         []*iampb.FederationCertificate
+	NextPageToken string
+}
+
+// FederationCertificateRepository stores federation certificates (unnamed
+// children of their federation; a non-empty name is unique per federation).
+type FederationCertificateRepository interface {
+	Get(ctx context.Context, id string) (*iampb.FederationCertificate, error)
+	List(ctx context.Context, federationID string, pageSize int, pageToken string) (FederationCertificatePage, error)
+	// ListAll returns every certificate of a federation in creation order.
+	ListAll(ctx context.Context, federationID string) ([]*iampb.FederationCertificate, error)
+	Create(ctx context.Context, c *iampb.FederationCertificate) error
+	// Update fails with errs.NotFound if the certificate does not exist.
+	Update(ctx context.Context, c *iampb.FederationCertificate) error
+	Delete(ctx context.Context, id string) error
+	// DeleteByFederation removes every certificate of a federation.
+	DeleteByFederation(ctx context.Context, federationID string) error
+	// ReplaceAll applies a bulk update in one transaction: it deletes the
+	// certificates in remove, then creates those in create and replaces those
+	// in update. Nothing is written if any step fails.
+	ReplaceAll(ctx context.Context, federationID string, remove []string, update, create []*iampb.FederationCertificate) error
+}
+
 // ---- Invitations and tenant user accounts ----
 
+// InvitationPage is one page of an invitation listing.
+type InvitationPage struct {
+	Items         []*iampb.Invitation
+	NextPageToken string
+}
+
+// InvitationRepository stores invitations (unnamed children of their tenant)
+// and, apart from the resource, how long each stays valid so Resend can
+// restart the same window.
+type InvitationRepository interface {
+	Get(ctx context.Context, id string) (*iampb.Invitation, error)
+	List(ctx context.Context, tenantID string, pageSize int, pageToken string) (InvitationPage, error)
+	// Create stores the invitation together with its validity window. It fails
+	// with errs.AlreadyExists if the name is taken in the tenant.
+	Create(ctx context.Context, inv *iampb.Invitation, validity time.Duration) error
+	// Update fails with errs.NotFound if the invitation does not exist.
+	Update(ctx context.Context, inv *iampb.Invitation) error
+	// Delete removes the invitation and its validity record.
+	Delete(ctx context.Context, id string) error
+	// Validity returns the window the invitation was created with.
+	Validity(ctx context.Context, id string) (time.Duration, error)
+}
+
+// UserAttributesRepository stores what the mock knows about a tenant user
+// account's profile (the email it was invited with).
+type UserAttributesRepository interface {
+	// Attributes returns the stored attributes, or empty ones when none were stored.
+	Attributes(ctx context.Context, accountID string) (*iampb.UserAttributes, error)
+	SetAttributes(ctx context.Context, accountID string, a *iampb.UserAttributes) error
+}
+
+// FederationGetter looks federations up (satisfied by the federation
+// repository); invitation acceptance uses it to validate federation_id.
+type FederationGetter interface {
+	Get(ctx context.Context, id string) (*iampb.Federation, error)
+}
+
 // ---- Federated credentials ----
+
+// FederatedCredentialsPage is one page of a federated credentials listing.
+type FederatedCredentialsPage struct {
+	Items         []*iampb.FederatedCredentials
+	NextPageToken string
+}
+
+// FederatedCredentialsRepository stores federated credentials. Names are
+// optional and unique per parent only when non-empty.
+type FederatedCredentialsRepository interface {
+	Get(ctx context.Context, id string) (*iampb.FederatedCredentials, error)
+	GetByName(ctx context.Context, parentID, name string) (*iampb.FederatedCredentials, error)
+	List(ctx context.Context, parentID string, pageSize int, pageToken string) (FederatedCredentialsPage, error)
+	FederatedCredentialsLister
+	Create(ctx context.Context, c *iampb.FederatedCredentials) error
+	Update(ctx context.Context, c *iampb.FederatedCredentials) error
+	Delete(ctx context.Context, id string) error
+}
+
+// FederatedCredentialsLister finds the federated credentials a service
+// account can be reached through (the token exchange's lookup).
+type FederatedCredentialsLister interface {
+	// ListBySubject returns every federated credential whose spec.subject_id
+	// is saID, in creation order.
+	ListBySubject(ctx context.Context, saID string) ([]*iampb.FederatedCredentials, error)
+}
+
+// OIDCKeySource fetches the signing keys of an OIDC issuer: its
+// <issuer>/.well-known/openid-configuration, then the JSON Web Key Set at its
+// jwks_uri (satisfied by backend/oidc.Client).
+type OIDCKeySource interface {
+	// KeySet returns the issuer's JWKS document; results may be cached.
+	KeySet(ctx context.Context, issuerURL string) ([]byte, error)
+	// RefreshKeySet refetches it, bypassing the cache (the token's kid was
+	// not in the cached set: the issuer may have rotated its keys).
+	RefreshKeySet(ctx context.Context, issuerURL string) ([]byte, error)
+}

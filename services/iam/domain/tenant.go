@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/nebius/gosdk/proto/fieldmask/mask"
 	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
+	"github.com/kfirgollan/NebiusMocker/pkg/operations"
+	"github.com/kfirgollan/NebiusMocker/pkg/reqctx"
 )
 
 // DefaultRegion is the region of seeded tenants.
@@ -63,16 +67,84 @@ func SeedProject(ctx context.Context, projects ContainerRepository, clk clock.Cl
 // TenantService implements the read side of nebius.iam.v1/v2.TenantService.
 // Tenants are seeded; a caller lists only the tenants it may read.
 type TenantService struct {
-	tenants TenantRepository
+	tenants TenantStore
 	vis     Visibility
+	ops     Operations
+	clk     clock.Clock
+}
+
+// TenantStore is a TenantRepository that can also replace a tenant (the only
+// write a tenant admits besides seeding).
+type TenantStore interface {
+	TenantRepository
+	// Update fails with errs.NotFound if the tenant does not exist and with
+	// errs.AlreadyExists if the name is taken by another tenant.
+	Update(ctx context.Context, t *iampb.Container) error
+}
+
+// UpdateTenantCmd is the input of Update (full replace guarded by a reset mask).
+type UpdateTenantCmd struct {
+	Metadata *commonpb.ResourceMetadata
+	// NamePrefix is the request's name_prefix, which the mock rejects.
+	NamePrefix string
+	ResetMask  *mask.Mask
+	Request    proto.Message
 }
 
 // NewTenantService wires a TenantService.
-func NewTenantService(tenants TenantRepository, vis Visibility) (*TenantService, error) {
-	if tenants == nil || vis == nil {
+func NewTenantService(tenants TenantStore, vis Visibility, ops Operations, clk clock.Clock) (*TenantService, error) {
+	if tenants == nil || vis == nil || ops == nil || clk == nil {
 		return nil, errors.New("iam: tenant service dependencies must not be nil")
 	}
-	return &TenantService{tenants: tenants, vis: vis}, nil
+	return &TenantService{tenants: tenants, vis: vis, ops: ops, clk: clk}, nil
+}
+
+// Update changes the tenant's name and labels (X-ResetMask semantics). The
+// spec is empty; name_prefix (a server-chosen name suffix) is not supported.
+func (s *TenantService) Update(ctx context.Context, cmd UpdateTenantCmd) (*operations.Operation, error) {
+	id := cmd.Metadata.GetId()
+	if id == "" {
+		return nil, errs.BadRequest(errs.Violation{Field: "metadata.id", Message: "required"})
+	}
+	if cmd.NamePrefix != "" {
+		return nil, errs.BadRequest(errs.Violation{
+			Field: "name_prefix", Message: "name_prefix is not supported by NebiusMocker: set metadata.name instead",
+		})
+	}
+	return s.ops.Submit(ctx, operations.Spec{
+		ResourceID:  id,
+		Description: "Update tenant",
+		CreatedBy:   reqctx.PrincipalFrom(ctx).ID,
+		Request:     cmd.Request,
+		Prepare:     func(ctx context.Context) error { return s.applyUpdate(ctx, cmd) },
+	})
+}
+
+func (s *TenantService) applyUpdate(ctx context.Context, cmd UpdateTenantCmd) error {
+	stored, err := s.tenants.Get(ctx, cmd.Metadata.GetId())
+	if err != nil {
+		return err
+	}
+	if err := checkMetadataUpdate(stored.GetMetadata(), cmd.Metadata); err != nil {
+		return err
+	}
+	updated, err := patchResource(stored, &iampb.Container{
+		Metadata: &commonpb.ResourceMetadata{Name: cmd.Metadata.GetName(), Labels: cmd.Metadata.GetLabels()},
+	}, cmd.ResetMask)
+	if err != nil {
+		return err
+	}
+	if updated.GetMetadata().GetName() == "" {
+		return errs.BadRequest(errs.Violation{Field: "metadata.name", Message: "required"})
+	}
+	// The tenant's spec and status are server-owned.
+	updated.Spec = proto.CloneOf(stored.GetSpec())
+	updated.Status = proto.CloneOf(stored.GetStatus())
+	if proto.Equal(updated, stored) {
+		return nil
+	}
+	bumpVersion(updated.GetMetadata(), s.clk.Now())
+	return s.tenants.Update(ctx, updated)
 }
 
 // Get returns a tenant by ID.

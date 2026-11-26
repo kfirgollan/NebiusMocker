@@ -3,9 +3,11 @@ package domain_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
@@ -26,7 +28,7 @@ func (namedTenants) List(context.Context, int, string) (domain.ContainerPage, er
 
 func TestTenantGetByNameParentID(t *testing.T) {
 	t.Parallel()
-	svc, err := domain.NewTenantService(namedTenants{}, newProjectFixture(t).vis)
+	svc, err := domain.NewTenantService(&updatableTenants{}, newProjectFixture(t).vis, inlineOps{}, clock.NewManual(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)))
 	if err != nil {
 		t.Fatalf("NewTenantService: %v", err)
 	}

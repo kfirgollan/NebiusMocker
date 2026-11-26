@@ -19,13 +19,17 @@ type AuthConfig struct {
 	// JWTMaxTTL is the longest lifetime (exp - now) a service-account JWT
 	// assertion may have; NEBIUS_MOCKER_IAM_JWT_MAX_TTL, default 1h.
 	JWTMaxTTL time.Duration
+	// FakeOIDC serves the built-in fake OIDC issuer under /_mocker/oidc/ on
+	// the edge port, for federated credentials; NEBIUS_MOCKER_IAM_FAKE_OIDC,
+	// default true.
+	FakeOIDC bool
 }
 
 // MinTokenSecretBytes is the shortest accepted NEBIUS_MOCKER_TOKEN_SECRET.
 const MinTokenSecretBytes = 32
 
 func defaultAuth() AuthConfig {
-	return AuthConfig{TokenTTL: 12 * time.Hour, JWTMaxTTL: time.Hour}
+	return AuthConfig{TokenTTL: 12 * time.Hour, JWTMaxTTL: time.Hour, FakeOIDC: true}
 }
 
 func authParsers(c *AuthConfig) []struct {
@@ -45,5 +49,6 @@ func authParsers(c *AuthConfig) []struct {
 		}},
 		{"TOKEN_TTL", func(v string) error { return parsePositive(v, &c.TokenTTL) }},
 		{"IAM_JWT_MAX_TTL", func(v string) error { return parsePositive(v, &c.JWTMaxTTL) }},
+		{"IAM_FAKE_OIDC", func(v string) error { return parseBool(v, &c.FakeOIDC) }},
 	}
 }

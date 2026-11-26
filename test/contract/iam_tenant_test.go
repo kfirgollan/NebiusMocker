@@ -5,7 +5,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	commonpb "github.com/nebius/gosdk/proto/nebius/common/v1"
 	iampb "github.com/nebius/gosdk/proto/nebius/iam/v1"
 	iamv2pb "github.com/nebius/gosdk/proto/nebius/iam/v2"
 	iamsvc "github.com/nebius/gosdk/services/nebius/iam/v1"
@@ -70,13 +69,4 @@ func TestTenantViewer(t *testing.T) {
 		_, err = svc.GetByName(ctx, &iamv2pb.GetTenantByNameRequest{Name: "nope"})
 		assertCode(t, err, codes.NotFound)
 	})
-}
-
-func TestTenantV2UpdateUnimplemented(t *testing.T) {
-	t.Parallel()
-	env := startProjEnv(t)
-	_, err := iamv2svc.NewTenantService(env.admin).Update(t.Context(), &iamv2pb.UpdateTenantRequest{
-		Metadata: &commonpb.ResourceMetadata{Id: env.inst.TenantID, Name: "renamed"},
-	})
-	assertCode(t, err, codes.Unimplemented)
 }

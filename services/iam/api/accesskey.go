@@ -12,8 +12,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/services/iam/domain"
 )
 
-// AccessKeyHandler implements nebius.iam.v2.AccessKeyService. The *ByAwsId
-// mutations are not implemented yet (UNIMPLEMENTED).
+// AccessKeyHandler implements nebius.iam.v2.AccessKeyService.
 type AccessKeyHandler struct {
 	iamv2pb.UnimplementedAccessKeyServiceServer
 	svc *domain.AccessKeyService
@@ -117,6 +116,21 @@ func (h *AccessKeyHandler) Activate(ctx context.Context, req *iamv2pb.ActivateAc
 // Deactivate disables a key.
 func (h *AccessKeyHandler) Deactivate(ctx context.Context, req *iamv2pb.DeactivateAccessKeyRequest) (*commonpb.Operation, error) {
 	return opResult(ctx)(h.svc.Deactivate(ctx, req.GetId(), req))
+}
+
+// DeleteByAwsId starts the deletion of the key with the given AWS access key ID.
+func (h *AccessKeyHandler) DeleteByAwsId(ctx context.Context, req *iamv2pb.DeleteAccessKeyByAwsIdRequest) (*commonpb.Operation, error) {
+	return opResult(ctx)(h.svc.DeleteByAwsID(ctx, req.GetAwsAccessKeyId(), req))
+}
+
+// ActivateByAwsId re-enables the key with the given AWS access key ID.
+func (h *AccessKeyHandler) ActivateByAwsId(ctx context.Context, req *iamv2pb.ActivateAccessKeyByAwsIdRequest) (*commonpb.Operation, error) {
+	return opResult(ctx)(h.svc.ActivateByAwsID(ctx, req.GetAwsAccessKeyId(), req))
+}
+
+// DeactivateByAwsId disables the key with the given AWS access key ID.
+func (h *AccessKeyHandler) DeactivateByAwsId(ctx context.Context, req *iamv2pb.DeactivateAccessKeyByAwsIdRequest) (*commonpb.Operation, error) {
+	return opResult(ctx)(h.svc.DeactivateByAwsID(ctx, req.GetAwsAccessKeyId(), req))
 }
 
 // opResult converts a domain (operation, error) pair to the RPC result.

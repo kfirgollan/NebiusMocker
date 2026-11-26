@@ -26,7 +26,7 @@ const (
 const VerbGetSecret = "getSecret"
 
 // AccessKeyIDLookup resolves an AWS access key ID to the key's NID (for
-// authorizing GetByAwsId on the key itself).
+// authorizing the *ByAwsId RPCs on the key itself).
 type AccessKeyIDLookup func(ctx context.Context, awsID string) (string, error)
 
 // RegisterCredentialRules declares the permissions of the service-account and
@@ -51,13 +51,30 @@ func RegisterCredentialRules(r *authz.Rules, keyIDOf AccessKeyIDLookup) {
 			return "", errs.BadRequest(errs.Violation{Field: "account.service_account.id", Message: "required"})
 		},
 	})
-	r.Add(k("GetByAwsId"), authz.Rule{
-		Permission: perm(authz.VerbGet),
-		Target: func(ctx context.Context, req any) (string, error) {
-			gr, _ := req.(*iamv2pb.GetAccessKeyByAwsIdRequest)
-			return keyIDOf(ctx, gr.GetAwsAccessKeyId())
-		},
-	})
+	byAwsID := func(verb string, awsIDOf func(req any) string) authz.Rule {
+		return authz.Rule{
+			Permission: perm(verb),
+			Target: func(ctx context.Context, req any) (string, error) {
+				return keyIDOf(ctx, awsIDOf(req))
+			},
+		}
+	}
+	r.Add(k("GetByAwsId"), byAwsID(authz.VerbGet, func(req any) string {
+		gr, _ := req.(*iamv2pb.GetAccessKeyByAwsIdRequest)
+		return gr.GetAwsAccessKeyId()
+	}))
+	r.Add(k("DeleteByAwsId"), byAwsID(authz.VerbDelete, func(req any) string {
+		dr, _ := req.(*iamv2pb.DeleteAccessKeyByAwsIdRequest)
+		return dr.GetAwsAccessKeyId()
+	}))
+	r.Add(k("ActivateByAwsId"), byAwsID(authz.VerbUpdate, func(req any) string {
+		ar, _ := req.(*iamv2pb.ActivateAccessKeyByAwsIdRequest)
+		return ar.GetAwsAccessKeyId()
+	}))
+	r.Add(k("DeactivateByAwsId"), byAwsID(authz.VerbUpdate, func(req any) string {
+		dr, _ := req.(*iamv2pb.DeactivateAccessKeyByAwsIdRequest)
+		return dr.GetAwsAccessKeyId()
+	}))
 }
 
 // RegisterAuthPublicKeyRules declares the permissions of the auth public key RPCs.
