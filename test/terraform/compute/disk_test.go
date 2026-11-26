@@ -179,17 +179,23 @@ func TestDiskSnapshotLifecycle(t *testing.T) {
 }
 
 // TestDiskDataSources reads disks and snapshots by id and by parent_id + name.
+// The disk data sources depend on the snapshot: while a snapshot is being
+// created its disk carries status.lock_state.snapshots, so a read racing the
+// create would see a lock that is gone by the next plan.
 func TestDiskDataSources(t *testing.T) {
 	env := startDiskEnv(t)
 	pid := env.Inst.ProjectID
 	tf := newTerraform(t, env.Inst.Addr, env.Inst.Token)
 	tf.writeConfig(t, diskCfg("d", pid, "ds-disk", "NETWORK_SSD", 12, 0, map[string]string{"role": "data"}, "")+
 		snapCfg("s", pid, "ds-snap", "nebius_compute_v1_disk.d.id", "for data sources", map[string]string{"role": "backup"})+fmt.Sprintf(`
-data "nebius_compute_v1_disk" "by_id" { id = nebius_compute_v1_disk.d.id }
+data "nebius_compute_v1_disk" "by_id" {
+  id         = nebius_compute_v1_disk.d.id
+  depends_on = [nebius_compute_v1_disk_snapshot.s]
+}
 data "nebius_compute_v1_disk" "by_name" {
   parent_id  = %[1]q
   name       = "ds-disk"
-  depends_on = [nebius_compute_v1_disk.d]
+  depends_on = [nebius_compute_v1_disk_snapshot.s]
 }
 data "nebius_compute_v1_disk_snapshot" "by_id" { id = nebius_compute_v1_disk_snapshot.s.id }
 data "nebius_compute_v1_disk_snapshot" "by_name" {
