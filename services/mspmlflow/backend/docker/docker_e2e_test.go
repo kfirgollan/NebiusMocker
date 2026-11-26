@@ -83,7 +83,14 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 		req.SetBasicAuth(user, password)
 		resp, err := client.Do(req)
 		if err != nil {
-			t.Fatalf("%s %s: %v", method, path, err)
+			// Diagnose a server that went away after it was ready.
+			name := ""
+			if cs, _ := docker.ListContainers(context.WithoutCancel(ctx), map[string]string{mlflowdocker.LabelOwner: b.Owner(), "nebius-mocker.cluster": c.ID}); len(cs) == 1 {
+				name = cs[0].Name
+			}
+			ctr, ierr := docker.InspectContainer(context.WithoutCancel(ctx), name)
+			logs, _ := docker.Logs(context.WithoutCancel(ctx), name, 80)
+			t.Fatalf("%s %s: %v\ncontainer %s: %+v (inspect error %v)\nlogs:\n%s", method, path, err, name, ctr, ierr, logs)
 		}
 		_ = resp.Body.Close()
 		return resp.StatusCode
