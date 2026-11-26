@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 47 | 0 | 1 (`nebius_hash`) | 2 |
-| Data sources | 62 | 59 | 0 | 1 (`nebius_parent_id`) | 2 |
+| Resources | 50 | 49 | 0 | 1 (`nebius_hash`) | 0 |
+| Data sources | 62 | 61 | 0 | 1 (`nebius_parent_id`) | 0 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **110** | **0** | **2** | **4** |
+| **Total** | **116** | **114** | **0** | **2** | **0** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -98,8 +98,8 @@ supply real credentials.
 | `nebius_mk8s_v1_node_group` | ✅ | |
 | `nebius_mk8s_v1alpha1_cluster` | ✅ | |
 | `nebius_mk8s_v1alpha1_node_group` | ✅ | |
-| `nebius_msp_mlflow_v1alpha1_cluster` | ❌ Missing | |
-| `nebius_msp_postgresql_v1alpha1_cluster` | ❌ Missing | |
+| `nebius_msp_mlflow_v1alpha1_cluster` | ✅ | A real tracking server with `NEBIUS_MOCKER_MSP_MLFLOW_BACKEND=docker`, artifacts in the cluster's bucket ([msp-mlflow.md](services/msp-mlflow.md)) |
+| `nebius_msp_postgresql_v1alpha1_cluster` | ✅ | Real PostgreSQL with `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND=docker`; cross-region backup replication rejected ([msp-postgresql.md](services/msp-postgresql.md)) |
 | `nebius_mysterybox_v1_secret` | ✅ | No encryption with a customer KMS key ([mysterybox.md](services/mysterybox.md)) |
 | `nebius_mysterybox_v1_secret_version` | ✅ | |
 | `nebius_quotas_v1_quota_allowance` | ✅ | Limits are enforced on creates across compute, VPC, DNS, storage, mk8s, registry, MysteryBox and KMS, with live usage; destroy resets to the default ([quotas.md](services/quotas.md)) |
@@ -158,8 +158,8 @@ supply real credentials.
 | `nebius_mk8s_v1_node_group` | ✅ | |
 | `nebius_mk8s_v1alpha1_cluster` | ✅ | |
 | `nebius_mk8s_v1alpha1_node_group` | ✅ | |
-| `nebius_msp_mlflow_v1alpha1_cluster` | ❌ Missing | |
-| `nebius_msp_postgresql_v1alpha1_cluster` | ❌ Missing | |
+| `nebius_msp_mlflow_v1alpha1_cluster` | ✅ | |
+| `nebius_msp_postgresql_v1alpha1_cluster` | ✅ | |
 | `nebius_mysterybox_v1_secret` | ✅ | |
 | `nebius_mysterybox_v1_secret_payload_entry` | ✅ | |
 | `nebius_mysterybox_v1_secret_version` | ✅ | |

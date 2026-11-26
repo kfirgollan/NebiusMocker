@@ -136,9 +136,9 @@ resource "nebius_compute_v1_instance" "gpu" {
 
 ### Terraform notes
 
-- **Coverage:** 89 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
+- **Coverage:** 114 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
   end to end. [docs/terraform.md](docs/terraform.md) lists every object with its status, compared with the official
-  provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gap is the managed databases.
+  provider docs. The other two (`nebius_hash`, `nebius_parent_id`) are provider-local and call no API.
 - **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
   empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
   apply shows a diff, that is a bug in the mock.
