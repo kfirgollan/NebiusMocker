@@ -13,6 +13,19 @@ type PricingPolicies interface {
 	// PricingPolicy returns the policy, or errs.NotFound when it does not
 	// exist.
 	PricingPolicy(ctx context.Context, id string) (PricingPolicy, error)
+	// Admit runs fn with the policy under the policy's admission lock: the
+	// lock under which billing counts running VMs (PricingPolicyVMs) and
+	// then changes max_price or deletes the policy. Compute checks that the
+	// policy lets VMs start and writes the instance's start inside fn, so
+	// the two never both succeed. A missing policy is errs.NotFound and fn
+	// does not run; otherwise Admit returns fn's error.
+	//
+	// Lock order: callers may hold their own locks (compute's NIC lock)
+	// when they call Admit, and fn may take the caller's store and other
+	// peers. Billing, while it holds the lock, only calls
+	// PricingPolicyVMs.RunningVMCount, which must only read the store. fn
+	// must not call Admit or a billing mutation.
+	Admit(ctx context.Context, id string, fn func(ctx context.Context, p PricingPolicy) error) error
 }
 
 // PricingPolicyState is the lifecycle state of a pricing policy

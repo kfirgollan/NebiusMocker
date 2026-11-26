@@ -49,7 +49,7 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 	if err != nil || updated == nil {
 		return none, err
 	}
-	id, state := stored.GetMetadata().GetId(), stored.GetStatus().GetState()
+	state := stored.GetStatus().GetState()
 	prev, next := stored.GetSpec(), updated.GetSpec()
 	if err := s.checkUpdate(ctx, stored, next); err != nil {
 		return none, err
@@ -59,17 +59,48 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 	if target != none {
 		after = target
 	}
-	if err := s.admitUpdateRun(ctx, prev, next, state, after); err != nil {
+	apply := func(ctx context.Context) error { return s.applyUpdatePlan(ctx, stored, updated, via, target) }
+	if !startsUnderPolicy(prev, next, state, after) {
+		err = apply(ctx)
+	} else {
+		var refused error
+		refused, err = s.whileRunnable(ctx, next, apply)
+		err = errors.Join(refused, err)
+	}
+	if err != nil {
 		return none, err
+	}
+	return target, nil
+}
+
+// startsUnderPolicy reports whether an update makes the instance run under
+// a pricing policy it does not run under yet: it starts the instance, or
+// switches a running one to another policy.
+func startsUnderPolicy(prev, next *computepb.InstanceSpec, state, after computepb.InstanceStatus_InstanceState) bool {
+	if after != computepb.InstanceStatus_RUNNING || next.GetSpotPricingPolicy().GetId() == "" {
+		return false
+	}
+	return state != computepb.InstanceStatus_RUNNING || next.GetSpotPricingPolicy().GetId() != prev.GetSpotPricingPolicy().GetId()
+}
+
+// applyUpdatePlan reconciles the reservation, NICs, filesystems and disks
+// of an update and stores the updated instance.
+func (s *InstanceService) applyUpdatePlan(ctx context.Context, stored, updated *computepb.Instance, via, target computepb.InstanceStatus_InstanceState) error {
+	none := computepb.InstanceStatus_UNSPECIFIED
+	id, state := stored.GetMetadata().GetId(), stored.GetStatus().GetState()
+	prev, next := stored.GetSpec(), updated.GetSpec()
+	after := state
+	if target != none {
+		after = target
 	}
 	reservation, commitReservation, undoReservation, err := s.reservationOnUpdate(ctx, stored, updated, target)
 	if err != nil {
-		return none, err
+		return err
 	}
 	updated.Status.ReservationId = reservation
 	nics, err := s.bindAll(ctx, updated, next, after, prev)
 	if err != nil {
-		return none, errors.Join(err, undoReservation())
+		return errors.Join(err, undoReservation())
 	}
 	restore := func(err error, fs []string) error {
 		_, restoreErr := s.bindAll(ctx, stored, prev, state, next)
@@ -77,7 +108,7 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 	}
 	addedFS, err := s.attachFilesystems(ctx, updated, prev, next)
 	if err != nil {
-		return none, restore(err, nil)
+		return restore(err, nil)
 	}
 	updated.Status.NetworkInterfaces = nics
 	updated.Metadata.ResourceVersion = stored.GetMetadata().GetResourceVersion() + 1
@@ -86,15 +117,12 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 		setInstanceState(updated, via)
 	}
 	if err := s.commitUpdate(ctx, stored, updated); err != nil {
-		return none, restore(err, addedFS)
+		return restore(err, addedFS)
 	}
 	if err := s.detachFilesystems(ctx, id, removedFilesystems(prev, next)); err != nil {
-		return none, err
+		return err
 	}
-	if err := commitReservation(); err != nil {
-		return none, err
-	}
-	return target, nil
+	return commitReservation()
 }
 
 // patchInstance applies the update to a copy of the stored instance. It
@@ -159,18 +187,6 @@ func (s *InstanceService) checkUpdate(ctx context.Context, stored *computepb.Ins
 		return errs.BadState(id, "filesystems can be attached only while the instance is STOPPED: stop it first")
 	}
 	return nil
-}
-
-// admitUpdateRun checks the pricing policy of an instance that runs after
-// the update, when the update starts it or changes its pricing policy.
-func (s *InstanceService) admitUpdateRun(ctx context.Context, prev, next *computepb.InstanceSpec, state, after computepb.InstanceStatus_InstanceState) error {
-	if after != computepb.InstanceStatus_RUNNING {
-		return nil
-	}
-	if state == computepb.InstanceStatus_RUNNING && next.GetSpotPricingPolicy().GetId() == prev.GetSpotPricingPolicy().GetId() {
-		return nil
-	}
-	return s.admitRun(ctx, next)
 }
 
 // transition returns the state an update passes through and the one it

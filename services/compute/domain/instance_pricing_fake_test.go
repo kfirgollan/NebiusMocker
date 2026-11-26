@@ -11,6 +11,7 @@ import (
 // fakePricing is the billing pricing policies capability.
 type fakePricing struct {
 	mu       sync.Mutex
+	admit    sync.Mutex
 	disabled bool
 	policies map[string]peer.PricingPolicy
 }
@@ -44,4 +45,15 @@ func (f *fakePricing) PricingPolicy(_ context.Context, id string) (peer.PricingP
 		return peer.PricingPolicy{}, errs.NotFound(id)
 	}
 	return p, nil
+}
+
+// Admit runs fn under one admission lock, as billing does.
+func (f *fakePricing) Admit(ctx context.Context, id string, fn func(ctx context.Context, p peer.PricingPolicy) error) error {
+	f.admit.Lock()
+	defer f.admit.Unlock()
+	p, err := f.PricingPolicy(ctx, id)
+	if err != nil {
+		return err
+	}
+	return fn(ctx, p)
 }

@@ -110,6 +110,21 @@ func (s *PricingPolicyService) Lookup(ctx context.Context, id string) (*billingp
 	return s.withScheduling(ctx, p)
 }
 
+// Admit runs fn with a pricing policy (scheduling_state filled in, no VM
+// count) while no policy mutation runs: Update and Delete count running VMs
+// and write under the same lock, so a VM that fn starts is either counted
+// by them or sees their result (peer.PricingPolicies.Admit). fn must not
+// call back into this service's mutations.
+func (s *PricingPolicyService) Admit(ctx context.Context, id string, fn func(ctx context.Context, p *billingpb.PricingPolicy) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Lookup(ctx, id)
+	if err != nil {
+		return err
+	}
+	return fn(ctx, p)
+}
+
 // GetByName returns the pricing policy with the name in a project.
 func (s *PricingPolicyService) GetByName(ctx context.Context, parentID, name string) (*billingpb.PricingPolicy, error) {
 	p, err := s.d.Repo.GetByName(ctx, parentID, name)

@@ -179,16 +179,17 @@ func (o *ppOps) finish(t *testing.T) {
 	o.pending = nil
 }
 
-// ppVMs is a domain.RunningVMs with fixed counts per "project/policy".
+// ppVMs is a domain.RunningVMs with fixed counts per "project/policy"; set
+// counts VMs of ppProject, so a policy read in another project sees none.
 type ppVMs struct {
 	mu     sync.Mutex
 	counts map[string]int64
 }
 
-func (f *ppVMs) set(projectID, policyID string, n int64) {
+func (f *ppVMs) set(policyID string, n int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.counts[projectID+"/"+policyID] = n
+	f.counts[ppProject+"/"+policyID] = n
 }
 
 func (f *ppVMs) RunningVMCount(_ context.Context, projectID, policyID string) (int64, error) {

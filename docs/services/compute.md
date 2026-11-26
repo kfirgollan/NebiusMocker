@@ -300,6 +300,11 @@ marks no spec attribute computed); everything synthesized lives in `status`.
     instances of the project under the policy that are `STARTING`, `RUNNING`, `STOPPING`, or `CREATING`/`UPDATING`
     without `spec.stopped` (an instance stopped with Stop counts while an Update runs on it). It survives restarts and
     keeps the policy's `max_price` and deletion locked while VMs run.
+  - Starts and policy changes are atomic with each other: compute checks the policy and writes the start inside
+    `peer.PricingPolicies.Admit`, which holds billing's policy lock, the lock billing's max_price change and Delete
+    hold while they count and write. A Start racing a max_price change never has both succeed
+    (`test/contract/compute_instance_spot_race_test.go`). Lock order: compute's NIC lock, then billing's policy lock,
+    then compute's store and the peers a start calls; billing, under its lock, only reads compute's store.
 - **Capacity reservations** (`reservation_policy`, docs `compute/virtual-machines/reservations`;
   `domain/instance_reservation.go`): `reservation_ids` are capacity block group IDs (services/capacity), tried in order.
   GPUs are drawn through `peer.CapacityReservations`, which enforces the group's current limit and the project's

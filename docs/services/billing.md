@@ -50,7 +50,9 @@ mock's choice is marked *(mock)*.
   it is right after a restart (0 when the compute module is disabled). Changing `max_price` or deleting a policy is
   `FAILED_PRECONDITION` while it is > 0, as the proto says ("Nonzero blocks resource changes and deletion") and the
   docs say for `max_price` ("first stop all running resources that use that policy"). The docs' "deleting a pricing
-  policy can stop resources that use it" describes the web console, which stops them first; the API refuses.
+  policy can stop resources that use it" describes the web console, which stops them first; the API refuses. The count
+  and the write happen under the policy lock that compute's starts take too (`peer.PricingPolicies.Admit`), so a VM
+  cannot start between them.
 - **VMs under a BLOCKED policy** cannot start: compute refuses Start with `FAILED_PRECONDITION`, and a Create fails but
   leaves the VM `STOPPED` (docs). A stopped VM whose policy was deleted gets `NOT_FOUND` on Start until it is updated
   to another policy. Since spot prices are constant and `max_price` is locked while VMs run, no running VM is ever

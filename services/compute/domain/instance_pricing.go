@@ -95,17 +95,48 @@ func (s *InstanceService) checkPricingPolicy(ctx context.Context, projectID stri
 	return nil
 }
 
-// admitRun checks that an instance with spec may start under its pricing
-// policy, if it has one: the policy is ACTIVE and its scheduling ALLOWED.
-func (s *InstanceService) admitRun(ctx context.Context, spec *computepb.InstanceSpec) error {
+// whileRunnable runs start, which writes the instance's move to running,
+// directly when spec has no pricing policy, or under the policy's admission
+// (peer.PricingPolicies.Admit) when the policy lets VMs start: ACTIVE and
+// scheduling ALLOWED. Billing changes max_price and deletes policies under
+// the same lock after counting running VMs, so a start and such a change
+// never both succeed. refused is why the policy kept the instance from
+// starting (start did not run); err is start's own error.
+//
+// Lock order: the compute NIC lock (held by Start and Update), then the
+// billing policy lock, then compute's store and the peers start calls (vpc,
+// capacity, quotas). Billing, under its lock, only reads compute's store
+// (RunningVMCount), so no path takes them in the opposite order. Never call
+// whileRunnable inside a store transaction.
+func (s *InstanceService) whileRunnable(ctx context.Context, spec *computepb.InstanceSpec, start func(ctx context.Context) error) (refused, err error) {
 	id := spec.GetSpotPricingPolicy().GetId()
 	if id == "" {
-		return nil
+		return nil, start(ctx)
 	}
-	pol, err := s.pricingPolicy(ctx, id)
-	if err != nil {
-		return err
+	pp, ok := s.d.Pricing.PricingPolicies()
+	if !ok {
+		return errBillingDisabled(), nil
 	}
+	var started bool
+	admitErr := pp.Admit(ctx, id, func(ctx context.Context, pol peer.PricingPolicy) error {
+		if err := runnable(id, pol); err != nil {
+			return err
+		}
+		started = true
+		return start(ctx)
+	})
+	switch {
+	case started:
+		return nil, admitErr
+	case errs.IsKind(admitErr, errs.KindNotFound):
+		return policyNotFound(id, admitErr), nil
+	default:
+		return admitErr, nil
+	}
+}
+
+// runnable checks that VMs may start under pol.
+func runnable(id string, pol peer.PricingPolicy) error {
 	switch {
 	case pol.State == peer.PricingPolicyCreating || pol.State == peer.PricingPolicyUpdating:
 		return errs.Conflict(id, "the pricing policy is not ready (its operation is still running): retry when it is ACTIVE")
@@ -119,23 +150,34 @@ func (s *InstanceService) admitRun(ctx context.Context, spec *computepb.Instance
 	return nil
 }
 
+func errBillingDisabled() error {
+	return errs.BadRequest(errs.Violation{
+		Field: spotPolicyField, Message: "the billing module is not enabled, so pricing policies are not available",
+	})
+}
+
+func policyNotFound(id string, err error) error {
+	return fmt.Errorf("%s: pricing policy %s does not exist (select another pricing policy): %w", spotPolicyField, id, err)
+}
+
 // pricingPolicy reads a pricing policy from the billing module.
 func (s *InstanceService) pricingPolicy(ctx context.Context, id string) (peer.PricingPolicy, error) {
 	pp, ok := s.d.Pricing.PricingPolicies()
 	if !ok {
-		return peer.PricingPolicy{}, errs.BadRequest(errs.Violation{
-			Field: spotPolicyField, Message: "the billing module is not enabled, so pricing policies are not available",
-		})
+		return peer.PricingPolicy{}, errBillingDisabled()
 	}
 	pol, err := pp.PricingPolicy(ctx, id)
 	if errs.IsKind(err, errs.KindNotFound) {
-		return peer.PricingPolicy{}, fmt.Errorf("%s: pricing policy %s does not exist (select another pricing policy): %w", spotPolicyField, id, err)
+		return peer.PricingPolicy{}, policyNotFound(id, err)
 	}
 	return pol, err
 }
 
 // RunningVMCount implements peer.PricingPolicyVMs: the instances of a
-// project running under a pricing policy, counted from the store.
+// project running under a pricing policy, counted from the store. Billing
+// calls it while holding its policy lock, so it must only read the store:
+// never take the NIC lock or another compute lock, or call a peer (see the
+// lock order at whileRunnable).
 func (s *InstanceService) RunningVMCount(ctx context.Context, projectID, policyID string) (int64, error) {
 	var n int64
 	token := ""

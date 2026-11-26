@@ -19,6 +19,16 @@ func (p policyPeer) PricingPolicy(ctx context.Context, id string) (peer.PricingP
 	if err != nil {
 		return peer.PricingPolicy{}, err
 	}
+	return toPeer(pp), nil
+}
+
+func (p policyPeer) Admit(ctx context.Context, id string, fn func(ctx context.Context, p peer.PricingPolicy) error) error {
+	return p.svc.Admit(ctx, id, func(ctx context.Context, pp *billingpb.PricingPolicy) error {
+		return fn(ctx, toPeer(pp))
+	})
+}
+
+func toPeer(pp *billingpb.PricingPolicy) peer.PricingPolicy {
 	return peer.PricingPolicy{
 		ID:        pp.GetMetadata().GetId(),
 		ProjectID: pp.GetMetadata().GetParentId(),
@@ -26,7 +36,7 @@ func (p policyPeer) PricingPolicy(ctx context.Context, id string) (peer.PricingP
 		MaxPrice:  pp.GetSpec().GetPricing().GetMaxPriceV1().GetMaxPrice(),
 		State:     policyStates[pp.GetStatus().GetState()],
 		Blocked:   pp.GetStatus().GetSchedulingState() == billingpb.PricingPolicyStatus_SCHEDULING_STATE_BLOCKED,
-	}, nil
+	}
 }
 
 var policyStates = map[billingpb.PricingPolicyStatus_State]peer.PricingPolicyState{

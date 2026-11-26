@@ -483,7 +483,7 @@ func TestPricingPolicyUpdateBlockedByRunningVMs(t *testing.T) {
 	e := newPPEnv(t)
 	p := e.mustCreate(t, "main", "2.500")
 	id := p.GetMetadata().GetId()
-	e.vms.set(ppProject, id, 2)
+	e.vms.set(id, 2)
 
 	err := e.update(t.Context(), &commonpb.ResourceMetadata{Id: id}, &billingpb.PricingPolicySpec{Pricing: ppSpec("", "3.000").GetPricing()}, nil)
 	wantKind(t, err, errs.KindBadState)
@@ -500,7 +500,7 @@ func TestPricingPolicyUpdateBlockedByRunningVMs(t *testing.T) {
 	_, err = e.svc.Delete(t.Context(), id, nil)
 	wantKind(t, err, errs.KindBadState)
 	// Once the VMs stop, max_price may change and the policy may go.
-	e.vms.set(ppProject, id, 0)
+	e.vms.set(id, 0)
 	if err := e.update(t.Context(), &commonpb.ResourceMetadata{Id: id}, &billingpb.PricingPolicySpec{Pricing: ppSpec("", "3.000").GetPricing()}, nil); err != nil {
 		t.Errorf("max_price change with no running VM: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestPricingPolicyLookupForCompute(t *testing.T) {
 	e := newPPEnv(t)
 	p := e.mustCreate(t, "main", "1.000") // below the spot price 1.250: BLOCKED
 	id := p.GetMetadata().GetId()
-	e.vms.set(ppProject, id, 3)
+	e.vms.set(id, 3)
 	got, err := e.svc.Lookup(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)

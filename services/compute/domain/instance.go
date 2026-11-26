@@ -184,24 +184,28 @@ func (s *InstanceService) Create(ctx context.Context, cmd CreateInstanceCmd) (*o
 		Prepare: func(ctx context.Context) error { return s.prepareCreate(ctx, inst) },
 		Work: func(ctx context.Context) error {
 			to := restingState(inst.GetSpec())
-			var refused error
-			if to == computepb.InstanceStatus_RUNNING {
-				if refused = s.admitRun(ctx, inst.GetSpec()); refused != nil {
-					to = computepb.InstanceStatus_STOPPED
-				}
+			if to != computepb.InstanceStatus_RUNNING {
+				return s.finishCreate(ctx, id, to)
 			}
-			err := s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
-				if cur.GetStatus().GetState() != computepb.InstanceStatus_CREATING {
-					return nil
-				}
-				setInstanceState(cur, to)
-				if refused != nil {
-					return s.recordStop(tx, cur, to)
-				}
-				return nil
+			refused, err := s.whileRunnable(ctx, inst.GetSpec(), func(ctx context.Context) error {
+				return s.finishCreate(ctx, id, to)
 			})
-			return errors.Join(err, refused)
+			if err != nil || refused == nil {
+				return err
+			}
+			return errors.Join(s.finishCreate(ctx, id, computepb.InstanceStatus_STOPPED), refused)
 		},
+	})
+}
+
+// finishCreate moves a CREATING instance to its resting state.
+func (s *InstanceService) finishCreate(ctx context.Context, id string, to computepb.InstanceStatus_InstanceState) error {
+	return s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
+		if cur.GetStatus().GetState() != computepb.InstanceStatus_CREATING {
+			return nil
+		}
+		setInstanceState(cur, to)
+		return s.recordStop(tx, cur, to)
 	})
 }
 
@@ -355,12 +359,21 @@ func (s *InstanceService) preparePower(ctx context.Context, id string, m powerMo
 	if st := cur.GetStatus().GetState(); st != m.from {
 		return errs.BadState(id, fmt.Sprintf("instance is %s: only a %s instance can be %s", st, m.from, m.verb))
 	}
+	if m.to != computepb.InstanceStatus_RUNNING {
+		return s.applyPower(ctx, cur, m)
+	}
+	refused, err := s.whileRunnable(ctx, cur.GetSpec(), func(ctx context.Context) error { return s.applyPower(ctx, cur, m) })
+	return errors.Join(refused, err)
+}
+
+// applyPower draws a reservation for a start, binds the NICs and writes the
+// transitional state of a Start or Stop.
+func (s *InstanceService) applyPower(ctx context.Context, cur *computepb.Instance, m powerMove) error {
+	id := cur.GetMetadata().GetId()
 	held := cur.GetStatus().GetReservationId()
 	reservation := held
 	if m.to == computepb.InstanceStatus_RUNNING {
-		if err := s.admitRun(ctx, cur.GetSpec()); err != nil {
-			return err
-		}
+		var err error
 		if reservation, err = s.reservationOnStart(ctx, cur); err != nil {
 			return err
 		}
