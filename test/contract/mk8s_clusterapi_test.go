@@ -139,8 +139,20 @@ func TestMK8sClusterCreateErrors(t *testing.T) {
 		wantFailure(t, tt.name, err, tt.code, tt.want)
 	}
 
+	// Service CIDRs must not overlap the VPC network (default pool 10.0.0.0/13).
+	req := e.clusterReq("overlap", nil)
+	req.Spec.KubeNetwork = &mk8spb.KubeNetworkSpec{ServiceCidrs: []string{"10.4.0.0/16"}}
+	_, err = e.clusters.Create(ctx, req)
+	wantFailure(t, "service CIDR overlapping the VPC", err, codes.InvalidArgument, "spec.kube_network.service_cidrs", "10.0.0.0/13")
+	req = e.clusterReq("own-cidr", nil)
+	req.Spec.KubeNetwork = &mk8spb.KubeNetworkSpec{ServiceCidrs: []string{"172.20.0.0/16"}}
+	opWait(t)(e.clusters.Create(ctx, req))
+	req = e.clusterReq("prefix-only", nil)
+	req.Spec.KubeNetwork = &mk8spb.KubeNetworkSpec{ServiceCidrs: []string{"/16"}}
+	opWait(t)(e.clusters.Create(ctx, req))
+
 	// A project that does not exist.
-	req := e.clusterReq("orphan", nil)
+	req = e.clusterReq("orphan", nil)
 	req.Metadata.ParentId = "project-e00doesnotexist00000"
 	_, err = e.clusters.Create(ctx, req)
 	wantFailure(t, "unknown project", err, codes.NotFound)

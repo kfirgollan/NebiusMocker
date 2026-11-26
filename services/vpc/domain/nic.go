@@ -53,7 +53,12 @@ type NICAddresses struct {
 }
 
 // NICSubnet is a resolved subnet.
-type NICSubnet struct{ ID, ProjectID, NetworkID string }
+type NICSubnet struct {
+	ID, ProjectID, NetworkID string
+	// NetworkCIDRs are the private CIDRs of the network: its private pools'
+	// and the subnet's own.
+	NetworkCIDRs []string
+}
 
 // NICs returns the network interface service.
 func (s *Service) NICs() *NICService { return &NICService{c: s.c} }
@@ -64,7 +69,27 @@ func (n *NICService) Subnet(ctx context.Context, subnetID string) (NICSubnet, er
 	if err != nil {
 		return NICSubnet{}, err
 	}
-	return NICSubnet{ID: subnetID, ProjectID: sn.GetMetadata().GetParentId(), NetworkID: sn.GetSpec().GetNetworkId()}, nil
+	out := NICSubnet{ID: subnetID, ProjectID: sn.GetMetadata().GetParentId(), NetworkID: sn.GetSpec().GetNetworkId()}
+	for _, p := range sn.GetStatus().GetIpv4PrivatePools() {
+		out.NetworkCIDRs = append(out.NetworkCIDRs, p.GetCidrs()...)
+	}
+	net, err := n.c.r.Networks.Get(ctx, out.NetworkID)
+	if err != nil {
+		return NICSubnet{}, err
+	}
+	for _, ref := range net.GetSpec().GetIpv4PrivatePools().GetPools() {
+		pool, err := n.c.r.Pools.Get(ctx, ref.GetId())
+		if errs.IsKind(err, errs.KindNotFound) {
+			continue
+		}
+		if err != nil {
+			return NICSubnet{}, err
+		}
+		out.NetworkCIDRs = append(out.NetworkCIDRs, pool.GetStatus().GetCidrs()...)
+	}
+	slices.Sort(out.NetworkCIDRs)
+	out.NetworkCIDRs = slices.Compact(out.NetworkCIDRs)
+	return out, nil
 }
 
 // slot is one address of a NIC in the desired state.

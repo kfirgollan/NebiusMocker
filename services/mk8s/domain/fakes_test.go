@@ -372,11 +372,13 @@ type backend struct {
 	clusterErr error
 	notReady   string // reason; "" means nodes get ready
 	groups     map[string]domain.BackendNodeGroup
-	deleted    []string
+	// sizes are the node counts of every EnsureNodes call, per group.
+	sizes   map[string][]int
+	deleted []string
 }
 
 func newBackend() *backend {
-	return &backend{Backend: mock.New(clock.NewManual(t0)), groups: map[string]domain.BackendNodeGroup{}}
+	return &backend{Backend: mock.New(clock.NewManual(t0)), groups: map[string]domain.BackendNodeGroup{}, sizes: map[string][]int{}}
 }
 
 func (b *backend) EnsureCluster(ctx context.Context, c domain.BackendCluster) (domain.ClusterEndpoint, error) {
@@ -400,6 +402,7 @@ func (b *backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.groups[g.NodeGroupID] = g
+	b.sizes[g.NodeGroupID] = append(b.sizes[g.NodeGroupID], len(g.Nodes))
 	if b.notReady == "" {
 		return b.Backend.EnsureNodes(ctx, g)
 	}
@@ -408,6 +411,12 @@ func (b *backend) EnsureNodes(ctx context.Context, g domain.BackendNodeGroup) ([
 		out = append(out, domain.NodeReadiness{Name: n.Name, Reason: b.notReady})
 	}
 	return out, nil
+}
+
+func (b *backend) sizesOf(id string) []int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.sizes[id])
 }
 
 func (b *backend) group(id string) domain.BackendNodeGroup {

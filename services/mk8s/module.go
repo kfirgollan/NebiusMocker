@@ -51,7 +51,10 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	svc, err := domain.New(domain.Deps{
 		Clusters: clusters, NodeGroups: groups, Bindings: dal.NewNetworkBindingRepo(deps.Store), Backend: backend, Peers: peers{deps.Peers}, Hierarchy: deps.Authz,
 		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
-		Config: domain.Config{ProjectID: deps.Config.ProjectID, Versions: deps.Config.MK8s.Versions, Detached: detached(backend)},
+		Config: domain.Config{
+			ProjectID: deps.Config.ProjectID, Versions: deps.Config.MK8s.Versions, Detached: detached(backend),
+			RolloutStep: deps.Config.MK8s.RolloutStep,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("mk8s: %w", err)

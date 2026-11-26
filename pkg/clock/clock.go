@@ -71,6 +71,19 @@ func (m *Manual) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// HasWaiter reports whether a pending After fires exactly at t, so a test
+// can wait until a goroutine is parked on the clock before advancing it.
+func (m *Manual) HasWaiter(t time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, w := range m.waiters {
+		if w.at.Equal(t) {
+			return true
+		}
+	}
+	return false
+}
+
 // Advance moves the clock forward by d and fires every waiter that became due.
 func (m *Manual) Advance(d time.Duration) {
 	m.mu.Lock()

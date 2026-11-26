@@ -3,6 +3,7 @@ package config
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestFromLookupMK8s(t *testing.T) {
@@ -18,11 +19,15 @@ func TestFromLookupMK8s(t *testing.T) {
 		t.Fatalf("default MK8s = %+v", c.MK8s)
 	}
 	c, err = FromLookup(env(map[string]string{
-		"NEBIUS_MOCKER_MK8S_BACKEND":  "k3s",
-		"NEBIUS_MOCKER_MK8S_VERSIONS": "1.36, 1.30 ,1.31",
+		"NEBIUS_MOCKER_MK8S_BACKEND":      "k3s",
+		"NEBIUS_MOCKER_MK8S_VERSIONS":     "1.36, 1.30 ,1.31",
+		"NEBIUS_MOCKER_MK8S_ROLLOUT_STEP": "30s",
 	}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.MK8s.RolloutStep != 30*time.Second {
+		t.Fatalf("rollout step = %s", c.MK8s.RolloutStep)
 	}
 	if c.MK8s.Backend != MK8sBackendK3s || !slices.Equal(c.MK8s.Versions, []string{"1.30", "1.31", "1.36"}) {
 		t.Fatalf("MK8s = %+v", c.MK8s)

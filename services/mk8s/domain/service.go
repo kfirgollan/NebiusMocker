@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -34,6 +35,9 @@ type Config struct {
 	// Detached runs operation Work on its own goroutine (backends whose
 	// calls block for long, such as k3s); the mock backend runs inline.
 	Detached bool
+	// RolloutStep is the pause between the batches of a node rollout, on
+	// the injected clock (0: none).
+	RolloutStep time.Duration
 }
 
 // Deps are the dependencies of a Service. All are required.

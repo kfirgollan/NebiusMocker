@@ -81,10 +81,12 @@ func (s *Service) reconcile(ctx context.Context, c *mk8spb.Cluster, g *mk8spb.No
 		return err
 	}
 	if mode == recreateNodes {
-		if err := deleteNodes(ctx, cn, nodes); err != nil {
-			return s.failNodes(ctx, g, nil, err)
+		fresh, ready, err := s.rollingUpdate(ctx, cn, c, g, nodes)
+		if err != nil {
+			return s.failNodes(ctx, g, fresh, err)
 		}
-		nodes = nil
+		s.setRunning(g, fresh, ready)
+		return s.d.NodeGroups.Update(ctx, g)
 	}
 	nodes, err = s.scale(ctx, cn, c, g, nodes)
 	if err != nil {
@@ -273,6 +275,7 @@ func backendGroup(g *mk8spb.NodeGroup, nodes []peer.NodeInstance) BackendNodeGro
 	bg := BackendNodeGroup{
 		ClusterID: g.GetMetadata().GetParentId(), NodeGroupID: g.GetMetadata().GetId(), Name: g.GetMetadata().GetName(),
 		Version: statusNode(g.GetStatus().GetVersion()).minor, Labels: nodeLabels(g),
+		DrainTimeout: g.GetStatus().GetStrategy().GetDrainTimeout().AsDuration(),
 	}
 	for _, tn := range t.GetTaints() {
 		bg.Taints = append(bg.Taints, NodeTaint{Key: tn.GetKey(), Value: tn.GetValue(), Effect: taintEffects[tn.GetEffect()]})

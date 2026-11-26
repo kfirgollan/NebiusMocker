@@ -6,6 +6,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	mk8spb "github.com/nebius/gosdk/proto/nebius/mk8s/v1"
 
@@ -108,6 +109,11 @@ type BackendNodeGroup struct {
 	Labels map[string]string
 	Taints []NodeTaint
 	Nodes  []BackendNode
+	// DrainTimeout bounds draining the nodes EnsureNodes removes (evicting
+	// their pods before the node goes): the effective
+	// status.strategy.drain_timeout; 0 means no limit. A backend that runs
+	// no pods (mock) has nothing to drain.
+	DrainTimeout time.Duration
 }
 
 // BackendNode is one node: a compute instance the domain created for the

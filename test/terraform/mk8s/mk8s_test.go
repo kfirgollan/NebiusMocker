@@ -11,6 +11,7 @@ package mk8s
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"text/template"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
+	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/memory"
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
@@ -39,9 +41,11 @@ const nodeGroupLabel = "mk8s.nebius.ai/node-group-id"
 func startMK8s(t *testing.T) *testkit.Instance {
 	t.Helper()
 	// A non-zero delay makes operations asynchronous, so the provider's
-	// OperationService polling path is exercised too.
+	// OperationService polling path is exercised too; rollouts pause between
+	// batches, so the provider waits for a multi-step rollout.
 	return testkit.StartT(t, []mocker.Module{iam.New(), vpc.New(), compute.New(), mk8s.New()},
 		mockerOptions(testkit.WithObjStore(memory.New(clock.Real{})), testkit.WithOperationDelay(200*time.Millisecond),
+			testkit.WithConfig(func(c *config.Config) { c.MK8s.RolloutStep = 300 * time.Millisecond }),
 			testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce))...)
 }
 
@@ -161,6 +165,22 @@ func nodes(t *testing.T, inst computesvc.InstanceService, project, groupID strin
 	return inGroup, len(res.GetItems())
 }
 
+// nodeIDs are the instance IDs of a node group's nodes.
+func nodeIDs(t *testing.T, inst computesvc.InstanceService, project, groupID string) []string {
+	t.Helper()
+	res, err := inst.List(t.Context(), &computepb.ListInstancesRequest{ParentId: project})
+	if err != nil {
+		t.Fatalf("list instances: %v", err)
+	}
+	var out []string
+	for _, in := range res.GetItems() {
+		if in.GetMetadata().GetLabels()[nodeGroupLabel] == groupID {
+			out = append(out, in.GetMetadata().GetId())
+		}
+	}
+	return out
+}
+
 // cfg describes the rendered Terraform config.
 type cfg struct {
 	V, Proj, ClusterLabels, CIDR string
@@ -168,6 +188,7 @@ type cfg struct {
 	Autoscale                    bool // autoscaling {min 1, max 3}
 	TemplateLabels               string
 	DataSources                  bool
+	DiskGiB                      int // boot disk size; changing it rolls the nodes out
 }
 
 var cfgTmpl = template.Must(template.New("cfg").Parse(`
@@ -211,7 +232,7 @@ resource "nebius_mk8s_{{.V}}_node_group" "g" {
       preset   = "2vcpu-8gb"
     }
     boot_disk = {
-      size_gibibytes = 64
+      size_gibibytes = {{.DiskGiB}}
       type           = "NETWORK_SSD"
     }
     network_interfaces = [{ public_ip_address = {} }]
@@ -256,7 +277,7 @@ func runLifecycle(t *testing.T, inst *testkit.Instance, v string, api sdkAPI) {
 	t.Helper()
 	instances := computesvc.NewInstanceService(inst.SDK(t))
 	tf := newTerraform(t, inst)
-	c := cfg{V: v, Proj: inst.ProjectID, ClusterLabels: `env = "dev"`, CIDR: "/20", Fixed: 2, TemplateLabels: `pool = "a"`}
+	c := cfg{V: v, Proj: inst.ProjectID, ClusterLabels: `env = "dev"`, CIDR: "/20", Fixed: 2, TemplateLabels: `pool = "a"`, DiskGiB: 64}
 	cName, gName := "c", "g"
 
 	check := func(step string, wantNodes func(groupVersionNodes int64) bool, wantLabels, tmplLabels map[string]string, autoscale bool, fixed int64) {
@@ -275,7 +296,7 @@ func runLifecycle(t *testing.T, inst *testkit.Instance, v string, api sdkAPI) {
 		}
 		g := api.group(t, ids["g"])
 		if g.State != "RUNNING" || g.ParentID != ids["c"] || g.Node != g.Ready || g.Node != g.Target || !wantNodes(g.Node) ||
-			g.Platform != "cpu-d3" || g.Preset != "2vcpu-8gb" || g.DiskType != "NETWORK_SSD" || g.DiskGiB != 64 {
+			g.Platform != "cpu-d3" || g.Preset != "2vcpu-8gb" || g.DiskType != "NETWORK_SSD" || g.DiskGiB != int64(c.DiskGiB) {
 			t.Errorf("%s: node group = %+v", step, g)
 		}
 		if autoscale && (g.Min != 1 || g.Max != 3 || g.Fixed != 0) || !autoscale && (g.Fixed != fixed || g.Max != 0) {
@@ -318,6 +339,20 @@ func runLifecycle(t *testing.T, inst *testkit.Instance, v string, api sdkAPI) {
 	check("update", exactly(3), map[string]string{"env": "prod", "team": "ml"}, map[string]string{"pool": "b"}, false, 3)
 	if got := tf.stateIDs(t)["g"]; got != firstGroup {
 		t.Errorf("node group was replaced by an in-place update: %s -> %s", firstGroup, got)
+	}
+
+	// A template change rolls the nodes out (in batches, per the default
+	// strategy): every node instance is replaced, the node group is not.
+	before := nodeIDs(t, instances, inst.ProjectID, firstGroup)
+	c.DiskGiB = 96
+	tf.writeConfig(t, c.render(t))
+	tf.expectPlan(t, map[string]string{cName: "no-op", gName: "update"})
+	tf.apply(t)
+	check("rollout", exactly(3), nil, map[string]string{"pool": "b"}, false, 3)
+	for _, id := range nodeIDs(t, instances, inst.ProjectID, firstGroup) {
+		if slices.Contains(before, id) {
+			t.Errorf("rollout: node instance %s was not replaced", id)
+		}
 	}
 
 	// Fixed size to autoscaling.

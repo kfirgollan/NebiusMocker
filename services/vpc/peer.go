@@ -19,7 +19,7 @@ func (p nicPeer) Subnet(ctx context.Context, subnetID string) (peer.Subnet, erro
 	if err != nil {
 		return peer.Subnet{}, err
 	}
-	return peer.Subnet{ID: sn.ID, ProjectID: sn.ProjectID, NetworkID: sn.NetworkID}, nil
+	return peer.Subnet{ID: sn.ID, ProjectID: sn.ProjectID, NetworkID: sn.NetworkID, NetworkCIDRs: sn.NetworkCIDRs}, nil
 }
 
 // BindInterface implements peer.NetworkInterfaces.

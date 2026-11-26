@@ -60,7 +60,7 @@ func (*Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps moc
 	if err := peer.Provide[peer.Networks](deps.Peers, peer.NetworksKey, networksPeer{b: svc.NetworkBindings()}); err != nil {
 		return fmt.Errorf("vpc: %w", err)
 	}
-	if err := peer.Provide[peer.DefaultSubnets](deps.Peers, peer.DefaultSubnetsKey, defaultSubnetsPeer{n: svc.Networks()}); err != nil {
+	if err := peer.Provide[peer.DefaultSubnets](deps.Peers, peer.DefaultSubnetsKey, defaultSubnetsPeer{n: svc.Networks(), nics: nicPeer{svc: svc.NICs()}}); err != nil {
 		return fmt.Errorf("vpc: %w", err)
 	}
 

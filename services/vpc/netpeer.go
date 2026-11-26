@@ -36,7 +36,10 @@ func (p networksPeer) Unbind(ctx context.Context, networkID, userID string) erro
 
 // defaultSubnetsPeer provides peer.DefaultSubnets to other modules. It is
 // in-process: no RPC authorization; the consumer authorizes its own request.
-type defaultSubnetsPeer struct{ n *domain.NetworkService }
+type defaultSubnetsPeer struct {
+	n    *domain.NetworkService
+	nics nicPeer
+}
 
 var _ peer.DefaultSubnets = defaultSubnetsPeer{}
 
@@ -49,6 +52,5 @@ func (p defaultSubnetsPeer) DefaultSubnet(ctx context.Context, projectID string)
 	if d.Subnet == nil {
 		return peer.Subnet{}, errs.NotFound(projectID + "/default-subnet")
 	}
-	md := d.Subnet.GetMetadata()
-	return peer.Subnet{ID: md.GetId(), ProjectID: md.GetParentId(), NetworkID: d.Subnet.GetSpec().GetNetworkId()}, nil
+	return p.nics.Subnet(ctx, d.Subnet.GetMetadata().GetId())
 }

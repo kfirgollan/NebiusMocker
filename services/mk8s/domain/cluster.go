@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -121,6 +123,9 @@ func (s *Service) prepareCreateCluster(ctx context.Context, id string, cmd Creat
 		return err
 	}
 	cp.SubnetId = sn.ID
+	if err := checkServiceCIDRs(spec.GetKubeNetwork().GetServiceCidrs(), sn); err != nil {
+		return err
+	}
 	c := &mk8spb.Cluster{Metadata: md, Spec: spec, Status: &mk8spb.ClusterStatus{
 		State: mk8spb.ClusterStatus_PROVISIONING, Reconciling: true,
 		ControlPlane: &mk8spb.ControlPlaneStatus{EtcdClusterSize: etcdSize(cp)},
@@ -170,6 +175,32 @@ func (s *Service) checkControlPlane(cp *mk8spb.ControlPlaneSpec, current string)
 		}
 	}
 	return s.d.Backend.CheckVersion(v)
+}
+
+// checkServiceCIDRs rejects a service CIDR that overlaps the VPC network's
+// private CIDRs. A bare prefix length ("/16") is allocated by the service,
+// so it cannot overlap.
+func checkServiceCIDRs(cidrs []string, sn peer.Subnet) error {
+	for i, c := range cidrs {
+		if strings.HasPrefix(c, "/") {
+			continue
+		}
+		svc, err := netip.ParsePrefix(c)
+		if err != nil {
+			return errs.BadRequest(errs.Violation{Field: fmt.Sprintf("spec.kube_network.service_cidrs[%d]", i), Message: err.Error()})
+		}
+		for _, n := range sn.NetworkCIDRs {
+			np, err := netip.ParsePrefix(n)
+			if err == nil && np.Overlaps(svc) {
+				return errs.BadRequest(errs.Violation{
+					Field: fmt.Sprintf("spec.kube_network.service_cidrs[%d]", i),
+					Message: fmt.Sprintf("%s overlaps %s of network %s: Service ClusterIPs must not collide with VPC addresses",
+						c, n, sn.NetworkID),
+				})
+			}
+		}
+	}
+	return nil
 }
 
 // resolveSubnet returns the control-plane subnet: the project's default

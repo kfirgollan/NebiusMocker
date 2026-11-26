@@ -2,6 +2,7 @@ package vpc_test
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +41,10 @@ func TestDefaultSubnetsPeer(t *testing.T) {
 		t.Errorf("DefaultSubnet = %+v, want a vpcsubnet of a vpcnetwork in %s", sn, inst.ProjectID)
 	}
 	nics, _ := peer.Lookup(probe.peers, peer.NetworkInterfacesKey)
-	if got, err := nics.Subnet(t.Context(), sn.ID); err != nil || got != sn {
+	if len(sn.NetworkCIDRs) == 0 {
+		t.Errorf("DefaultSubnet = %+v, want the network's private CIDRs", sn)
+	}
+	if got, err := nics.Subnet(t.Context(), sn.ID); err != nil || !reflect.DeepEqual(got, sn) {
 		t.Errorf("NetworkInterfaces.Subnet(%s) = %+v, %v; want %+v", sn.ID, got, err, sn)
 	}
 	if _, err := ds.DefaultSubnet(t.Context(), "project-e00nodefaultnetwork"); !errs.IsKind(err, errs.KindNotFound) {

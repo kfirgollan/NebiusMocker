@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MK8s backends (NEBIUS_MOCKER_MK8S_BACKEND).
@@ -26,6 +27,10 @@ type MK8sConfig struct {
 	// oldest first; the newest is the default for new clusters
 	// (NEBIUS_MOCKER_MK8S_VERSIONS, comma-separated).
 	Versions []string
+	// RolloutStep is how long a node group rollout waits between batches
+	// (NEBIUS_MOCKER_MK8S_ROLLOUT_STEP, default 0: batches follow each other
+	// at once). Batches always honour the deployment strategy.
+	RolloutStep time.Duration
 }
 
 // defaultMK8s follows docs.nebius.com/kubernetes/versions: 1.36 is used for
@@ -44,6 +49,7 @@ func mk8sParsers(m *MK8sConfig) []struct {
 	}{
 		{"MK8S_BACKEND", func(s string) error { return parseMK8sBackend(s, &m.Backend) }},
 		{"MK8S_VERSIONS", func(s string) error { return parseMK8sVersions(s, &m.Versions) }},
+		{"MK8S_ROLLOUT_STEP", func(s string) error { return parseDuration(s, &m.RolloutStep) }},
 	}
 }
 

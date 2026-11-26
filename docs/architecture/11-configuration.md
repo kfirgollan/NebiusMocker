@@ -56,7 +56,8 @@ VPC: `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` (default `10.0.0.0/13`, the `defau
 `NEBIUS_MOCKER_VPC_PUBLIC_CIDR` (default `203.0.113.0/24`, the `default-public-pool`); see
 [services/vpc.md](../services/vpc.md#configuration).
 mk8s: `NEBIUS_MOCKER_MK8S_BACKEND` (`mock`, the default, runs no Kubernetes API; `k3s` is not available yet) and
-`NEBIUS_MOCKER_MK8S_VERSIONS` (default `1.34,1.35,1.36`, comma-separated `<major>.<minor>`, the newest is the default
+`NEBIUS_MOCKER_MK8S_ROLLOUT_STEP` (default `0`: the pause between the batches of a node group rollout, on the mocker's
+clock) and `NEBIUS_MOCKER_MK8S_VERSIONS` (default `1.34,1.35,1.36`, comma-separated `<major>.<minor>`, the newest is the default
 for new clusters); see [services/mk8s.md](../services/mk8s.md#configuration).
 Applications: `NEBIUS_MOCKER_APPLICATIONS_PRODUCTS` (comma-separated Marketplace product slugs a K8s release may install;
 default `nebius/soperator,nebius/nvidia-gpu-operator,nebius/nvidia-network-operator,nebius/kuberay,nebius/jupyterhub,nebius/mlflow`);

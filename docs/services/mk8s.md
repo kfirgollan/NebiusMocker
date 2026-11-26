@@ -21,7 +21,8 @@
 | Authorization: rules for every RPC (`mk8s.clusters.*`, `mk8s.nodeGroups.*`); viewers read clusters, node groups and node instances | ✅ |
 | `nebius_mk8s_v1_{cluster,node_group}` and `nebius_mk8s_v1alpha1_{cluster,node_group}` resources and data sources with the official provider | ✅ e2e: `test/terraform/mk8s` |
 | A working Kubernetes API (`kubectl`, Helm, the Kubernetes provider) | `k3s` backend, Phase B |
-| Quotas, rollout pacing, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, `max_pods`, container runtime | Not yet (see [Not yet](#not-yet)) |
+| Rolling node replacement in batches that honour `strategy` (`max_surge`, `max_unavailable`), progress in `status` | ✅ |
+| Quotas, audit logs, Karpenter, OIDC, NVLink, reservations, local disks, spot, auto-repair conditions, `max_pods`, container runtime | Not yet (see [Not yet](#not-yet)) |
 
 Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100, nebius CLI 0.12.312.
 
@@ -50,6 +51,9 @@ happens, the mock's choice is marked *(mock)*.
   catalog version. The subnet must exist and be in the cluster's project. The cluster binds its VPC network, so the
   network cannot be deleted under it; the binding is released at cluster delete even when the subnet was deleted first.
   `subnet_id` and `kube_network.service_cidrs` are immutable (an empty value on update keeps the stored one).
+- **Service CIDRs.** A `kube_network.service_cidrs` CIDR that overlaps the private CIDRs of the cluster's VPC network (its
+  private pools and the subnet's own) is `INVALID_ARGUMENT` naming `spec.kube_network.service_cidrs[0]`. A bare prefix
+  length (`/16`, the default) is allocated by the service and cannot overlap.
 - **Versions.** `control_plane.version` must be in the catalog (`NEBIUS_MOCKER_MK8S_VERSIONS`, default `1.34,1.35,1.36`,
   the versions the Nebius docs list; `ListControlPlaneVersions` returns the catalog). An update can keep the version or
   raise it by one minor; skipping a minor or a downgrade is `INVALID_ARGUMENT`. The backend must also support the version
@@ -82,10 +86,22 @@ happens, the mock's choice is marked *(mock)*.
   returns the node group versions allowed for that cluster version and their images: `ubuntu24.04` and `ubuntu22.04`
   driverless on CPU and GPU platforms, `cuda12` on GPU platforms, `cuda12.8` on Blackwell platforms *(mock: the images are
   the mock's reading of the docs, the same for every minor)*.
-- **Update** scales the group (the fixed count, or the current count clamped to the autoscaling bounds) and **recreates all
-  nodes** when the template or the version changes. `taints` and `metadata` (the Kubernetes node labels) do not roll out,
-  as the proto says. `Upgrade` moves the group to the latest node image and the cluster's patch version, recreating its
-  nodes; it does nothing when the group is already there.
+- **Update** scales the group (the fixed count, or the current count clamped to the autoscaling bounds) and **rolls the
+  nodes out** when the template or the version changes. `taints` and `metadata` (the Kubernetes node labels) do not roll
+  out, as the proto says. `Upgrade` moves the group to the latest node image and the cluster's patch version, rolling its
+  nodes out; it does nothing when the group is already there.
+- **Rollouts** replace the outdated nodes in batches, like a Kubernetes rolling update, per `status.strategy`:
+  up to `max_surge` new nodes above the target are added first (a percentage rounds up), and old nodes are removed
+  while at least target − `max_unavailable` nodes are ready (a percentage rounds down; both 0 after rounding allows one
+  unavailable node). Each batch creates the new compute instances, hands the node set to the backend, takes the removed
+  nodes out of the backend and only then deletes their instances, and records `node_count`, `ready_node_count` and
+  `outdated_node_count` (counting down; `reconciling` is true). Batches are `NEBIUS_MOCKER_MK8S_ROLLOUT_STEP` apart on the
+  mocker's clock (default 0: one after the other); with a step, the operation runs detached and finishes with the last
+  batch. A rollout that can neither add nor remove a node (new nodes never get ready) fails after ten checks, leaving the
+  counts as they are. `NodeGroupStatus` has no progress tracker field; the counts are the progress.
+- **Draining** (`drain_timeout`): removed nodes leave the backend's node set before their instances are deleted, and
+  `BackendNodeGroup.DrainTimeout` carries the effective `status.strategy.drain_timeout` (0: no limit), so a Kubernetes
+  backend drains them inside `EnsureNodes`, bounded by it. The `mock` backend runs no pods and has nothing to drain.
 - **Delete** sets `DELETING`, deletes the node instances and empties the group in the backend.
 
 #### Node instances
@@ -173,12 +189,10 @@ write (`test/contract/mk8s_authz_test.go`).
 ### Not yet
 
 - Quotas (`mk8s.cluster.count`, `mk8s.nodegroup.count`) and node-level compute quotas.
-- Rollout pacing: `strategy` (`max_unavailable`, `max_surge`, `drain_timeout`) is validated and reported in `status`, but
-  nodes are recreated all at once, not in waves.
-- A check that `kube_network.service_cidrs` does not overlap the VPC's CIDRs.
 - Audit logs, Karpenter and OIDC authentication; NVLink, capacity reservations, local disks, spot pricing, SOCI pull mode,
   `max_pods` and DRA (all rejected, see above).
-- Auto-repair: the setting is stored, but nodes are never repaired, and `auto_repair.conditions` is rejected.
+- Auto-repair: the setting is stored, but nodes never fail in the mock, so nothing is repaired (like compute's
+  `recovery_policy`); `auto_repair.conditions` is rejected.
 - Real node images and GPU drivers: nodes are management-plane compute instances (no VM boots), and Kubernetes nodes
   exist only with a Kubernetes backend.
 - The `k3s` backend and its Docker-backed tests (Phase B), and mocker-issued IAM tokens at the Kubernetes API.
@@ -186,7 +200,8 @@ write (`test/contract/mk8s_authz_test.go`).
 ## Terraform
 
 All four resources and data sources run against the real provider in `test/terraform/mk8s`: create, an empty plan, an
-in-place update, another empty plan, replacement on immutable attributes, and destroy, plus a `viewer` that can read but
+in-place update, another empty plan, a template change that rolls every node instance out in batches, replacement on
+immutable attributes, and destroy, plus a `viewer` that can read but
 not create.
 
 | Kind | Terraform type | Service | RPCs called | Tested |
@@ -217,6 +232,7 @@ commands (see [applications.md](applications.md)).
 | Env | Default | Description |
 |---|---|---|
 | `NEBIUS_MOCKER_MK8S_BACKEND` | `mock` | `mock` \| `k3s` (`k3s` is not available yet) |
+| `NEBIUS_MOCKER_MK8S_ROLLOUT_STEP` | `0` | Pause between the batches of a node group rollout, on the mocker's clock |
 | `NEBIUS_MOCKER_MK8S_VERSIONS` | `1.34,1.35,1.36` | Control-plane version catalog, `<major>.<minor>`, comma-separated; the newest is the default for new clusters |
 
 ## k3s backend

@@ -58,6 +58,9 @@ type Subnet struct {
 	ID        string
 	ProjectID string
 	NetworkID string
+	// NetworkCIDRs are the network's private IPv4 CIDRs (its private pools'
+	// and the subnet's own); filled by NetworkInterfaces.Subnet.
+	NetworkCIDRs []string
 }
 
 // InterfaceBinding is the desired state of one instance NIC.

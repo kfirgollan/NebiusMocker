@@ -231,7 +231,7 @@ func (s *Service) UpdateNodeGroup(ctx context.Context, cmd UpdateNodeGroupCmd) (
 	var p *ngPlan
 	return s.d.Ops.Submit(ctx, operations.Spec{
 		ResourceID: id, Description: "Update node group", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
-		Request: cmd.Request, Detached: s.d.Config.Detached,
+		Request: cmd.Request, Detached: s.rolloutDetached(),
 		Prepare: func(ctx context.Context) error {
 			var err error
 			if p, err = s.planUpdate(ctx, cmd.Metadata, cmd.Spec, cmd.ResetMask, &checker{}); err != nil || !p.changed {
@@ -342,13 +342,20 @@ func updateNodeVersion(stored *mk8spb.NodeGroup, spec *mk8spb.NodeGroupSpec, clu
 	return nv
 }
 
+// rolloutDetached reports whether operations that may roll nodes out run
+// detached: for a slow backend, or when batches wait RolloutStep on the
+// clock (inline work would block the RPC).
+func (s *Service) rolloutDetached() bool {
+	return s.d.Config.Detached || s.d.Config.RolloutStep > 0
+}
+
 // UpgradeNodeGroup moves a node group to the latest node image of its
 // minor (and the cluster's patch version), recreating its nodes.
 func (s *Service) UpgradeNodeGroup(ctx context.Context, id string, request proto.Message) (*operations.Operation, error) {
 	rollout := false
 	return s.d.Ops.Submit(ctx, operations.Spec{
 		ResourceID: id, Description: "Upgrade node group", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
-		Request: request, Detached: s.d.Config.Detached,
+		Request: request, Detached: s.rolloutDetached(),
 		Prepare: func(ctx context.Context) error {
 			var err error
 			rollout, err = s.prepareUpgrade(ctx, id)
