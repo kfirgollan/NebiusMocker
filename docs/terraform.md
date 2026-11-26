@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 34 | 0 | 1 (`nebius_hash`) | 15 |
-| Data sources | 62 | 45 | 0 | 1 (`nebius_parent_id`) | 16 |
+| Resources | 50 | 37 | 0 | 1 (`nebius_hash`) | 12 |
+| Data sources | 62 | 48 | 0 | 1 (`nebius_parent_id`) | 13 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **83** | **0** | **2** | **31** |
+| **Total** | **116** | **89** | **0** | **2** | **25** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -105,9 +105,9 @@ supply real credentials.
 | `nebius_quotas_v1_quota_allowance` | ❌ Missing | |
 | `nebius_registry_v1_registry` | ✅ | `docker push`/`pull` work with the Harbor backend ([registry.md](services/registry.md)) |
 | `nebius_storage_v1_bucket` | ✅ | CORS, policies, lifecycle rules, size limits and storage classes take effect with the RustFS backend ([storage.md](services/storage.md)) |
-| `nebius_storage_v1_inventory` | ❌ Missing | |
-| `nebius_storage_v1_transfer` | ❌ Missing | |
-| `nebius_storage_v1alpha1_transfer` | ❌ Missing | |
+| `nebius_storage_v1_inventory` | ✅ | Reports (CSV/Parquet, manifest) really land in the destination bucket on the mock clock ([storage.md](services/storage.md#inventories)) |
+| `nebius_storage_v1_transfer` | ✅ | Iterations really copy objects (Nebius, S3-compatible and Azure Blob sources) with the RustFS backend ([storage.md](services/storage.md#transfers)) |
+| `nebius_storage_v1alpha1_transfer` | ✅ | Deprecated API; same engine, its transfers are also visible through v1 |
 | `nebius_tunnel_v1_tunnel` | ❌ Missing | |
 | `nebius_vpc_v1_allocation` | ✅ | Real IP address management: private and public addresses come from pool CIDRs ([vpc.md](services/vpc.md)) |
 | `nebius_vpc_v1_network` | ✅ | |
@@ -167,9 +167,9 @@ supply real credentials.
 | `nebius_quotas_v1_quota_allowance` | ❌ Missing | |
 | `nebius_registry_v1_registry` | ✅ | |
 | `nebius_storage_v1_bucket` | ✅ | |
-| `nebius_storage_v1_inventory` | ❌ Missing | |
-| `nebius_storage_v1_transfer` | ❌ Missing | |
-| `nebius_storage_v1alpha1_transfer` | ❌ Missing | |
+| `nebius_storage_v1_inventory` | ✅ | |
+| `nebius_storage_v1_transfer` | ✅ | |
+| `nebius_storage_v1alpha1_transfer` | ✅ | |
 | `nebius_tunnel_v1_tunnel` | ❌ Missing | |
 | `nebius_vpc_v1_allocation` | ✅ | |
 | `nebius_vpc_v1_default_network` | ✅ | Seeded default network and subnet in each project |
@@ -200,7 +200,6 @@ supply real credentials.
 | Area | Missing objects | Service doc |
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
-| Object Storage | `inventory`, `transfer` (v1 and v1alpha1): 3 resources, 3 data sources | [storage.md](services/storage.md) |
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
 | Capacity | `capacity_allowance` (resource and data source), `capacity_block_group` (data source) | [capacity.md](services/capacity.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |

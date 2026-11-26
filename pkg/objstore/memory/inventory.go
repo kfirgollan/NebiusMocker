@@ -37,8 +37,8 @@ func (s *Store) ListVersions(_ context.Context, name, prefix string) iter.Seq2[o
 			yield(objstore.Version{}, fmt.Errorf("bucket %s: %w", name, objstore.ErrBucketNotFound))
 			return
 		}
-		for _, v := range vs {
-			if !yield(v, nil) {
+		for i := range vs {
+			if !yield(vs[i], nil) {
 				return
 			}
 		}
@@ -74,4 +74,10 @@ func (s *Store) ObjectTags(_ context.Context, name, key, _ string) (map[string]s
 		return nil, err
 	}
 	return map[string]string{}, nil
+}
+
+// ChecksumAlgorithms implements the checksum lookup of bucket inventories.
+// The memory store keeps no checksums.
+func (s *Store) ChecksumAlgorithms(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
 }

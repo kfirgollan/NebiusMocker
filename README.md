@@ -118,10 +118,9 @@ resource "nebius_compute_v1_instance" "gpu" {
 
 ### Terraform notes
 
-- **Coverage:** 83 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
+- **Coverage:** 89 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
   end to end. [docs/terraform.md](docs/terraform.md) lists every object with its status, compared with the official
-  provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are mk8s, the managed databases, and storage
-  inventory and transfer.
+  provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are mk8s and the managed databases.
 - **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
   empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
   apply shows a diff, that is a bug in the mock.
@@ -150,6 +149,13 @@ Buckets can also be created with `nebius storage bucket create` or `nebius_stora
 (incl. anonymous reads), lifecycle rules, size limits and storage classes take effect; see the storage doc for what is
 rejected. Terraform objects use the official `hashicorp/aws`
 provider; see [docs/services/storage.md](docs/services/storage.md#terraform).
+
+Bucket inventories (`nebius storage inventory create`, `nebius_storage_v1_inventory`) write AWS-compatible CSV or
+Parquet reports with a manifest into the destination bucket, the first one within a minute, then daily or weekly.
+Data transfers (`nebius storage transfer create --file transfer.json`, `nebius_storage_v1_transfer`) really copy
+objects into or out of mocker buckets from another bucket, any S3-compatible endpoint (MinIO, a second RustFS, AWS) or
+Azure Blob Storage (e.g. Azurite), iteration by iteration. See
+[storage.md](docs/services/storage.md#inventories).
 
 Common settings (all `NEBIUS_MOCKER_*` env vars, see [configuration](docs/architecture/11-configuration.md)):
 

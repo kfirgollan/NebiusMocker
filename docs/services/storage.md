@@ -1,7 +1,7 @@
 # Object Storage
 
 > Module: `services/storage` · Image: `nebius-mocker-storage` · `NEBIUS_MOCKER_SERVICES=storage`
-> M1 tier: **T2** bucket, **T1** inventory/transfer · M3: **T3** S3 data plane · Endpoints: `cpl.storage`, `transfer.storage`
+> M1 tier: **T2** bucket, inventory, transfer · M3: **T3** S3 data plane · Endpoints: `cpl.storage`, `transfer.storage`
 
 
 ## Implementation status
@@ -25,12 +25,21 @@
 | Go SDK: buckets with `gosdk`, objects with the AWS SDK for Go v2 | ✅ e2e: `test/storage` (`make e2e-storage`) |
 | Documented CLI flows: `nebius storage bucket …`, the quick start (`nebius iam …` service account + access key, `aws configure set …`, `aws s3 mb/cp/ls/sync/mv/rm/rb`, `aws s3api put/get-bucket-lifecycle-configuration`) | ✅ e2e: `test/storage/cli_e2e_test.go` (`make e2e-storage`; pinned CLIs installed into the user cache, never system-wide) |
 | Filesystem buckets (`spec.filesystem_bucket`): a view of a compute shared filesystem (READY, same project, `compute.filesystems.useViaObjectStorage` on it; recorded on the filesystem atomically with its checks, so the filesystem cannot be deleted while the bucket exists); `status.bucket_type` `FILESYSTEM`; objects relayed to the filesystem's store bucket with the filesystem size as capacity; `FILESYSTEM` storage class; immediate delete that keeps the files; `ListWithFilter` by type and `filesystem_id`. Refused by name: non-root `directory`, non-default `uid`/`gid`/`file_mode`/`directory_mode`, versioning, lifecycle rules, anonymous policies, delayed deletion, S3 PutBucketVersioning/PutBucketLifecycleConfiguration/object tagging (501) | ✅ e2e: `test/filesystems` (`make e2e-filesystems`), `test/terraform/compute/filesystem_test.go`. See [compute.md](compute.md#shared-filesystems-implemented) |
-| `InventoryService`, `TransferService` (v1, v1alpha1) | Not yet (UNIMPLEMENTED) |
+| `nebius.storage.v1.InventoryService`: Get, GetByName, List (paged), Create, Update (reset mask, `resource_version`), Delete; up to 5 per bucket, name per bucket and immutable, destination permission check | ✅ T2 |
+| Inventory reports: AWS-compatible CSV (gzip) and Parquet (Snappy) files, `manifest.json`, `manifest.checksum` and the Hive `symlink.txt` written into the destination bucket, first report at the next sweep then daily/weekly on the mock clock; all optional fields (last access tracked by the S3 front, checksums, multipart flag, lifecycle expiration, tags); `status.last_success` / `error_code` (`DESTINATION_BUCKET_NOT_FOUND`, `PERMISSION_DENIED`, `QUOTA_EXCEEDED`) | ✅ e2e: `test/storage/inventory_e2e_test.go` (`make e2e-storage`) |
+| `nebius.storage.v1.TransferService`: Get, GetByName, List (paged), Create, Update (reset mask; immutables refused by name; input-only secrets kept when sent back empty), Stop, Resume, Delete (`resource_version`), GetIterationHistory | ✅ T2 |
+| `nebius.storage.v1alpha1.TransferService` (deprecated): every RPC; its transfers are also visible and controllable through v1 | ✅ T2 |
+| Transfer iterations really copy objects: sources `nebius` (buckets of this mocker, through its S3 front with the given access key), `s3_compatible` (any S3 endpoint) and `azure_blob_storage`; destinations `nebius` and `s3_compatible`; prefixes, `IF_NEWER`/`NEVER` (v1alpha1 also `ALWAYS`), `touch_unmanaged`, `enable_deletes_in_destination`, metadata-only updates, multipart from 100 MB, the three stop conditions, `inter_iteration_interval` and both limiters, all on the mock clock | ✅ e2e: `test/storage/transfer_e2e_test.go` (`make e2e-storage`, with a second RustFS as external S3 and Azurite as Azure) |
+| `nebius_storage_v1_inventory`, `nebius_storage_v1_transfer`, `nebius_storage_v1alpha1_transfer` resources + data sources with the official provider (incl. write-only `sensitive` secrets) | ✅ e2e: `test/terraform/storage/{inventory,transfer}_test.go` (`make e2e`) |
+| Documented CLI flows: `nebius storage inventory create/list/get-by-name/update/delete`, `nebius storage transfer create --file/list/get/update/stop/resume/get-iteration-history/delete`, `nebius storage v1alpha1 transfer …`, reports read with `aws s3 ls/cp` | ✅ e2e: `test/storage/{inventory,transfer}_cli_e2e_test.go` (`make e2e-storage`) |
+| S3 front keeps client checksums (`x-amz-checksum-*` headers and aws-chunked trailers, whose signature is verified) and returns them with `ChecksumMode` | ✅ e2e: `services/storage/s3/checksum_e2e_test.go` |
 
-Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (hashicorp/aws 6.70.0, RustFS 1.0.6, nebius CLI 0.12.312, AWS CLI 2.42.3).
+Verified against: nebius/api@4522189, terraform-provider-nebius v0.6.91, gosdk v0.2.100 (hashicorp/aws 6.70.0, RustFS 1.0.6, Azurite 3.35.0, nebius CLI 0.12.312, AWS CLI 2.42.3); inventory and transfer services added 2026-11-26.
 
 Covered by domain unit tests with fakes (`services/storage/domain`: policy, CORS, lifecycle executor, counters, storage
-classes, S3 bucket calls), DAL tests (`services/storage/dal`), S3 front tests (`services/storage/s3`: routing, SigV4
+classes, S3 bucket calls, inventory validation/scheduler/report formats, transfer validation/state machine/runner and
+the iteration engine with its limiters), adapter tests (`services/storage/backend/{s3endpoint,azblob}` against RustFS and
+Azurite), DAL tests (`services/storage/dal`), S3 front tests (`services/storage/s3`: routing, SigV4
 accept/reject incl. region, XML conversion), `pkg/sigv4` and `pkg/objstore` (inventory conformance) tests, gosdk contract
 tests on the in-memory object store (`test/contract/storage_bucket_test.go`), and the Docker-gated suites above
 (`make e2e-storage` starts and removes RustFS).
@@ -46,7 +55,7 @@ policies, storage classes, size limits, filesystem-bucket mode), **inventories**
 |---|---|---|---|---|
 | Bucket | `Bucket` | `storagebucket` | project | `CREATING, ACTIVE, UPDATING, SCHEDULED_FOR_DELETION` |
 | Inventory | `Inventory` | `storagebucketinventory` | bucket | |
-| Transfer | `Transfer` (v1, v1alpha1) | `storagetransfer` | project | running/stopped; iteration history |
+| Transfer | `Transfer` (v1, v1alpha1) | `storagetransfer` | project | `ACTIVE, STOPPING, STOPPED, FAILED, DELETING`; iteration history |
 
 ## Emulation design
 
@@ -184,18 +193,127 @@ stored without effect.
   module, which records them as `DATA_PLANE` events ([audit.md](audit.md#data-plane-events)). With the audit module
   disabled nothing is recorded.
 
+### Inventories
+
+An inventory (`storagebucketinventory`, child of its **source** bucket) makes the mocker write periodic object
+listings of the bucket into a destination bucket, as
+[docs.nebius.com/object-storage/buckets/inventory](https://docs.nebius.com/object-storage/buckets/inventory)
+describes. Reports are written by the storage module's minute sweeper (mock clock) into the object store; read them
+like any object, through the S3 front (`aws s3 ls/cp`, the AWS SDK).
+
+- **Validation:** the parent must be an `ACTIVE`, non-filesystem bucket; `metadata.name` 1–64 chars of `A-Za-z0-9._-`
+  (it appears in report keys), unique per bucket, immutable (`IMMUTABLE_NAME`); at most **5** per bucket
+  (`RESOURCE_EXHAUSTED`, checked atomically with the insert, so parallel creates cannot exceed it);
+  `destination_bucket_id` an `ACTIVE` non-filesystem bucket (the source itself is allowed); `destination_prefix`
+  ≤ 256; `output_format` and `schedule` required; `optional_fields` without duplicates. The spec is echoed exactly.
+- **Permissions:** `storage.inventories.{get,list,create,update,delete}` on the bucket (the seeded editor manages,
+  viewer reads). A destination other than the source also needs `storage.objects.create` there (`storage.uploader`),
+  checked at Create/Update and again for every report, on behalf of the last writer of the configuration.
+- **Schedule:** the first report is written at the next sweep (within a mocker minute of Create), then every 24 h
+  (`DAILY`) or 7 days (`WEEKLY`) after the previous one. Nebius does not guarantee the time of day; the mocker's choice
+  makes reports visible right away in local development. Disabled configurations write nothing; re-enabling continues
+  on schedule (no immediate report, as documented); a schedule change applies from the last report. A failed report is
+  retried after an hour.
+- **Report layout** (each report is a new set of objects; nothing is overwritten), with `base` =
+  `<destination_prefix>/<source bucket>/<inventory name>`: `base/data/<uuid>.csv.gz` or `.parquet`,
+  `base/<YYYY-MM-DDTHH-MMZ>/manifest.json`, `base/<YYYY-MM-DDTHH-MMZ>/manifest.checksum` (MD5 of the manifest) and
+  `base/hive/dt=<YYYY-MM-DD-HH-MM>/symlink.txt` (`s3://<destination>/<data key>`). The manifest has the AWS S3
+  Inventory shape the Nebius docs show (`sourceBucket`, `destinationBucket`, `version` `2016-11-30`,
+  `creationTimestamp` in epoch ms, `fileFormat` `CSV`/`Parquet`, `fileSchema`, `files[]` with `key`, `size`,
+  `MD5checksum`).
+- **Rows:** current versions under `source_prefix`, or with `noncurrent_versions` every version and delete marker.
+  Columns: `Bucket, Key, [VersionId, IsLatest, IsDeleteMarker,] Size, LastModifiedDate, ETag, StorageClass`, then the
+  selected optional fields in the order `IsMultipartUploaded, IntelligentTieringAccessTier, ChecksumAlgorithm,
+  LastAccessDate, LifecycleExpirationDate, Tags`. CSV follows AWS: no header, every field quoted, keys URL-encoded,
+  ISO 8601 times with milliseconds. Parquet (Snappy) uses AWS's snake_case column names (`bucket`, `key`,
+  `version_id`, …, timestamps in milliseconds). `StorageClass` uses Nebius names. `IntelligentTieringAccessTier` is
+  always empty because the `INTELLIGENT` class is rejected. `ChecksumAlgorithm` is the algorithm of the checksum the
+  client sent with the upload (the S3 front keeps checksums). `LastAccessDate` is the last `GetObject` through the S3
+  front while an enabled configuration with `LAST_ACCESS` exists for the bucket (tracking is not retroactive, as
+  documented). `LifecycleExpirationDate` comes from the source bucket's enabled expiration rules. `Tags` is
+  `k1=v1&k2=v2`.
+- **Status:** `last_success` of the last report; `error_code` `DESTINATION_BUCKET_NOT_FOUND` (destination missing or
+  not `ACTIVE`), `PERMISSION_DENIED` (the writer lost `storage.objects.create`), `QUOTA_EXCEEDED` (the report would push
+  the destination over `max_size_bytes`), else `NO_ERROR`. Status changes never bump `resource_version`. Inventories of
+  a purged bucket are removed; delivered reports stay.
+
+### Transfers
+
+A transfer (`storagetransfer`, child of a project) copies objects in **iterations**, as
+[docs.nebius.com/object-storage/transfer](https://docs.nebius.com/object-storage/transfer/overview) describes. The
+mocker's engine talks real S3 (AWS SDK for Go) or Azure Blob (Azure SDK) to both sides with the credentials of the
+spec. A `nebius` side is a bucket of this mocker, reached through its own S3 front, so SigV4, IAM permits, bucket
+policies, size limits and audit apply exactly as for any client. Iterations run in the background on the mock clock.
+
+- **Sides:** sources `nebius`, `s3_compatible`, `azure_blob_storage`; destinations `nebius`, `s3_compatible`. At least
+  one side must be `nebius` (external to external is refused, as documented). A `nebius` side must use the served
+  region (`NEBIUS_MOCKER_STORAGE_REGION`, `eu-north1`); other regions are refused by name. A `nebius` destination bucket
+  must exist, be `ACTIVE` and belong to the transfer's project (docs: create the transfer in the destination's
+  project); with an external destination the same applies to the source bucket. Endpoints must be absolute `http://`
+  or `https://` URLs without a trailing slash. The mocker accepts `http` (Nebius documents `https`) so that local
+  servers such as MinIO, RustFS or Azurite (`http://127.0.0.1:10000/devstoreaccount1`) work. S3-compatible endpoints
+  are used path style.
+- **Credentials:** `secret_access_key` and the Azure `access_key` are `INPUT_ONLY` and never returned (v1alpha1: the
+  whole `credentials` messages). An Update that sends them empty keeps the stored secret; a Create without the secret
+  of an access key is refused.
+- **An iteration** lists the source under `source.prefix` (ListObjects pages of 1000). The destination key is
+  `destination.prefix` + the key without `source.prefix` (an empty or > 1024-byte key fails the iteration). A missing
+  destination object is copied (GetObject + PutObject, multipart in ~50 MB parts from 100 MB). An existing one is kept
+  with `NEVER`; with `IF_NEWER` it is overwritten when the source `Last-Modified` is newer and the object is
+  **managed** (written by a transfer and unchanged since: the mocker remembers the ETags it wrote) or `touch_unmanaged`
+  is set; v1alpha1 `ALWAYS` overwrites unconditionally. The same data with different metadata is fixed with CopyObject
+  (`MetadataDirective=REPLACE`) without moving bytes. With `enable_deletes_in_destination`, destination objects under
+  `destination.prefix` without a source counterpart are deleted (only managed ones unless `touch_unmanaged`). After the
+  first successful iteration, source objects last modified before the newest source object of the previous successful
+  iteration are skipped (docs: "objects last modified before the last successful iteration are skipped"). v1alpha1
+  transfers behave as `touch_unmanaged=true` without deletes.
+- **Limiters:** `requests_per_second` (source ListObjects pages, HeadObject, GetObject) and
+  `bandwidth_bytes_per_second` (bytes read from the source) are token buckets on the mock clock; 0 means the documented
+  defaults (4000 requests/s, 50 GiB/s).
+- **Lifecycle:** Create starts the first iteration at once. After each iteration the stop condition is checked:
+  `after_one_iteration` stops; `after_n_empty_iterations` stops after N consecutive iterations that copied and deleted
+  nothing; `infinite` never stops. Otherwise the next iteration starts `inter_iteration_interval` (stored as `15m` when
+  unset, `NON_EMPTY_DEFAULT`) after the previous one ended. An endpoint error fails the iteration and the transfer
+  (`FAILED`, `status.error` with `origin` SOURCE/DESTINATION and the endpoint's code and message, e.g. `AccessDenied`).
+  `Stop` (only `ACTIVE`) stops at once between iterations, otherwise goes `STOPPING`, interrupts the running iteration
+  (`INTERRUPTED`) and ends `STOPPED`. `Resume` (`STOPPED`/`FAILED`) starts a new iteration. v1 `Delete` interrupts a
+  running iteration (`DELETING`) and removes the transfer and its history; copied objects stay. v1alpha1 `Delete`
+  accepts only `STOPPED`/`FAILED` transfers, as its proto says. `status.suspension_state` is always `NOT_SUSPENDED`
+  (suspension is a billing action). `GetIterationHistory` lists iterations newest first.
+- **Update:** name, labels, credentials, limiters, stop condition and interval. Everything the protos mark `IMMUTABLE`
+  (providers, endpoints, regions, bucket names, prefixes, `overwrite_strategy`, `enable_deletes_in_destination`,
+  `touch_unmanaged`) is refused by name; in v1alpha1 `overwrite_strategy` is mutable. Changes apply from the next
+  iteration.
+- **Two API versions, one transfer:** v1alpha1 transfers are listed and controlled through v1 too ("All existing
+  transfers remain accessible through the v1 API"). There their source shows as `s3_compatible` (`azure_blob_storage`
+  for Azure credentials), their destination as `nebius`, `touch_unmanaged=true`, and `ALWAYS` as the raw enum value
+  `3` (v1 has no name for it). The v1alpha1 API sees only transfers created through it. A transfer is updated through
+  the API version it was created with (the other answers `FAILED_PRECONDITION`).
+- **Permissions:** `storage.transfers.{get,list,create,update,delete}`; `Stop` needs `storage.transfers.stop`, `Resume`
+  `storage.transfers.start`, `GetIterationHistory` `storage.transfers.get` (seeded editor: all; viewer: reads). Bucket
+  access is checked by the S3 front for every request with the spec's access keys.
+- **Docker-free mode** (`NEBIUS_MOCKER_OBJSTORE=memory`): the API works fully, but the S3 front has no data plane, so
+  iterations touching a `nebius` side fail with the front's `NotImplemented`.
+
+## Not yet
+
+- Inventory: the S3 inventory-configuration API (`PutBucketInventoryConfiguration` & co., not supported by Nebius
+  either); filesystem buckets as source or destination (refused by name); a report always has one data file.
+- Transfer: regions other than the served one (refused by name); the `FAILING` state (failures go straight to `FAILED`;
+  no retries inside an iteration); suspension; updating a transfer through the other API version.
+
 ## Terraform
 
 | Kind | Terraform type | Service | RPCs called | Tier |
 |---|---|---|---|---|
 | Resource | `nebius_storage_v1_bucket` | `nebius.storage.v1.BucketService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 |
-| Resource | `nebius_storage_v1_inventory` | `nebius.storage.v1.InventoryService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T1 |
-| Resource | `nebius_storage_v1_transfer` | `nebius.storage.v1.TransferService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T1 |
-| Resource | `nebius_storage_v1alpha1_transfer` | `nebius.storage.v1alpha1.TransferService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T1 |
+| Resource | `nebius_storage_v1_inventory` | `nebius.storage.v1.InventoryService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 |
+| Resource | `nebius_storage_v1_transfer` | `nebius.storage.v1.TransferService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 |
+| Resource | `nebius_storage_v1alpha1_transfer` | `nebius.storage.v1alpha1.TransferService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 |
 | Data source | `nebius_storage_v1_bucket` | `nebius.storage.v1.BucketService` | Get, GetByName | T2 |
-| Data source | `nebius_storage_v1_inventory` | `nebius.storage.v1.InventoryService` | Get, GetByName | T1 |
-| Data source | `nebius_storage_v1_transfer` | `nebius.storage.v1.TransferService` | Get, GetByName | T1 |
-| Data source | `nebius_storage_v1alpha1_transfer` | `nebius.storage.v1alpha1.TransferService` | Get, GetByName | T1 |
+| Data source | `nebius_storage_v1_inventory` | `nebius.storage.v1.InventoryService` | Get, GetByName | T2 |
+| Data source | `nebius_storage_v1_transfer` | `nebius.storage.v1.TransferService` | Get, GetByName | T2 |
+| Data source | `nebius_storage_v1alpha1_transfer` | `nebius.storage.v1alpha1.TransferService` | Get, GetByName | T2 |
 
 Objects are managed the way Nebius documents for S3 tools: the official `hashicorp/aws` provider with the S3 endpoint,
 region and an access key, here the mocker's S3 front:
@@ -238,6 +356,12 @@ resource "aws_s3_object" "hello" {
 | `NEBIUS_MOCKER_STORAGE_PURGE_GRACE` | `168h` | Default soft-delete grace |
 
 ## Open questions
+- Inventory: Nebius does not document the report time of day, the CSV quoting and encoding, the Parquet schema, the
+  Tags and LastAccessDate column names or the null-version `VersionId`; the mocker follows AWS S3 Inventory where it
+  can (see [Inventories](#inventories)).
+- Transfer: how Nebius identifies managed destination objects (the mocker remembers the ETags it wrote), whether
+  `inter_iteration_interval` counts from the start or the end of an iteration (the mocker: the end), and the exact
+  rule for skipping unchanged source objects.
 - Whether real Nebius allows deleting a non-empty bucket (the mocker refuses, `FAILED_PRECONDITION`); docs show
   `delete --ttl 0s` for non-empty buckets.
 - The exact `status.domain_name` format, and whether `status.counters` lists a `STANDARD` entry for an empty bucket.

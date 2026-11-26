@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore"
 )
@@ -30,8 +31,8 @@ func (c *Client) ListVersions(ctx context.Context, bucket, prefix string) iter.S
 			}
 			vs := pageVersions(page)
 			slices.SortStableFunc(vs, compareVersions)
-			for _, v := range vs {
-				if !yield(v, nil) {
+			for i := range vs {
+				if !yield(vs[i], nil) {
 					return
 				}
 			}
@@ -47,7 +48,7 @@ func pageVersions(page *s3.ListObjectVersionsOutput) []objstore.Version {
 		vs = append(vs, objstore.Version{
 			Key: aws.ToString(v.Key), VersionID: aws.ToString(v.VersionId), IsLatest: aws.ToBool(v.IsLatest),
 			Size: aws.ToInt64(v.Size), ETag: trimETag(v.ETag), StorageClass: storageClass(string(v.StorageClass)),
-			LastModified: aws.ToTime(v.LastModified),
+			LastModified: aws.ToTime(v.LastModified), ChecksumAlgorithms: checksumAlgorithms(v.ChecksumAlgorithm),
 		})
 	}
 	for i := range page.DeleteMarkers {
@@ -58,6 +59,18 @@ func pageVersions(page *s3.ListObjectVersionsOutput) []objstore.Version {
 		})
 	}
 	return vs
+}
+
+// checksumAlgorithms names the checksum algorithms of one listed version.
+func checksumAlgorithms(algs []types.ChecksumAlgorithm) []string {
+	if len(algs) == 0 {
+		return nil
+	}
+	out := make([]string, len(algs))
+	for i, a := range algs {
+		out[i] = string(a)
+	}
+	return out
 }
 
 func storageClass(s string) string {
@@ -153,6 +166,37 @@ func (c *Client) AbortUpload(ctx context.Context, bucket, key, uploadID string) 
 		return mapErr(err, bucket, key)
 	}
 	return nil
+}
+
+// ChecksumAlgorithms returns the algorithms of the checksums stored with an
+// object version ("" for the current one), e.g. [CRC32]. RustFS keeps the
+// checksum a client sent but leaves ChecksumAlgorithm out of its listings,
+// so this asks HeadObject with checksum mode.
+func (c *Client) ChecksumAlgorithms(ctx context.Context, bucket, key, versionID string) ([]string, error) {
+	in := &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), ChecksumMode: types.ChecksumModeEnabled}
+	if versionID != "" {
+		in.VersionId = aws.String(versionID)
+	}
+	out, err := c.s3.HeadObject(ctx, in)
+	if err != nil {
+		return nil, mapErr(err, bucket, key)
+	}
+	var algs []string
+	for _, s := range []struct {
+		alg types.ChecksumAlgorithm
+		v   *string
+	}{
+		{types.ChecksumAlgorithmCrc32, out.ChecksumCRC32},
+		{types.ChecksumAlgorithmCrc32c, out.ChecksumCRC32C},
+		{types.ChecksumAlgorithmCrc64nvme, out.ChecksumCRC64NVME},
+		{types.ChecksumAlgorithmSha1, out.ChecksumSHA1},
+		{types.ChecksumAlgorithmSha256, out.ChecksumSHA256},
+	} {
+		if aws.ToString(s.v) != "" {
+			algs = append(algs, string(s.alg))
+		}
+	}
+	return algs, nil
 }
 
 // ObjectTags implements objstore.Inventory.

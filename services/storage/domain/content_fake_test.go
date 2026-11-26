@@ -57,8 +57,9 @@ func (f *contentFake) ListVersions(_ context.Context, _, prefix string) iter.Seq
 			if !strings.HasPrefix(k, prefix) {
 				continue
 			}
-			for _, v := range slices.Clone(f.versions[k]) {
-				if !yield(v, nil) {
+			vs := slices.Clone(f.versions[k])
+			for i := range vs {
+				if !yield(vs[i], nil) {
 					return
 				}
 			}

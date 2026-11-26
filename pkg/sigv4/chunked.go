@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 )
@@ -15,31 +16,40 @@ import (
 // maxChunk bounds one aws-chunked chunk; SDKs use 8–64 KiB chunks.
 const maxChunk = 16 << 20
 
+// maxTrailers bounds the trailing headers of one body (SDKs send one checksum).
+const maxTrailers = 16
+
+// trailerSignature is the trailing header that signs the other trailers
+// (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER).
+const trailerSignature = "X-Amz-Trailer-Signature"
+
 // ErrBadChunk reports a malformed aws-chunked body (IncompleteBody / InvalidRequest).
 var ErrBadChunk = errors.New("sigv4: malformed aws-chunked body")
 
 // NewChunkedReader decodes an aws-chunked request body (a.Streaming() is
 // true). For the signed modes every chunk signature is verified, chained
 // from the request signature; a mismatch fails the read with
-// ErrSignatureMismatch. Trailing headers (checksums) are consumed and dropped.
-func NewChunkedReader(body io.Reader, a Auth, secret string) (io.Reader, error) {
+// ErrSignatureMismatch. Trailing headers (checksums) are collected and, in
+// the signed trailer mode, verified against x-amz-trailer-signature;
+// Trailer returns them once the body has been read to EOF.
+func NewChunkedReader(body io.Reader, a Auth, secret string) (*ChunkedReader, error) {
 	switch a.PayloadHash {
 	case StreamingSigned, StreamingSignedTrailer, StreamingUnsigned:
 	default:
 		return nil, fmt.Errorf("%w: unsupported payload mode %s", ErrMalformed, a.PayloadHash)
 	}
-	return &chunkedReader{
-		r:        bufio.NewReader(body),
-		auth:     a,
-		signed:   a.PayloadHash != StreamingUnsigned,
-		trailer:  a.PayloadHash != StreamingSigned,
-		key:      SigningKey(secret, a.Date, a.Region, a.Service),
-		prevSig:  a.Signature,
-		chunkBuf: nil,
+	return &ChunkedReader{
+		r:       bufio.NewReader(body),
+		auth:    a,
+		signed:  a.PayloadHash != StreamingUnsigned,
+		trailer: a.PayloadHash != StreamingSigned,
+		key:     SigningKey(secret, a.Date, a.Region, a.Service),
+		prevSig: a.Signature,
 	}, nil
 }
 
-type chunkedReader struct {
+// ChunkedReader is the decoded payload of an aws-chunked body.
+type ChunkedReader struct {
 	r       *bufio.Reader
 	auth    Auth
 	signed  bool
@@ -51,9 +61,20 @@ type chunkedReader struct {
 	remaining int64  // unsigned mode: bytes left in the current chunk
 	done      bool
 	err       error
+	trailers  http.Header // the verified trailing headers, once read
 }
 
-func (c *chunkedReader) Read(p []byte) (int, error) {
+// Trailer returns the trailing headers (e.g. X-Amz-Checksum-Crc32), with
+// canonical names and without the trailer signature. It is nil until Read
+// has returned io.EOF, and empty when the body had none.
+func (c *ChunkedReader) Trailer() http.Header {
+	if !c.done || c.err != nil {
+		return nil
+	}
+	return c.trailers
+}
+
+func (c *ChunkedReader) Read(p []byte) (int, error) {
 	for {
 		if c.err != nil {
 			return 0, c.err
@@ -73,7 +94,7 @@ func (c *chunkedReader) Read(p []byte) (int, error) {
 	}
 }
 
-func (c *chunkedReader) readUnsigned(p []byte) (int, error) {
+func (c *ChunkedReader) readUnsigned(p []byte) (int, error) {
 	if int64(len(p)) > c.remaining {
 		p = p[:c.remaining]
 	}
@@ -92,7 +113,7 @@ func (c *chunkedReader) readUnsigned(p []byte) (int, error) {
 }
 
 // nextChunk reads one chunk header (and, when signed, its data).
-func (c *chunkedReader) nextChunk() error {
+func (c *ChunkedReader) nextChunk() error {
 	line, err := c.readLine()
 	if err != nil {
 		return err
@@ -117,7 +138,7 @@ func (c *chunkedReader) nextChunk() error {
 }
 
 // readSignedChunk reads and verifies one signed chunk into chunkBuf.
-func (c *chunkedReader) readSignedChunk(ext string, size int64) error {
+func (c *ChunkedReader) readSignedChunk(ext string, size int64) error {
 	sig, ok := strings.CutPrefix(ext, "chunk-signature=")
 	if !ok {
 		return fmt.Errorf("%w: missing chunk-signature", ErrBadChunk)
@@ -138,7 +159,7 @@ func (c *chunkedReader) readSignedChunk(ext string, size int64) error {
 	return nil
 }
 
-func (c *chunkedReader) verifyChunk(sig string, data []byte) error {
+func (c *ChunkedReader) verifyChunk(sig string, data []byte) error {
 	sum := sha256.Sum256(data)
 	sts := "AWS4-HMAC-SHA256-PAYLOAD\n" + c.auth.AmzDate.Format(amzDateLayout) + "\n" + c.auth.Scope() + "\n" +
 		c.prevSig + "\n" + emptySHA256 + "\n" + hex.EncodeToString(sum[:])
@@ -151,28 +172,66 @@ func (c *chunkedReader) verifyChunk(sig string, data []byte) error {
 }
 
 // readTrailers consumes the trailing headers after the final chunk, up to
-// the terminating empty line (or EOF).
-func (c *chunkedReader) readTrailers() error {
+// the terminating empty line (or EOF), and verifies their signature in the
+// signed trailer mode.
+func (c *ChunkedReader) readTrailers() error {
+	trailers := http.Header{}
 	if !c.trailer {
 		// STREAMING-AWS4-HMAC-SHA256-PAYLOAD ends with "0;chunk-signature=…\r\n\r\n".
 		_, err := c.readLine()
 		if errors.Is(err, io.EOF) {
-			return nil
+			err = nil
 		}
+		c.trailers = trailers
 		return err
 	}
-	for {
+	var canonical strings.Builder // "name:value\n" per trailer, as signed
+	sig := ""
+	for n := 0; ; n++ {
 		line, err := c.readLine()
 		if errors.Is(err, io.EOF) || (err == nil && line == "") {
-			return nil
+			break
 		}
 		if err != nil {
 			return err
 		}
+		name, value, ok := strings.Cut(line, ":")
+		name, value = strings.ToLower(strings.TrimSpace(name)), strings.TrimSpace(value)
+		if !ok || name == "" || n >= maxTrailers {
+			return fmt.Errorf("%w: bad trailing header %q", ErrBadChunk, line)
+		}
+		if http.CanonicalHeaderKey(name) == trailerSignature {
+			sig = value
+			continue
+		}
+		trailers.Add(name, value)
+		canonical.WriteString(name + ":" + value + "\n")
 	}
+	if c.signed {
+		if err := c.verifyTrailer(sig, canonical.String()); err != nil {
+			return err
+		}
+	}
+	c.trailers = trailers
+	return nil
 }
 
-func (c *chunkedReader) readLine() (string, error) {
+// verifyTrailer checks x-amz-trailer-signature, chained from the final
+// chunk's signature over the canonical trailing headers.
+func (c *ChunkedReader) verifyTrailer(sig, canonical string) error {
+	if sig == "" {
+		return fmt.Errorf("%w: missing x-amz-trailer-signature", ErrSignatureMismatch)
+	}
+	sum := sha256.Sum256([]byte(canonical))
+	sts := "AWS4-HMAC-SHA256-TRAILER\n" + c.auth.AmzDate.Format(amzDateLayout) + "\n" + c.auth.Scope() + "\n" +
+		c.prevSig + "\n" + hex.EncodeToString(sum[:])
+	if !hmac.Equal([]byte(Sign(c.key, sts)), []byte(sig)) {
+		return ErrSignatureMismatch
+	}
+	return nil
+}
+
+func (c *ChunkedReader) readLine() (string, error) {
 	line, err := c.r.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, io.EOF) && line == "" {
@@ -183,7 +242,7 @@ func (c *chunkedReader) readLine() (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
-func (c *chunkedReader) expectCRLF() error {
+func (c *ChunkedReader) expectCRLF() error {
 	b := make([]byte, 2)
 	if _, err := io.ReadFull(c.r, b); err != nil || string(b) != "\r\n" {
 		return fmt.Errorf("%w: missing CRLF after chunk data", ErrBadChunk)

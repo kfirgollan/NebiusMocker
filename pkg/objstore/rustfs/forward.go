@@ -2,10 +2,13 @@ package rustfs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,6 +31,12 @@ type ForwardRequest struct {
 	// PayloadHash is the x-amz-content-sha256 to sign with: the client's
 	// declared hash (RustFS re-checks the body) or sigv4.UnsignedPayload.
 	PayloadHash string
+	// Trailer, when set, returns the trailing headers of the decoded
+	// aws-chunked Body once Body has been read to EOF. The trailers the
+	// client declared in X-Amz-Trailer (checksums) are then relayed as an
+	// aws-chunked STREAMING-UNSIGNED-PAYLOAD-TRAILER body, so RustFS checks
+	// and stores them.
+	Trailer func() http.Header
 }
 
 // Forwarder relays S3 requests to RustFS, re-signed with the RustFS
@@ -131,6 +140,14 @@ func (f *Forwarder) outgoing(fr ForwardRequest) (*http.Request, error) {
 	if payload == "" {
 		payload = sigv4.UnsignedPayload
 	}
+	if names := trailerNames(in.Header.Get("X-Amz-Trailer")); fr.Trailer != nil && len(names) > 0 {
+		payload = sigv4.StreamingUnsigned
+		out.Body = io.NopCloser(&trailerEncoder{src: fr.Body, names: names, trailer: fr.Trailer})
+		out.ContentLength = -1 // chunked transfer: the trailer values' length is known only at the end
+		out.Header.Set("Content-Encoding", joinEncodings("aws-chunked", out.Header.Get("Content-Encoding")))
+		out.Header.Set("X-Amz-Trailer", strings.Join(names, ","))
+		out.Header.Set("X-Amz-Decoded-Content-Length", strconv.FormatInt(fr.ContentLength, 10))
+	}
 	out.Header.Set("X-Amz-Content-Sha256", payload)
 	if err := f.signer.SignHTTP(in.Context(), f.creds, out, payload, "s3", f.region, f.clk.Now()); err != nil {
 		return nil, err
@@ -146,6 +163,90 @@ func withoutAWSChunked(enc string) string {
 		}
 	}
 	return strings.Join(keep, ",")
+}
+
+func joinEncodings(first, rest string) string {
+	if rest == "" {
+		return first
+	}
+	return first + "," + rest
+}
+
+// trailerNames parses X-Amz-Trailer ("x-amz-checksum-crc32[,…]").
+func trailerNames(h string) []string {
+	var names []string
+	for n := range strings.SplitSeq(h, ",") {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// encodedChunk is the chunk size of the aws-chunked bodies sent to RustFS.
+const encodedChunk = 64 << 10
+
+// trailerEncoder frames src as an aws-chunked body (unsigned chunks) that
+// ends with the named trailing headers, taken from trailer() at src's EOF.
+type trailerEncoder struct {
+	src     io.Reader
+	names   []string
+	trailer func() http.Header
+	chunk   []byte
+	pending []byte // framed bytes not yet returned
+	done    bool
+}
+
+func (e *trailerEncoder) Read(p []byte) (int, error) {
+	for len(e.pending) == 0 {
+		if e.done {
+			return 0, io.EOF
+		}
+		if err := e.fill(); err != nil {
+			return 0, err
+		}
+	}
+	n := copy(p, e.pending)
+	e.pending = e.pending[n:]
+	return n, nil
+}
+
+// fill frames the next chunk of src, or the final chunk and the trailers.
+func (e *trailerEncoder) fill() error {
+	if e.chunk == nil {
+		e.chunk = make([]byte, encodedChunk)
+	}
+	n, err := 0, error(nil)
+	for n < len(e.chunk) && err == nil {
+		var m int
+		m, err = e.src.Read(e.chunk[n:])
+		n += m
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	e.pending = e.pending[:0]
+	if n > 0 {
+		e.pending = fmt.Appendf(e.pending, "%x\r\n", n)
+		e.pending = append(e.pending, e.chunk[:n]...)
+		e.pending = append(e.pending, "\r\n"...)
+	}
+	if err == nil {
+		return nil
+	}
+	h := e.trailer()
+	if h == nil {
+		return errors.New("aws-chunked body ended before its trailing headers")
+	}
+	e.pending = append(e.pending, "0\r\n"...)
+	for _, name := range e.names {
+		if v := h.Get(name); v != "" {
+			e.pending = append(e.pending, name+":"+v+"\r\n"...)
+		}
+	}
+	e.pending = append(e.pending, "\r\n"...)
+	e.done = true
+	return nil
 }
 
 func (f *Forwarder) fail(ctx context.Context, w http.ResponseWriter, err error) {

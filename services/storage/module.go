@@ -9,12 +9,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 
 	storagepb "github.com/nebius/gosdk/proto/nebius/storage/v1"
+	storagev1alpha1pb "github.com/nebius/gosdk/proto/nebius/storage/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/errs"
@@ -22,6 +24,8 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/rustfs"
 	"github.com/kfirgollan/NebiusMocker/pkg/peer"
 	"github.com/kfirgollan/NebiusMocker/services/storage/api"
+	"github.com/kfirgollan/NebiusMocker/services/storage/backend/azblob"
+	"github.com/kfirgollan/NebiusMocker/services/storage/backend/s3endpoint"
 	"github.com/kfirgollan/NebiusMocker/services/storage/dal"
 	"github.com/kfirgollan/NebiusMocker/services/storage/domain"
 	"github.com/kfirgollan/NebiusMocker/services/storage/s3"
@@ -36,11 +40,14 @@ const s3Off = "off"
 
 // Module is the Object Storage service module.
 type Module struct {
-	s3Listen string // overrides config when set
+	s3Listen  string           // overrides config when set
+	endpoints domain.Endpoints // overrides the transfer endpoint adapters when set
 
 	mu      sync.Mutex
 	s3      *s3.Server
 	buckets *domain.BucketService
+	invs    *domain.InventoryService
+	xfers   *domain.TransferService
 	clk     clock.Clock
 	log     *slog.Logger
 	stop    context.CancelFunc
@@ -57,6 +64,11 @@ type Option func(*Module)
 
 // WithS3Listen overrides NEBIUS_MOCKER_STORAGE_S3_LISTEN (tests use "127.0.0.1:0").
 func WithS3Listen(addr string) Option { return func(m *Module) { m.s3Listen = addr } }
+
+// WithTransferEndpoints replaces the adapters that data transfers use to reach
+// their source and destination (tests inject an in-memory fake to run
+// transfers without Docker or network).
+func WithTransferEndpoints(e domain.Endpoints) Option { return func(m *Module) { m.endpoints = e } }
 
 // New returns the Object Storage module.
 func New(opts ...Option) *Module {
@@ -96,13 +108,38 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 	}
 	storagepb.RegisterBucketServiceServer(reg, api.NewBucketHandler(svc))
 
+	reports, ok := deps.ObjStore.(domain.ReportStore)
+	if !ok {
+		return fmt.Errorf("storage: the object store %T cannot write inventory reports", deps.ObjStore)
+	}
+	invRepo := dal.NewInventoryRepo(deps.Store)
+	readLog := dal.NewAccessLogRepo(deps.Store)
+	invs, err := domain.NewInventoryService(domain.InventoryDeps{
+		Repo: invRepo, Buckets: buckets, Writer: domain.NewReportWriter(domain.ReportWriterDeps{Store: reports, Access: readLog}),
+		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Access: deps.Authz, Mode: deps.Config.Authz, Log: deps.Log,
+	})
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	deps.Authz.RegisterKind(domain.KindInventory, func(ctx context.Context, id string) (string, error) {
+		inv, err := invRepo.Get(ctx, id)
+		return inv.GetMetadata().GetParentId(), err
+	})
+	api.RegisterInventoryAuthzRules(deps.Rules)
+	storagepb.RegisterInventoryServiceServer(reg, api.NewInventoryHandler(invs))
+
+	xfers, err := m.registerTransfers(reg, deps, buckets)
+	if err != nil {
+		return err
+	}
+
 	listen := cfg.S3Listen
 	if m.s3Listen != "" {
 		listen = m.s3Listen
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.buckets, m.clk, m.log = svc, deps.Clock, deps.Log
+	m.buckets, m.invs, m.xfers, m.clk, m.log = svc, invs, xfers, deps.Clock, deps.Log
 	if listen == s3Off {
 		return nil
 	}
@@ -119,8 +156,72 @@ func (m *Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps moc
 		return fmt.Errorf("storage: %w", err)
 	}
 	m.s3 = s3.NewServer(s3.Config{Listen: listen, Domain: cfg.S3Domain, Region: cfg.Region}, gate, svc, upstreamFor(deps), deps.Clock, deps.Log)
-	m.s3.AuditTo(deps.Peers) // data-plane audit events, when the audit module is enabled
+	m.s3.AuditTo(deps.Peers)                                                         // data-plane audit events, when the audit module is enabled
+	m.s3.TrackReads(domain.NewAccessTracker(readLog, invRepo, deps.Clock, deps.Log)) // LAST_ACCESS inventory field
 	return nil
+}
+
+// registerTransfers wires both TransferService versions, their authorization
+// and the endpoint adapters the iterations copy through.
+func (m *Module) registerTransfers(reg grpc.ServiceRegistrar, deps mocker.Deps, buckets domain.BucketRepository) (*domain.TransferService, error) {
+	repo := dal.NewTransferRepo(deps.Store)
+	endpoints := m.endpoints
+	if endpoints == nil {
+		endpoints = transferEndpoints{
+			s3:    s3endpoint.New(s3endpoint.Config{NebiusURL: m.frontURL, Clock: deps.Clock}),
+			azure: azblob.New(nil),
+		}
+	}
+	engine := domain.NewTransferEngine(endpoints, dal.NewManagedRepo(deps.Store), deps.Clock, deps.Log)
+	svc, err := domain.NewTransferService(domain.TransferDeps{
+		Repo: repo, Buckets: buckets, Hierarchy: deps.Authz, Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
+		Region: deps.Config.Storage.Region, Engine: engine, Log: deps.Log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: %w", err)
+	}
+	deps.Authz.RegisterKind(domain.KindTransfer, func(ctx context.Context, id string) (string, error) {
+		rec, err := repo.Get(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		return rec.Metadata().GetParentId(), nil
+	})
+	api.RegisterTransferAuthzRules(deps.Rules)
+	storagepb.RegisterTransferServiceServer(reg, api.NewTransferHandler(svc, deps.Config.Storage.Region))
+	storagev1alpha1pb.RegisterTransferServiceServer(reg, api.NewTransferAlphaHandler(svc)) //nolint:staticcheck // SA1019: the deprecated v1alpha1 service is served on purpose
+	return svc, nil
+}
+
+// transferEndpoints routes a transfer side to the adapter of its provider.
+type transferEndpoints struct {
+	s3    domain.Endpoints
+	azure domain.Endpoints
+}
+
+func (t transferEndpoints) Open(ctx context.Context, side domain.Side) (domain.Endpoint, error) {
+	if side.Kind == domain.ProviderAzureBlob {
+		return t.azure.Open(ctx, side)
+	}
+	return t.s3.Open(ctx, side)
+}
+
+// frontURL is the base URL of the S3 front as a client on this machine
+// reaches it ("" when the front is disabled or not started). An unspecified
+// listen host (0.0.0.0, [::]) becomes the loopback address.
+func (m *Module) frontURL() string {
+	addr := m.S3Addr()
+	if addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // peerAccessKeys resolves access keys through the iam module's capability,
@@ -186,6 +287,7 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	ctx, m.stop = context.WithCancel(ctx)
 	m.wg.Go(func() { m.sweep(ctx) })
+	m.wg.Go(func() { m.xfers.Run(ctx) })
 	return nil
 }
 
@@ -235,5 +337,22 @@ func (m *Module) sweep(ctx context.Context) {
 			m.log.InfoContext(ctx, "applied lifecycle rules", "expired", r.Expired, "noncurrent_expired", r.NoncurrentExpired,
 				"markers_removed", r.MarkersRemoved, "uploads_aborted", r.UploadsAborted)
 		}
+		m.sweepInventories(ctx)
+	}
+}
+
+// sweepInventories drops the inventories of purged buckets and writes the
+// reports that are due.
+func (m *Module) sweepInventories(ctx context.Context) {
+	if n, err := m.invs.SweepOrphans(ctx); err != nil {
+		m.log.WarnContext(ctx, "remove inventories of purged buckets", "removed", n, "error", err)
+	} else if n > 0 {
+		m.log.InfoContext(ctx, "removed inventories of purged buckets", "removed", n)
+	}
+	r, err := m.invs.RunDue(ctx)
+	if err != nil {
+		m.log.WarnContext(ctx, "run inventory reports", "reports", r.Reports, "failures", r.Failures, "error", err)
+	} else if r != (domain.InventoryRunResult{}) {
+		m.log.InfoContext(ctx, "ran inventory reports", "reports", r.Reports, "failures", r.Failures)
 	}
 }

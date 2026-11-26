@@ -100,8 +100,42 @@ func start() (*Server, error) {
 		s := &Server{Endpoint: ep, AccessKey: envOr("NEBIUS_MOCKER_TEST_RUSTFS_ACCESS_KEY", "rustfsadmin"), SecretKey: envOr("NEBIUS_MOCKER_TEST_RUSTFS_SECRET_KEY", "rustfsadmin")}
 		return s, waitReady(s)
 	}
+	s, name, err := launch()
+	container = name
+	return s, err
+}
+
+// StartExternal starts a SECOND, independent RustFS container with its own
+// admin credentials, standing in for a user's external S3 provider (the source
+// or destination of a data transfer). Unlike Start it is not shared: every
+// call starts a fresh container, which is removed when the test ends. It
+// carries the same label as the shared one, so a killed run's leftovers are
+// reaped alike. It skips the test when Docker is not available.
+func StartExternal(tb testing.TB) *Server {
+	tb.Helper()
+	s, name, err := launch()
+	if name != "" {
+		tb.Cleanup(func() {
+			if out, rmErr := exec.CommandContext(context.WithoutCancel(tb.Context()), "docker", "rm", "-f", "-v", name).CombinedOutput(); rmErr != nil {
+				tb.Logf("rustfs: remove container %s: %v: %s", name, rmErr, out)
+			}
+		})
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "docker not found") {
+			tb.Skipf("rustfs: %v", err)
+		}
+		tb.Fatalf("rustfs: %v", err)
+	}
+	return s
+}
+
+// launch runs a new RustFS container with random credentials and waits until
+// it serves requests. It returns the container name even when readiness failed,
+// so the caller can remove it.
+func launch() (*Server, string, error) {
 	if _, err := exec.LookPath("docker"); err != nil {
-		return nil, fmt.Errorf("docker not found on PATH: %w", err)
+		return nil, "", fmt.Errorf("docker not found on PATH: %w", err)
 	}
 	s := &Server{AccessKey: "nmock-" + randomHex(6), SecretKey: randomHex(20)}
 	name := "nebius-mocker-rustfs-" + randomHex(4)
@@ -114,21 +148,20 @@ func start() (*Server, error) {
 		"-e", "RUSTFS_ACCESS_KEY="+s.AccessKey, "-e", "RUSTFS_SECRET_KEY="+s.SecretKey,
 		Image).CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("docker run %s: %w: %s", Image, err, out)
+		return nil, "", fmt.Errorf("docker run %s: %w: %s", Image, err, out)
 	}
-	container = name
 	port, err := exec.CommandContext(ctx, "docker", "port", name, "9000/tcp").Output()
 	if err != nil {
-		return nil, fmt.Errorf("docker port %s: %w", name, err)
+		return nil, name, fmt.Errorf("docker port %s: %w", name, err)
 	}
 	// "127.0.0.1:55012" (possibly several lines, one per address family).
 	first, _, _ := strings.Cut(strings.TrimSpace(string(port)), "\n")
 	s.Endpoint = "http://" + strings.TrimSpace(first)
 	if err := waitReady(s); err != nil {
 		logs, _ := exec.Command("docker", "logs", name).CombinedOutput() //nolint:noctx // diagnostics only
-		return nil, fmt.Errorf("%w; container logs:\n%s", err, logs)
+		return nil, name, fmt.Errorf("%w; container logs:\n%s", err, logs)
 	}
-	return s, nil
+	return s, name, nil
 }
 
 // pidLabel records the test process that owns a container.

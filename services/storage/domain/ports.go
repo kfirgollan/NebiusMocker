@@ -6,6 +6,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	storagepb "github.com/nebius/gosdk/proto/nebius/storage/v1"
 
@@ -105,4 +106,49 @@ type ContentBackend interface {
 // module's peer.GroupMembers).
 type GroupMembers interface {
 	IsMember(ctx context.Context, principalID, groupID string) (bool, error)
+}
+
+// KindInventory is the NID type prefix of bucket inventory configurations
+// (children of their source bucket).
+const KindInventory = "storagebucketinventory"
+
+// KindTransfer is the NID type prefix of data transfers (children of a project).
+const KindTransfer = "storagetransfer"
+
+// InventoryPage is one page of an inventory listing.
+type InventoryPage struct {
+	Items         []*storagepb.Inventory
+	NextPageToken string
+}
+
+// InventoryRepository stores inventory configurations and their scheduler
+// state. Names are unique per source bucket.
+type InventoryRepository interface {
+	Get(ctx context.Context, id string) (*storagepb.Inventory, error)
+	GetByName(ctx context.Context, bucketID, name string) (*storagepb.Inventory, error)
+	List(ctx context.Context, bucketID string, pageSize int, pageToken string) (InventoryPage, error)
+	// ListAll returns every inventory (for the report scheduler).
+	ListAll(ctx context.Context) ([]*storagepb.Inventory, error)
+	// Count returns how many inventories a bucket has.
+	Count(ctx context.Context, bucketID string) (int, error)
+	// Create fails with errs.AlreadyExists when the name is taken in the bucket,
+	// and with KindQuotaExceeded when the bucket already has
+	// MaxInventoriesPerBucket inventories (checked atomically with the insert).
+	Create(ctx context.Context, inv *storagepb.Inventory, st InventoryState) error
+	Update(ctx context.Context, inv *storagepb.Inventory) error
+	// State and SetState read and write the scheduler state of an inventory.
+	State(ctx context.Context, id string) (InventoryState, error)
+	SetState(ctx context.Context, id string, st InventoryState) error
+	// Delete removes the inventory and its state.
+	Delete(ctx context.Context, id string) error
+}
+
+// AccessLog records object reads for the LAST_ACCESS inventory field.
+type AccessLog interface {
+	// Touch records that key in bucketID was read at t.
+	Touch(ctx context.Context, bucketID, key string, t time.Time) error
+	// LastAccess returns the last recorded read of key, ok=false when none.
+	LastAccess(ctx context.Context, bucketID, key string) (t time.Time, ok bool, err error)
+	// Forget drops every record of a bucket (on purge).
+	Forget(ctx context.Context, bucketID string) error
 }

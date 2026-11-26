@@ -29,11 +29,13 @@ e2e: ## End-to-end tests: real terraform + official nebius provider, official ne
 # dead test processes), so only stopped leftovers are removed here.
 RUSTFS_LABEL := nebius-mocker.test=rustfs
 RUSTFS_CLEANUP := docker ps -aq --filter label=$(RUSTFS_LABEL) --filter status=exited --filter status=created | xargs docker rm -f -v >/dev/null 2>&1 || true
+# Azurite (Azure Blob Storage emulator, a transfer source) from test/azuritefixture.
+AZURITE_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=azurite --filter status=exited --filter status=created | xargs docker rm -f -v >/dev/null 2>&1 || true
 
-e2e-storage: ## RustFS-backed tests (needs Docker); RustFS is started and removed by the tests
-	@$(RUSTFS_CLEANUP)
-	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./test/... || status=$$?; \
-	$(RUSTFS_CLEANUP); exit $$status
+e2e-storage: ## RustFS/Azurite-backed tests (needs Docker); the containers are started and removed by the tests
+	@$(RUSTFS_CLEANUP); $(AZURITE_CLEANUP)
+	@status=0; $(GO) test -tags e2e_storage -count=1 -v ./pkg/objstore/... ./services/storage/backend/... ./test/... || status=$$?; \
+	$(RUSTFS_CLEANUP); $(AZURITE_CLEANUP); exit $$status
 
 e2e-images: ## Compute images on RustFS with the Go SDK and the nebius CLI (needs Docker)
 	@$(RUSTFS_CLEANUP)

@@ -88,6 +88,7 @@ type Server struct {
 	clk      clock.Clock
 	log      *slog.Logger
 	peers    *peer.Directory // data-plane audit sink lookup (AuditTo)
+	reads    ReadTracker     // last-access tracking (TrackReads)
 
 	mu   sync.Mutex
 	srv  *http.Server
@@ -149,6 +150,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sr := &statusRecorder{ResponseWriter: w}
 	rw := &responseWriter{ResponseWriter: sr}
 	defer func() { s.recordAccess(r, t, sr, rw.bulkDelete) }() // after finish: the final status
+	defer s.trackRead(r, t, sr)
 	defer rw.finish()
 	if origin := r.Header.Get("Origin"); origin != "" && t.Bucket != "" {
 		rw.vary = true
@@ -179,6 +181,9 @@ type body struct {
 	r      io.Reader
 	length int64
 	hash   string
+	// trailer returns an aws-chunked body's trailing headers (checksums)
+	// after r's EOF; nil for other bodies.
+	trailer func() http.Header
 }
 
 // authenticate verifies the SigV4 signature with the access key's secret and
@@ -212,7 +217,7 @@ func (s *Server) authenticate(r *http.Request) (string, body, error) {
 		if err != nil || n < 0 {
 			return "", body{}, errs.BadRequest(errs.Violation{Field: "x-amz-decoded-content-length", Message: "required for aws-chunked uploads"})
 		}
-		b = body{r: cr, length: n, hash: sigv4.UnsignedPayload}
+		b = body{r: cr, length: n, hash: sigv4.UnsignedPayload, trailer: cr.Trailer}
 	}
 	return key.PrincipalID, b, nil
 }
@@ -314,6 +319,7 @@ func (s *Server) forward(w *responseWriter, r *http.Request, t target, op operat
 	}
 	s.upstream.Forward(w, rustfs.ForwardRequest{
 		In: r, Bucket: t.storeBucket(), Key: t.Key, Body: bd.r, ContentLength: bd.length, PayloadHash: bd.hash,
+		Trailer: bd.trailer,
 	})
 	return nil
 }

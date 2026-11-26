@@ -69,6 +69,9 @@ type Version struct {
 	// StorageClass is the backend's class name ("STANDARD" when unset).
 	StorageClass string
 	LastModified time.Time
+	// ChecksumAlgorithms are the algorithms of the object's stored
+	// checksums, e.g. CRC64NVME; empty when it has none.
+	ChecksumAlgorithms []string
 }
 
 // Multipart reports whether the version was assembled from a multipart upload.

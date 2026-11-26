@@ -13,7 +13,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** (v1 and v1alpha1; v1alpha1 is a view of the v1 resources) | — |
 | Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
 | Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** | k3s backend (T3, M3) |
-| Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, T1 rest | S3 data plane via RustFS (✅ buckets + objects, see storage.md) |
+| Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, inventory, transfer (v1, v1alpha1) | S3 data plane via RustFS (✅ buckets, objects, inventory reports, transfers; see storage.md) |
 | Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |
 | MysteryBox (secrets) | [mysterybox.md](mysterybox.md) | 3 | 14 | 3 / 7 | **T2** | — |
 | KMS | [kms.md](kms.md) | 4 | 23 | 2 / 4 | **T3** | — |
