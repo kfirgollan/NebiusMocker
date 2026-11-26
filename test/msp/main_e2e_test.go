@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -63,6 +64,7 @@ func startEnv(t *testing.T) *env {
 	names := append([]string{"*.api.nebius.cloud", "*.iam.api.nebius.cloud", "*.msp.api.nebius.cloud", "localhost"}, apiHosts...)
 	ca := testca.New(t, names, nil)
 	port, s3Port := freePort(t), freePort(t)
+	d.owner = fmt.Sprintf("127.0.0.1:%d", port) // the edge address, as the MSP backends label their objects
 	mspDir := t.TempDir()
 	inst := testkit.StartT(t,
 		[]mocker.Module{iam.New(), vpc.New(), storage.New(), msppostgresql.New(), mspmlflow.New()},
@@ -80,6 +82,10 @@ func startEnv(t *testing.T) *env {
 			// clusters' certificates cover.
 			c.MSP.EndpointHost = "host.docker.internal"
 			c.MSP.TLSDir = mspDir
+			// A "GiB" of disk holds 8 MiB, so a 10 GiB disk fills at 80 MiB,
+			// and a full disk is noticed within seconds.
+			c.MSP.PostgresDiskUnit = 8 << 20
+			c.MSP.PostgresDiskCheckInterval = 2 * time.Second
 		}))
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	return &env{

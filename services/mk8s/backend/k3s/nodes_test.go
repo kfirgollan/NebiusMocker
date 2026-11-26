@@ -43,8 +43,8 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 	if len(agents) != 3 {
 		t.Fatalf("agent containers = %d, want 3", len(agents))
 	}
-	spec := h.docker.spec(agentName(testCluster, "n1"))
-	if spec.Image != "rancher/k3s:v1.35.10-k3s1" || !spec.Privileged || spec.Network != networkName(testCluster) {
+	spec := h.docker.spec(h.b.agentName(testCluster, "n1"))
+	if spec.Image != "rancher/k3s:v1.35.10-k3s1" || !spec.Privileged || spec.Network != h.b.networkName(testCluster) {
 		t.Errorf("agent spec = image %q privileged %v network %q", spec.Image, spec.Privileged, spec.Network)
 	}
 	for k, v := range map[string]string{
@@ -56,7 +56,7 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 		}
 	}
 	wantCmd := []string{
-		"agent", "--server=https://" + serverName(testCluster) + ":6443", "--node-name=n1",
+		"agent", "--server=https://" + h.b.serverName(testCluster) + ":6443", "--node-name=n1",
 		"--node-label=kubernetes.io/os=linux", "--node-label=team=ml",
 		"--node-taint=dedicated=gpu:NoSchedule", "--node-taint=spot:PreferNoSchedule",
 		"--kubelet-arg=max-pods=32",
@@ -338,7 +338,7 @@ func TestAgentMaxPodsUnset(t *testing.T) {
 	h := newHarness(t, nil)
 	h.ensureCluster(t, testCluster)
 	h.ensureNodes(t, testGroupSpec(testCluster, "n1"))
-	for _, arg := range h.docker.spec(agentName(testCluster, "n1")).Cmd {
+	for _, arg := range h.docker.spec(h.b.agentName(testCluster, "n1")).Cmd {
 		if strings.Contains(arg, "max-pods") {
 			t.Errorf("agent command has %q with max_pods unset", arg)
 		}

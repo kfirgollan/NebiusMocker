@@ -385,10 +385,12 @@ func isStopped(c *pgpb.Cluster) bool {
 		c.GetStatus().GetState() == mspv1alpha1pb.ClusterStatus_STATE_FINISHED
 }
 
-// isRunning reports whether the cluster is up and idle.
+// isRunning reports whether the cluster is up and idle. A cluster whose disk
+// is full (STATE_DEGRADED) still runs: it serves reads and takes backups.
 func isRunning(c *pgpb.Cluster) bool {
 	return c.GetStatus().GetPhase() == mspv1alpha1pb.ClusterStatus_PHASE_RUNNING &&
-		c.GetStatus().GetState() == mspv1alpha1pb.ClusterStatus_STATE_FINISHED
+		(c.GetStatus().GetState() == mspv1alpha1pb.ClusterStatus_STATE_FINISHED ||
+			c.GetStatus().GetState() == mspv1alpha1pb.ClusterStatus_STATE_DEGRADED)
 }
 
 // fail records a backend failure in the cluster's state and returns it.

@@ -163,7 +163,7 @@ func (b *Backend) startAgents(ctx context.Context, g domain.BackendNodeGroup, wa
 func (b *Backend) startAgent(ctx context.Context, g domain.BackendNodeGroup, n domain.BackendNode, spec agentSpec) error {
 	cmd := []string{
 		"agent",
-		"--server=https://" + serverName(g.ClusterID) + ":6443",
+		"--server=https://" + b.serverName(g.ClusterID) + ":6443",
 		"--node-name=" + n.Name,
 	}
 	for _, k := range slices.Sorted(maps.Keys(spec.Labels)) {
@@ -183,14 +183,14 @@ func (b *Backend) startAgent(ctx context.Context, g domain.BackendNodeGroup, n d
 	labels[LabelInstance] = n.InstanceID
 	labels[labelSpec] = specHash(spec)
 	c := dockerhost.ContainerSpec{
-		Name:       agentName(g.ClusterID, n.Name),
+		Name:       b.agentName(g.ClusterID, n.Name),
 		Image:      spec.Image,
 		Cmd:        cmd,
 		Env:        []string{"K3S_TOKEN=" + joinToken(b.secret, g.ClusterID)},
 		Labels:     labels,
 		Privileged: true,
 		Tmpfs:      map[string]string{"/run": "", "/var/run": ""},
-		Network:    networkName(g.ClusterID),
+		Network:    b.networkName(g.ClusterID),
 		Aliases:    []string{n.Name},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		Files: []dockerhost.File{{
@@ -311,7 +311,7 @@ func (b *Backend) waitReady(ctx context.Context, st *clusterState, g domain.Back
 // checkExited gives the pending nodes whose agent container exited a reason.
 func (b *Backend) checkExited(ctx context.Context, clusterID string, pending []string, reasons map[string]string) {
 	for _, n := range pending {
-		if ctr, err := b.docker.InspectContainer(ctx, agentName(clusterID, n)); err == nil && !ctr.Running {
+		if ctr, err := b.docker.InspectContainer(ctx, b.agentName(clusterID, n)); err == nil && !ctr.Running {
 			reasons[n] = b.agentFailure(ctx, clusterID, n, fmt.Sprintf("the k3s agent exited (code %d)", ctr.ExitCode))
 		}
 	}
@@ -332,7 +332,7 @@ func (*Backend) pendingAgents(g domain.BackendNodeGroup, nodes map[string]kubeNo
 }
 
 func (b *Backend) agentFailure(ctx context.Context, clusterID, node, cause string) string {
-	logs, err := b.docker.Logs(ctx, agentName(clusterID, node), 3)
+	logs, err := b.docker.Logs(ctx, b.agentName(clusterID, node), 3)
 	if err != nil || strings.TrimSpace(logs) == "" {
 		return cause
 	}

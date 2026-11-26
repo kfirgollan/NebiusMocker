@@ -48,8 +48,8 @@ contract tests (`test/contract/msp_postgresql_*`), the Terraform and CLI e2e sui
   (pooling `SESSION`, pool size 20, backup window `00:02:00`, retention `7d`).
 - **Immutable fields** (`INVALID_ARGUMENT` "field is immutable"): `description`, `network_id`, `config.version`,
   `bootstrap.user_name`, `bootstrap.db_name`, `backup.backup_window_start`, `backup.retention_policy`.
-- **Backups.** Backup operations run on the cluster (their operation `resource_id` is the cluster ID, and they serialize
-  with the cluster's other operations); find the new backup with `ListByCluster`. Only on-demand backups can be deleted;
+- **Backups.** A backup operation's `resource_id` is the backup it creates or deletes; it serializes with the
+  cluster's other operations (one operation at a time per cluster). Only on-demand backups can be deleted;
   automatic ones expire with the retention. Backups outlive their cluster (`source_cluster_visible = false`), and
   `GetForBackup` returns the source cluster's configuration (no password) even after it was deleted.
 - **Restore** creates a new cluster in the backup's project from `backup_id` of `source_cluster_id`: same version, a disk
@@ -73,7 +73,6 @@ deleted cluster stay readable: the cluster ID still resolves to its project for 
 ### Not yet
 
 - Cross-region backup replication (`replication_regions`, `replication_interval`): rejected, see above.
-- Disk size is validated and recorded but not enforced on the Docker volume (Docker Desktop volumes have no size cap).
 - Quotas (owned by the quotas area), maintenance windows (`nebius maintenance`), metrics and logs.
 
 ## Terraform
@@ -102,6 +101,8 @@ destroy, a viewer that cannot apply, and an invalid preset that fails apply.
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS` | `cpu-e2=2vcpu-8gb\|…\|80vcpu-320gb` | `platform=preset\|…;…` resources catalog |
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_TYPES` | `network-ssd` | Accepted disk types |
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS` | `3` | Largest `hosts.count` |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT` | `1Gi` | Bytes one GiB of `size_gibibytes` holds, for disk-full enforcement only (`8Mi`: a 10 GiB disk holds 80 MiB). Validation stays 10-4096 |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL` | `1m` | How often the disk usage of running clusters is checked |
 | `NEBIUS_MOCKER_MSP_DOCKER_HOST`, `_BIND_IP`, `_ENDPOINT_HOST`, `_TLS_DIR`, `_START_TIMEOUT` | see [configuration](../architecture/11-configuration.md) | Shared with Managed MLflow |
 
 ## Docker backend: real PostgreSQL
@@ -126,6 +127,27 @@ With `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND=docker` every cluster is real Postgre
 - **Lifecycle.** Stop stops the containers, Start starts them; Delete removes containers, volumes and the network.
   Everything carries `nebius-mocker.backend=msp-postgresql` and `nebius-mocker.owner=<edge address>`; a mocker removes its
   own leftovers at startup and shutdown.
+
+### Disk size
+
+`spec.config.template.disk.size_gibibytes` is enforced by the docker backend, approximately. Nebius documents no
+full-disk behavior (only the dashboard metrics "Disk used space" and "Total service disk usage"), and the API has no
+disk-usage field, so what follows is the mock's own design:
+
+- **Usage** is `du` of the primary's data directory (`pg_wal` included; archived WAL and backups are not counted),
+  measured after every create, update, start and restore, and every `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL`.
+  The limit is `size_gibibytes` x `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT` (1 GiB by default).
+- **Full** (usage at or above the limit): every connectable non-template database gets
+  `ALTER DATABASE ... SET default_transaction_read_only = on`, and the other client sessions are terminated, so pooled
+  and existing connections pick it up. Writes fail with SQLSTATE `25006` ("cannot execute ... in a read-only
+  transaction"), reads work, the cluster stays `RUNNING` and its state is `STATE_DEGRADED`. A real full disk would fail
+  with `ENOSPC` / `disk_full` (`53100`) instead. A session can `SET default_transaction_read_only = off` to delete
+  data: the mock's escape hatch.
+- **Recovery**: growing the disk (an update) or shrinking the data (below the limit at the next check) resets the
+  setting, ends the sessions once more and returns the state to `STATE_FINISHED`. The state is kept nowhere but in the
+  databases' settings, so a check is idempotent.
+- A `DEGRADED` cluster still counts as running (backups, updates, stop). The `mock` backend stores no data and never
+  fills.
 
 Connect as the docs show (`docs.nebius.com/postgresql/databases/connect`), with the mocker's CA as the root certificate:
 

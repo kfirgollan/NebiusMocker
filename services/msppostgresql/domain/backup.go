@@ -64,16 +64,22 @@ func (s *Service) CreateBackup(ctx context.Context, clusterID string, request pr
 	return s.submitBackup(ctx, clusterID, onDemandBackup, request)
 }
 
-// submitBackup starts a backup operation, on the cluster's resource lock so
-// that it serializes with the cluster's own operations.
+// submitBackup starts a backup operation. Its resource_id is the new
+// backup (common.v1alpha1.Operation: "ID of the resource that this operation
+// creates"), and it holds the cluster's resource lock so that it serializes
+// with the cluster's own operations.
 func (s *Service) submitBackup(ctx context.Context, clusterID string, kind backupKind, request proto.Message) (*operations.Operation, error) {
+	backupID, err := s.d.IDs.New(KindBackup)
+	if err != nil {
+		return nil, fmt.Errorf("new backup id: %w", err)
+	}
 	var rec BackupRecord
 	return s.d.Ops.Submit(ctx, operations.Spec{
-		ResourceID: clusterID, Description: "Create PostgreSQL backup", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
+		ResourceID: backupID, LockID: clusterID, Description: "Create PostgreSQL backup", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
 		Request: request, Detached: s.d.Config.Detached,
 		Prepare: func(ctx context.Context) error {
 			var err error
-			rec, err = s.prepareBackup(ctx, clusterID, kind)
+			rec, err = s.prepareBackup(ctx, clusterID, backupID, kind)
 			return err
 		},
 		Work: func(ctx context.Context) error {
@@ -85,7 +91,7 @@ func (s *Service) submitBackup(ctx context.Context, clusterID string, kind backu
 }
 
 // prepareBackup stores the record of a backup that is being taken.
-func (s *Service) prepareBackup(ctx context.Context, clusterID string, kind backupKind) (BackupRecord, error) {
+func (s *Service) prepareBackup(ctx context.Context, clusterID, backupID string, kind backupKind) (BackupRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, err := s.d.Clusters.Get(ctx, clusterID)
@@ -99,7 +105,7 @@ func (s *Service) prepareBackup(ctx context.Context, clusterID string, kind back
 		return BackupRecord{}, errs.BadState(clusterID, fmt.Sprintf("cluster %s is not running (phase %s, state %s)",
 			c.GetMetadata().GetName(), c.GetStatus().GetPhase(), c.GetStatus().GetState()))
 	}
-	rec, err := s.newBackupRecord(c)
+	rec, err := s.newBackupRecord(c, backupID)
 	if err != nil {
 		return BackupRecord{}, err
 	}
@@ -109,11 +115,14 @@ func (s *Service) prepareBackup(ctx context.Context, clusterID string, kind back
 	return rec, s.d.Backups.Put(ctx, rec)
 }
 
-// newBackupRecord is the record of an automatic backup of c that starts now.
-func (s *Service) newBackupRecord(c *pgpb.Cluster) (BackupRecord, error) {
-	id, err := s.d.IDs.New(KindBackup)
-	if err != nil {
-		return BackupRecord{}, fmt.Errorf("new backup id: %w", err)
+// newBackupRecord is the record of an automatic backup of c that starts now;
+// an empty id allocates one.
+func (s *Service) newBackupRecord(c *pgpb.Cluster, id string) (BackupRecord, error) {
+	if id == "" {
+		var err error
+		if id, err = s.d.IDs.New(KindBackup); err != nil {
+			return BackupRecord{}, fmt.Errorf("new backup id: %w", err)
+		}
 	}
 	rec := BackupRecord{
 		Backup: &pgpb.Backup{
@@ -144,7 +153,7 @@ func (s *Service) takeBackup(ctx context.Context, rec BackupRecord) error {
 // RUNNING. The caller holds the cluster lock. Its failure does not fail the
 // operation that created the cluster; the daily schedule retries.
 func (s *Service) firstBackup(ctx context.Context, c *pgpb.Cluster) {
-	rec, err := s.newBackupRecord(c)
+	rec, err := s.newBackupRecord(c, "")
 	if err == nil {
 		err = s.d.Backups.Put(ctx, rec)
 	}
@@ -160,7 +169,7 @@ func (s *Service) firstBackup(ctx context.Context, c *pgpb.Cluster) {
 // their retention.
 func (s *Service) DeleteBackup(ctx context.Context, clusterID, backupID string, request proto.Message) (*operations.Operation, error) {
 	return s.d.Ops.Submit(ctx, operations.Spec{
-		ResourceID: clusterID, Description: "Delete PostgreSQL backup", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
+		ResourceID: backupID, LockID: clusterID, Description: "Delete PostgreSQL backup", CreatedBy: reqctx.PrincipalFrom(ctx).ID,
 		Request: request, Detached: s.d.Config.Detached,
 		Prepare: func(ctx context.Context) error {
 			rec, err := s.d.Backups.Get(ctx, clusterID, backupID)

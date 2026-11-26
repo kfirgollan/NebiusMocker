@@ -67,6 +67,14 @@ type Backend interface {
 	// recovery and may be removed. A missing backup is not an error.
 	DeleteBackup(ctx context.Context, clusterID, backupID string, keepWALFrom time.Time) error
 
+	// CheckDisk measures the on-disk size of the cluster's data (the primary's
+	// data directory, WAL included; archived WAL and backups do not count)
+	// and enforces limitBytes: at or above it every database refuses writes
+	// and open sessions are ended; below it a cluster that was full accepts
+	// writes again. It is idempotent and keeps no state of its own. A cluster
+	// the backend does not know, or a stopped one, reports zero usage.
+	CheckDisk(ctx context.Context, clusterID string, limitBytes int64) (DiskUsage, error)
+
 	// Close releases what the backend holds at mocker shutdown.
 	Close(ctx context.Context) error
 }
@@ -127,6 +135,15 @@ type RestoreSource struct {
 	// RecoveryTime is the point-in-time recovery target; zero restores the
 	// backup as taken.
 	RecoveryTime time.Time
+}
+
+// DiskUsage is what CheckDisk found.
+type DiskUsage struct {
+	UsedBytes  int64
+	LimitBytes int64
+	// Full is true while the cluster refuses writes because UsedBytes
+	// reached LimitBytes.
+	Full bool
 }
 
 // Endpoints are the "host:port" addresses clients connect to

@@ -26,7 +26,7 @@ const (
 
 // pgHCL is the PostgreSQL cluster as the provider's documentation writes it,
 // with two hosts, a postgresql_config_16 parameter and the transaction pooler.
-func pgHCL(project, password string) string {
+func pgHCL(project, password string, diskGiB int) string {
 	return fmt.Sprintf(`
 data "nebius_vpc_v1_network" "default" {
   parent_id = %[1]q
@@ -43,7 +43,7 @@ resource "nebius_msp_postgresql_v1alpha1_cluster" "pg" {
     template = {
       resources = { platform = "cpu-e2", preset = "2vcpu-8gb" }
       hosts     = { count = 2 }
-      disk      = { type = "network-ssd", size_gibibytes = 20 }
+      disk      = { type = "network-ssd", size_gibibytes = %[5]d }
     }
     pooler_config        = { pooling_mode = "TRANSACTION", max_pool_size = 20 }
     postgresql_config_16 = { statement_timeout = 45000 }
@@ -59,21 +59,21 @@ resource "nebius_msp_postgresql_v1alpha1_cluster" "pg" {
 output "network_id" { value = data.nebius_vpc_v1_network.default.id }
 output "read_write" { value = nebius_msp_postgresql_v1alpha1_cluster.pg.status.connection_endpoints.private_read_write }
 output "read_only" { value = nebius_msp_postgresql_v1alpha1_cluster.pg.status.connection_endpoints.private_read_only }
-`, project, password, pgUser, pgDB)
+`, project, password, pgUser, pgDB, diskGiB)
 }
 
 // psql runs psql in the user machine exactly as the Nebius PostgreSQL docs
 // show: a connection string with sslmode=verify-full, the CA in
 // ~/.postgresql/root.crt, the password in PGPASSWORD.
-func psql(ctx context.Context, u *userMachine, endpoint, user, password, db, sql string) (string, error) {
+func psql(ctx context.Context, u *userMachine, endpoint, password, sql string) (string, error) {
 	i := strings.LastIndex(endpoint, ":")
-	conn := fmt.Sprintf("host=%s port=%s sslmode=verify-full dbname=%s user=%s connect_timeout=10", endpoint[:i], endpoint[i+1:], db, user)
+	conn := fmt.Sprintf("host=%s port=%s sslmode=verify-full dbname=%s user=%s connect_timeout=10", endpoint[:i], endpoint[i+1:], pgDB, pgUser)
 	return u.try(ctx, fmt.Sprintf("PGPASSWORD=%q psql -X -tA -v ON_ERROR_STOP=1 %q -c %q", password, conn, sql))
 }
 
 func mustPSQL(t *testing.T, u *userMachine, endpoint, password, sql string) string {
 	t.Helper()
-	out, err := psql(t.Context(), u, endpoint, pgUser, password, pgDB, sql)
+	out, err := psql(t.Context(), u, endpoint, password, sql)
 	if err != nil {
 		t.Fatalf("psql %s: %v\n%s", sql, err, out)
 	}
@@ -86,7 +86,7 @@ func TestPostgreSQLScenario(t *testing.T) {
 
 	tf := tfharness.New(t, e.addr, e.inst.Token)
 	tf.UseTLSWithoutVerify()
-	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassOne))
+	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassOne, 10))
 	tf.Init(t)
 	tf.ExpectPlan(t, map[string]string{"nebius_msp_postgresql_v1alpha1_cluster.pg": "create"})
 	tf.Apply(t)
@@ -110,7 +110,7 @@ func TestPostgreSQLScenario(t *testing.T) {
 	}
 	// The read-only endpoint is a replica that has the rows.
 	eventually(t, time.Minute, func() error {
-		got, err := psql(t.Context(), u, ro, pgUser, pgPassOne, pgDB, "select count(*) from orders")
+		got, err := psql(t.Context(), u, ro, pgPassOne, "select count(*) from orders")
 		if err != nil || strings.TrimSpace(got) != "3" {
 			return fmt.Errorf("replica rows = %q: %w", got, err)
 		}
@@ -121,14 +121,14 @@ func TestPostgreSQLScenario(t *testing.T) {
 	}
 
 	// A password change through Terraform.
-	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassTwo))
+	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassTwo, 10))
 	tf.ExpectPlan(t, map[string]string{"nebius_msp_postgresql_v1alpha1_cluster.pg": "update"})
 	tf.Apply(t)
 	tf.ExpectNoChanges(t)
 	if rw2 := tf.Output(t, "read_write"); rw2 != rw {
 		t.Errorf("read-write endpoint changed with the password: %s -> %s", rw, rw2)
 	}
-	if out, err := psql(t.Context(), u, rw, pgUser, pgPassOne, pgDB, "select 1"); err == nil {
+	if out, err := psql(t.Context(), u, rw, pgPassOne, "select 1"); err == nil {
 		t.Errorf("the old password still works: %s", out)
 	}
 	if got := mustPSQL(t, u, rw, pgPassTwo, "select count(*) from orders"); got != "3" {
@@ -168,10 +168,71 @@ func TestPostgreSQLScenario(t *testing.T) {
 		t.Errorf("restored rows = %q, want 3:3 (the data as of the backup, without the row inserted after it)", got)
 	}
 
-	// Cleanup through the same tools.
+	// Cleanup of the restored cluster through the same tools.
 	u.sh(t, "nebius msp postgresql v1alpha1 cluster delete --id "+restoredID)
+
+	diskFull(t, e, tf, u, clusterID, rw)
+
 	tf.Destroy(t)
-	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-postgresql"); len(left) > 0 {
+	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-postgresql", "nebius-mocker.owner="+e.addr); len(left) > 0 {
 		t.Fatalf("containers left after the clusters were deleted: %v", left)
+	}
+}
+
+// diskFull fills the 10 GiB disk (80 MiB with this suite's disk unit) past its
+// limit: writes are refused, reads still work, the cluster is DEGRADED. A 30
+// GiB disk through Terraform brings it back.
+func diskFull(t *testing.T, e *env, tf *tfharness.Run, u *userMachine, clusterID, rw string) {
+	t.Helper()
+	clusters := pgsvc.NewClusterService(e.sdk)
+	state := func() mspv1alpha1pb.ClusterStatus_State {
+		c, err := clusters.Get(t.Context(), &pgpb.GetClusterRequest{Id: clusterID})
+		if err != nil {
+			t.Fatalf("Cluster.Get: %v", err)
+		}
+		if c.GetStatus().GetPhase() != mspv1alpha1pb.ClusterStatus_PHASE_RUNNING {
+			t.Fatalf("phase = %v, a full disk must not change the phase", c.GetStatus().GetPhase())
+		}
+		return c.GetStatus().GetState()
+	}
+	if got := state(); got != mspv1alpha1pb.ClusterStatus_STATE_FINISHED {
+		t.Fatalf("state before filling = %v", got)
+	}
+	mustPSQL(t, u, rw, pgPassTwo, "create table filler (id int, pad text)")
+	mustPSQL(t, u, rw, pgPassTwo, "insert into filler select g, repeat('x', 200) from generate_series(1, 200000) g")
+
+	eventually(t, time.Minute, func() error {
+		out, err := psql(t.Context(), u, rw, pgPassTwo, "insert into filler values (-1, 'over the limit')")
+		if err == nil {
+			return fmt.Errorf("the write still succeeds: %s", out)
+		}
+		if !strings.Contains(out, "read-only transaction") {
+			return fmt.Errorf("write failed, but not as read-only: %w: %s", err, out)
+		}
+		return nil
+	})
+	if got := mustPSQL(t, u, rw, pgPassTwo, "select count(*) >= 200000 from filler"); got != "t" {
+		t.Errorf("at least 200000 rows readable on a full disk = %q, want t", got)
+	}
+	eventually(t, time.Minute, func() error {
+		if got := state(); got != mspv1alpha1pb.ClusterStatus_STATE_DEGRADED {
+			return fmt.Errorf("state = %v, want DEGRADED", got)
+		}
+		return nil
+	})
+
+	// Growing the disk through Terraform.
+	tf.Write(t, pgHCL(e.inst.ProjectID, pgPassTwo, 30))
+	tf.ExpectPlan(t, map[string]string{"nebius_msp_postgresql_v1alpha1_cluster.pg": "update"})
+	tf.Apply(t)
+	tf.ExpectNoChanges(t)
+	eventually(t, time.Minute, func() error {
+		if out, err := psql(t.Context(), u, rw, pgPassTwo, "insert into filler values (-2, 'room again')"); err != nil {
+			return fmt.Errorf("write after growing the disk: %w: %s", err, out)
+		}
+		return nil
+	})
+	if got := state(); got != mspv1alpha1pb.ClusterStatus_STATE_FINISHED {
+		t.Errorf("state after growing the disk = %v, want FINISHED", got)
 	}
 }

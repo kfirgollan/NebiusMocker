@@ -132,7 +132,7 @@ func (b *Backend) EnsureCluster(ctx context.Context, c domain.BackendCluster) (d
 		}
 	}
 	port := ""
-	existing, err := b.docker.InspectContainer(ctx, serverName(c.ID))
+	existing, err := b.docker.InspectContainer(ctx, b.serverName(c.ID))
 	switch {
 	case err == nil && existing.Running && existing.Labels[labelSpec] == image:
 		return b.attach(ctx, c, existing, image)
@@ -161,13 +161,13 @@ func (b *Backend) startServer(ctx context.Context, c domain.BackendCluster, imag
 	if err := b.docker.EnsureImage(ctx, image); err != nil {
 		return "", fmt.Errorf("pull %s: %w", image, err)
 	}
-	if _, err := b.docker.EnsureNetwork(ctx, networkName(c.ID), b.clusterLabels(c.ID, "")); err != nil {
+	if _, err := b.docker.EnsureNetwork(ctx, b.networkName(c.ID), b.clusterLabels(c.ID, "")); err != nil {
 		return "", fmt.Errorf("network of %s: %w", c.ID, err)
 	}
-	if err := b.docker.EnsureVolume(ctx, volumeName(c.ID), b.clusterLabels(c.ID, roleServer)); err != nil {
+	if err := b.docker.EnsureVolume(ctx, b.volumeName(c.ID), b.clusterLabels(c.ID, roleServer)); err != nil {
 		return "", fmt.Errorf("volume of %s: %w", c.ID, err)
 	}
-	sans := []string{"127.0.0.1", "localhost", serverName(c.ID)}
+	sans := []string{"127.0.0.1", "localhost", b.serverName(c.ID)}
 	if !slices.Contains(sans, b.cfg.EndpointHost) {
 		sans = append(sans, b.cfg.EndpointHost)
 	}
@@ -184,18 +184,18 @@ func (b *Backend) startServer(ctx context.Context, c domain.BackendCluster, imag
 		cmd = append(cmd, "--tls-san="+s)
 	}
 	spec := dockerhost.ContainerSpec{
-		Name:       serverName(c.ID),
+		Name:       b.serverName(c.ID),
 		Image:      image,
 		Cmd:        cmd,
 		Env:        []string{"K3S_TOKEN=" + joinToken(b.secret, c.ID)},
 		Labels:     b.clusterLabels(c.ID, roleServer),
 		Privileged: true,
 		Tmpfs:      map[string]string{"/run": "", "/var/run": ""},
-		Network:    networkName(c.ID),
-		Aliases:    []string{serverName(c.ID)},
+		Network:    b.networkName(c.ID),
+		Aliases:    []string{b.serverName(c.ID)},
 		Ports:      []dockerhost.PortBinding{{ContainerPort: apiPort, HostIP: b.cfg.BindIP, HostPort: port}},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-		Binds:      []string{volumeName(c.ID) + ":" + dataDir},
+		Binds:      []string{b.volumeName(c.ID) + ":" + dataDir},
 		Files: []dockerhost.File{
 			{Path: webhookConfigPath, Mode: 0o600, Content: []byte(webhookConfig(b.webhookURL, c.ID))},
 			{Path: rbacManifestPath, Mode: 0o600, Content: []byte(rbacManifest)},

@@ -41,6 +41,10 @@ var apiHosts = []string{
 // docker runs the docker CLI against the active context's daemon.
 type docker struct {
 	host string
+	// owner is the nebius-mocker.owner label of this run's mocker (its
+	// webhook URL): other mockers on the same Docker host (concurrent test
+	// packages) reuse the same cluster IDs, so every lookup filters on it.
+	owner string
 }
 
 func newDocker(t *testing.T) *docker {
@@ -86,7 +90,8 @@ func (d *docker) arch(t *testing.T) string {
 // (e.g. "nebius-mocker.cluster=<id>").
 func (d *docker) k3sContainers(t *testing.T, filter string) []string {
 	t.Helper()
-	out := d.run(t, "ps", "-a", "--filter", "label=nebius-mocker.backend=k3s", "--filter", "label="+filter, "--format", "{{.Names}}")
+	out := d.run(t, "ps", "-a", "--filter", "label=nebius-mocker.backend=k3s", "--filter", "label=nebius-mocker.owner="+d.owner,
+		"--filter", "label="+filter, "--format", "{{.Names}}")
 	return strings.Fields(out)
 }
 
@@ -112,7 +117,7 @@ func startUserMachine(t *testing.T, d *docker, ca *testca.CA) *userMachine {
 	}
 	name := "nebius-mocker-mk8s-user-" + randomSuffix(t)
 	args := []string{
-		"run", "-d", "--name", name, "--label", testLabel,
+		"run", "-d", "--name", name, "--label", testLabel, "--label", "nebius-mocker.owner=" + d.owner,
 		"-v", ca.CAFile + ":/nebius-mocker-ca.crt:ro",
 		"-v", kubectlBinary(t, "linux", arch) + ":/opt/nebius-mocker/bin/kubectl:ro",
 		"-v", cliDir + ":/opt/nebius-cli",

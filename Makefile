@@ -75,7 +75,7 @@ e2e-registry: ## Harbor-backed registry tests (needs Docker): CLI login + creden
 # starts real k3s servers and agents in Docker; the user's tools (nebius CLI,
 # kubectl) run in a Linux container that trusts the mocker's TLS CA.
 # deploy/k3s/reap.sh removes k3s leftovers of mockers that are gone.
-MK8S_CLEANUP := docker ps -aq --filter label=nebius-mocker.test=mk8s | xargs docker rm -f -v >/dev/null 2>&1 || true; ./deploy/k3s/reap.sh
+MK8S_CLEANUP := ./deploy/docker/reap.sh nebius-mocker.test=mk8s nebius-mocker.backend=k3s
 
 e2e-mk8s: ## Managed Kubernetes on k3s (needs Docker + terraform): Terraform, get-credentials, kubectl, IAM groups, capacity
 	@$(MK8S_CLEANUP)
@@ -87,7 +87,7 @@ e2e-mk8s: ## Managed Kubernetes on k3s (needs Docker + terraform): Terraform, ge
 # containers, and the user's tools (psql, nebius CLI, MLflow client, AWS CLI)
 # reach them through the published endpoints with the mocker's CA. The two
 # backend packages' own e2e_msp tests run first.
-MSP_CLEANUP := for l in nebius-mocker.test=msp nebius-mocker.backend=msp-postgresql nebius-mocker.backend=msp-mlflow; do docker ps -aq --filter label=$$l | xargs docker rm -f -v >/dev/null 2>&1 || true; done
+MSP_CLEANUP := ./deploy/docker/reap.sh nebius-mocker.test=msp nebius-mocker.backend=msp-postgresql nebius-mocker.backend=msp-mlflow
 
 e2e-msp: ## Managed PostgreSQL + MLflow on Docker (needs Docker + terraform): Terraform, psql, CLI, MLflow client, S3
 	@$(MSP_CLEANUP)

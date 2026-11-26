@@ -23,7 +23,8 @@ func TestMSPDefaults(t *testing.T) {
 	if got := m.PostgresPresets["cpu-e2"]; len(got) == 0 || got[0] != "2vcpu-8gb" {
 		t.Errorf("cpu-e2 presets = %v", got)
 	}
-	if m.StartTimeout != 3*time.Minute || m.PostgresMaxHosts != 3 || m.MLflowSizeOrder[0] != "medium" {
+	if m.StartTimeout != 3*time.Minute || m.PostgresMaxHosts != 3 || m.MLflowSizeOrder[0] != "medium" ||
+		m.PostgresDiskUnit != 1<<30 || m.PostgresDiskCheckInterval != time.Minute {
 		t.Errorf("unexpected defaults: %+v", m)
 	}
 	for _, p := range m.PostgresPresets["cpu-e2"] {
@@ -36,15 +37,17 @@ func TestMSPDefaults(t *testing.T) {
 func TestMSPParsed(t *testing.T) {
 	t.Parallel()
 	c, err := FromLookup(lookup(map[string]string{
-		"NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND":   "docker",
-		"NEBIUS_MOCKER_MSP_MLFLOW_BACKEND":       "docker",
-		"NEBIUS_MOCKER_MSP_DOCKER_HOST":          "tcp://docker.internal:2375",
-		"NEBIUS_MOCKER_MSP_ENDPOINT_HOST":        "host.docker.internal",
-		"NEBIUS_MOCKER_MSP_POSTGRESQL_IMAGES":    "17=postgres:17-alpine",
-		"NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS":   "cpu-d3=4vcpu-16gb|8vcpu-32gb",
-		"NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS": "5",
-		"NEBIUS_MOCKER_MSP_MLFLOW_SIZES":         "small=2vcpu-8gb,medium=8vcpu-32gb",
-		"NEBIUS_MOCKER_MSP_S3_ENDPOINT":          "http://s3.internal:4580",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND":             "docker",
+		"NEBIUS_MOCKER_MSP_MLFLOW_BACKEND":                 "docker",
+		"NEBIUS_MOCKER_MSP_DOCKER_HOST":                    "tcp://docker.internal:2375",
+		"NEBIUS_MOCKER_MSP_ENDPOINT_HOST":                  "host.docker.internal",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_IMAGES":              "17=postgres:17-alpine",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS":             "cpu-d3=4vcpu-16gb|8vcpu-32gb",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS":           "5",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT":           "8Mi",
+		"NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL": "2s",
+		"NEBIUS_MOCKER_MSP_MLFLOW_SIZES":                   "small=2vcpu-8gb,medium=8vcpu-32gb",
+		"NEBIUS_MOCKER_MSP_S3_ENDPOINT":                    "http://s3.internal:4580",
 	}))
 	if err != nil {
 		t.Fatalf("FromLookup: %v", err)
@@ -58,6 +61,9 @@ func TestMSPParsed(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"4vcpu-16gb", "8vcpu-32gb"}, m.PostgresPresets["cpu-d3"]); diff != "" {
 		t.Errorf("presets (-want +got):\n%s", diff)
+	}
+	if m.PostgresDiskUnit != 8<<20 || m.PostgresDiskCheckInterval != 2*time.Second {
+		t.Errorf("disk unit/interval = %d %s", m.PostgresDiskUnit, m.PostgresDiskCheckInterval)
 	}
 	if m.PostgresMaxHosts != 5 || m.EndpointHost != "host.docker.internal" || m.S3Endpoint != "http://s3.internal:4580" {
 		t.Errorf("parsed = %+v", m)
@@ -85,6 +91,8 @@ func TestMSPRejects(t *testing.T) {
 		"image":     {"NEBIUS_MOCKER_MSP_POSTGRESQL_IMAGES": "sixteen=postgres"},
 		"preset":    {"NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS": "cpu-e2=big"},
 		"size":      {"NEBIUS_MOCKER_MSP_MLFLOW_SIZES": "medium=8vcpu-32gb,medium=8vcpu-32gb"},
+		"diskUnit":  {"NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT": "big"},
+		"diskCheck": {"NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL": "0s"},
 		"maxHosts":  {"NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS": "0"},
 		"s3":        {"NEBIUS_MOCKER_MSP_S3_ENDPOINT": "s3.internal"},
 		"bindIP":    {"NEBIUS_MOCKER_MSP_BIND_IP": "localhost"},

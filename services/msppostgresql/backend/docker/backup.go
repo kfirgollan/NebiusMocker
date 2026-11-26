@@ -27,7 +27,7 @@ du -sb "$1" | cut -f1
 
 // CreateBackup implements domain.Backend.
 func (b *Backend) CreateBackup(ctx context.Context, clusterID, backupID string) (domain.BackupInfo, error) {
-	ctr, err := b.docker.InspectContainer(ctx, hostName(clusterID, 0))
+	ctr, err := b.docker.InspectContainer(ctx, b.hostName(clusterID, 0))
 	if err != nil {
 		return domain.BackupInfo{}, internal("inspect primary of "+clusterID, err)
 	}
@@ -57,7 +57,7 @@ func lastLine(s string) string {
 // recovered from the archive alone. It is best-effort: a cluster that is
 // stopped, or a failure, only costs the newest transactions in a restore.
 func (b *Backend) flushWAL(ctx context.Context, clusterID string) {
-	ctr, err := b.docker.InspectContainer(ctx, hostName(clusterID, 0))
+	ctr, err := b.docker.InspectContainer(ctx, b.hostName(clusterID, 0))
 	if err != nil || !ctr.Running {
 		return
 	}
@@ -85,7 +85,7 @@ func (b *Backend) restoreData(ctx context.Context, c domain.BackendCluster, imag
 	if err != nil {
 		return internal("list volumes", err)
 	}
-	vol := volumeName(c.ID, 0)
+	vol := b.volumeName(c.ID, 0)
 	if slices.Contains(vols, vol) {
 		return nil
 	}

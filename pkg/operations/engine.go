@@ -90,12 +90,12 @@ func (e *Engine) Stop() {
 
 // Submit runs spec.Prepare under the resource lock and creates the operation.
 func (e *Engine) Submit(ctx context.Context, spec Spec) (*Operation, error) {
-	if err := e.lock(spec.ResourceID); err != nil {
+	if err := e.lock(spec.lockKey()); err != nil {
 		return nil, err
 	}
 	op, err := e.prepare(ctx, spec)
 	if err != nil {
-		e.unlock(spec.ResourceID)
+		e.unlock(spec.lockKey())
 		return nil, err
 	}
 	if spec.Detached {
@@ -154,10 +154,10 @@ func (e *Engine) prepare(ctx context.Context, spec Spec) (*Operation, error) {
 	}
 	op := &Operation{
 		ID: id, Description: spec.Description, CreatedAt: e.clk.Now(), CreatedBy: spec.CreatedBy,
-		ResourceID: spec.ResourceID, Request: spec.Request,
+		ResourceID: spec.ResourceID, Request: spec.Request, lockID: spec.lockKey(),
 	}
 	e.mu.Lock()
-	e.active[spec.ResourceID] = id
+	e.active[op.lockID] = id
 	e.mu.Unlock()
 	return op, nil
 }
@@ -167,11 +167,11 @@ func (e *Engine) schedule(ctx context.Context, op *Operation, work func(context.
 	started := e.started
 	e.mu.Unlock()
 	if !started {
-		e.unlock(op.ResourceID)
+		e.unlock(op.lockID)
 		return nil, ErrNotStarted
 	}
 	if err := e.repo.Put(ctx, op.clone()); err != nil {
-		e.unlock(op.ResourceID)
+		e.unlock(op.lockID)
 		return nil, fmt.Errorf("store operation %s: %w", op.ID, err)
 	}
 	j := job{due: e.clk.Now().Add(e.delay), op: op.clone(), work: work}
@@ -191,7 +191,7 @@ func (e *Engine) schedule(ctx context.Context, op *Operation, work func(context.
 //nolint:contextcheck // detached Work outlives the request: it runs in the engine's Start context
 func (e *Engine) detach(ctx context.Context, op *Operation, work func(context.Context) error) (*Operation, error) {
 	if err := e.repo.Put(ctx, op.clone()); err != nil {
-		e.unlock(op.ResourceID)
+		e.unlock(op.lockID)
 		return nil, fmt.Errorf("store operation %s: %w", op.ID, err)
 	}
 	running := op.clone()
@@ -208,7 +208,7 @@ func (e *Engine) detach(ctx context.Context, op *Operation, work func(context.Co
 			select {
 			case <-e.clk.After(e.delay):
 			case <-runCtx.Done():
-				e.unlock(running.ResourceID)
+				e.unlock(running.lockID)
 				return
 			}
 		}
@@ -217,7 +217,7 @@ func (e *Engine) detach(ctx context.Context, op *Operation, work func(context.Co
 			err = work(runCtx)
 		}
 		if runCtx.Err() != nil {
-			e.unlock(running.ResourceID) // interrupted by Stop: stays unfinished
+			e.unlock(running.lockID) // interrupted by Stop: stays unfinished
 			return
 		}
 		e.finish(runCtx, running, err)
@@ -245,7 +245,7 @@ func (e *Engine) finish(ctx context.Context, op *Operation, workErr error) {
 	if workErr != nil {
 		e.log.WarnContext(ctx, "operation failed", "op_id", op.ID, "resource_id", op.ResourceID, "error", workErr)
 	}
-	e.unlock(op.ResourceID)
+	e.unlock(op.lockID)
 	if e.onFinish != nil {
 		e.onFinish(ctx, op.clone())
 	}

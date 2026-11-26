@@ -37,6 +37,10 @@ var apiHosts = []string{
 // docker runs the docker CLI against the active context's daemon.
 type docker struct {
 	host string
+	// owner is this run's mocker edge address, the nebius-mocker.owner label
+	// of its backends' objects; the user machines carry it too, so the
+	// Makefile's reaper (deploy/docker/reap.sh) leaves a concurrent run alone.
+	owner string
 }
 
 func newDocker(t *testing.T) *docker {
@@ -78,11 +82,15 @@ func (d *docker) arch(t *testing.T) string {
 	return a
 }
 
-// leftovers lists containers carrying the label filter (e.g.
-// "nebius-mocker.backend=msp-postgresql").
-func (d *docker) leftovers(t *testing.T, filter string) []string {
+// leftovers lists containers carrying every label filter (e.g.
+// "nebius-mocker.backend=msp-postgresql", "nebius-mocker.owner=<edge>").
+func (d *docker) leftovers(t *testing.T, filters ...string) []string {
 	t.Helper()
-	return strings.Fields(d.run(t, "ps", "-a", "--filter", "label="+filter, "--format", "{{.Names}}"))
+	args := []string{"ps", "-a", "--format", "{{.Names}}"}
+	for _, f := range filters {
+		args = append(args, "--filter", "label="+f)
+	}
+	return strings.Fields(d.run(t, args...))
 }
 
 // userMachine is a Linux container playing the user's machine: it resolves
@@ -102,7 +110,7 @@ type machineOpts struct {
 func startMachine(t *testing.T, d *docker, o machineOpts) *userMachine {
 	t.Helper()
 	name := "nebius-mocker-msp-user-" + randomSuffix(t)
-	args := []string{"run", "-d", "--name", name, "--label", testLabel, "--entrypoint", "sleep"}
+	args := []string{"run", "-d", "--name", name, "--label", testLabel, "--label", "nebius-mocker.owner=" + d.owner, "--entrypoint", "sleep"}
 	for _, m := range o.mounts {
 		args = append(args, "-v", m)
 	}

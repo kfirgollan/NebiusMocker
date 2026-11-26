@@ -29,13 +29,16 @@ const (
 	superuserFile = pgData + "/nmock.superuser"
 )
 
-func networkName(id string) string { return "nmock-pg-" + id }
-func hostName(id string, n int) string {
-	return "nmock-pg-" + id + "-" + strconv.Itoa(n)
+// Every Docker object name carries the owner tag, so mockers that share a
+// Docker host (and sequential cluster IDs) never collide.
+func (b *Backend) base(id string) string        { return "nmock-pg-" + b.tag + "-" + id }
+func (b *Backend) networkName(id string) string { return b.base(id) }
+func (b *Backend) hostName(id string, n int) string {
+	return b.base(id) + "-" + strconv.Itoa(n)
 }
-func volumeName(id string, n int) string { return hostName(id, n) }
-func hostAlias(n int) string             { return "pg-" + strconv.Itoa(n) }
-func poolerName(id string) string        { return "nmock-pg-" + id + "-pooler" }
+func (b *Backend) volumeName(id string, n int) string { return b.hostName(id, n) }
+func hostAlias(n int) string                          { return "pg-" + strconv.Itoa(n) }
+func (b *Backend) poolerName(id string) string        { return b.base(id) + "-pooler" }
 
 func walDir(id string) string              { return backupsDir + "/" + id + "/wal" }
 func baseDir(id string) string             { return backupsDir + "/" + id + "/base" }

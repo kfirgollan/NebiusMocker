@@ -178,14 +178,14 @@ func TestDeleteClusterRemovesOnlyItsOwn(t *testing.T) {
 	for _, c := range h.docker.Containers() {
 		names = append(names, c.Name)
 	}
-	if want := []string{agentName(other, "n1"), serverName(other)}; !slices.Equal(names, want) {
+	if want := []string{h.b.agentName(other, "n1"), h.b.serverName(other)}; !slices.Equal(names, want) {
 		t.Errorf("containers = %v, want only %v", names, want)
 	}
-	if got, want := h.docker.Volumes(), []string{volumeName(other)}; !slices.Equal(got, want) {
+	if got, want := h.docker.Volumes(), []string{h.b.volumeName(other)}; !slices.Equal(got, want) {
 		t.Errorf("volumes = %v, want %v", got, want)
 	}
-	if nets := h.docker.Networks(); len(nets) != 1 || nets[0].Name != networkName(other) {
-		t.Errorf("networks = %v, want only %s", nets, networkName(other))
+	if nets := h.docker.Networks(); len(nets) != 1 || nets[0].Name != h.b.networkName(other) {
+		t.Errorf("networks = %v, want only %s", nets, h.b.networkName(other))
 	}
 	// The deleted cluster's state is gone: its nodes need an ensured cluster.
 	if _, err := h.b.EnsureNodes(t.Context(), testGroupSpec(testCluster, "n1")); !errs.IsKind(err, errs.KindBadState) {

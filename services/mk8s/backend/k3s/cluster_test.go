@@ -72,8 +72,8 @@ func TestEnsureClusterServerSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
-	spec := h.docker.spec(serverName(testCluster))
-	if spec.Image != "rancher/k3s:v1.35.10-k3s1" || !spec.Privileged || spec.Network != networkName(testCluster) {
+	spec := h.docker.spec(h.b.serverName(testCluster))
+	if spec.Image != "rancher/k3s:v1.35.10-k3s1" || !spec.Privileged || spec.Network != h.b.networkName(testCluster) {
 		t.Errorf("server spec = image %q privileged %v network %q", spec.Image, spec.Privileged, spec.Network)
 	}
 	wantLabels := map[string]string{
@@ -97,7 +97,7 @@ func TestEnsureClusterServerSpec(t *testing.T) {
 	if !slices.Contains(spec.Env, "K3S_TOKEN="+joinToken(h.b.secret, testCluster)) {
 		t.Errorf("server env = %v, want the cluster join token", spec.Env)
 	}
-	if got := h.docker.containerNamed(t, serverName(testCluster)); !got.Running {
+	if got := h.docker.containerNamed(t, h.b.serverName(testCluster)); !got.Running {
 		t.Errorf("server is not running: %+v", got)
 	}
 
@@ -111,7 +111,7 @@ func TestEnsureClusterServerSpec(t *testing.T) {
 
 	// The Kubernetes client is built for the published port, with the admin credentials.
 	build := h.lastBuild(t)
-	port := h.docker.containerNamed(t, serverName(testCluster)).Ports[apiPort][0].HostPort
+	port := h.docker.containerNamed(t, h.b.serverName(testCluster)).Ports[apiPort][0].HostPort
 	if build.base != "https://127.0.0.1:"+port && build.base != "https://10.1.2.3:"+port {
 		t.Errorf("Kubernetes client base = %q, want the published port %s", build.base, port)
 	}
@@ -185,7 +185,7 @@ func TestEnsureClusterTLSEdgeWebhook(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, func(o *Options) { o.EdgeTLS = true })
 	h.ensureCluster(t, testCluster)
-	hook := fileContent(t, h.docker.spec(serverName(testCluster)), webhookConfigPath)
+	hook := fileContent(t, h.docker.spec(h.b.serverName(testCluster)), webhookConfigPath)
 	for _, want := range []string{
 		"server: https://host.docker.internal:4566/mk8s/v1/clusters/" + testCluster + "/tokenreview",
 		"insecure-skip-tls-verify: true",
@@ -200,7 +200,7 @@ func TestEnsureClusterDefaultServiceCIDR(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)
 	h.ensureCluster(t, testCluster)
-	if cmd := h.docker.spec(serverName(testCluster)).Cmd; !slices.Contains(cmd, "--service-cidr=10.43.0.0/16") {
+	if cmd := h.docker.spec(h.b.serverName(testCluster)).Cmd; !slices.Contains(cmd, "--service-cidr=10.43.0.0/16") {
 		t.Errorf("server command %v lacks the default --service-cidr=10.43.0.0/16", cmd)
 	}
 }
@@ -257,7 +257,7 @@ func TestEnsureClusterVersionChangeKeepsPort(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)
 	first := h.ensureCluster(t, testCluster)
-	oldID := h.docker.containerNamed(t, serverName(testCluster)).ID
+	oldID := h.docker.containerNamed(t, h.b.serverName(testCluster)).ID
 	c := testClusterSpec(testCluster)
 	c.Version = "1.36"
 	h.kube.mu.Lock()
@@ -267,7 +267,7 @@ func TestEnsureClusterVersionChangeKeepsPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureCluster(1.36): %v", err)
 	}
-	got := h.docker.containerNamed(t, serverName(testCluster))
+	got := h.docker.containerNamed(t, h.b.serverName(testCluster))
 	if got.ID == oldID || got.Image != "rancher/k3s:v1.36.6-k3s1" {
 		t.Errorf("server after the upgrade = %+v, want a new container on the 1.36 image", got)
 	}

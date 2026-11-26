@@ -110,6 +110,36 @@ func TestDelayedCompletionAndConflict(t *testing.T) {
 	})
 }
 
+func TestLockIDSerializesWithTheParent(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		e := newEngine(t, clock.Real{}, time.Minute)
+		e.Start(t.Context())
+		defer e.Stop()
+
+		op, err := e.Submit(t.Context(), operations.Spec{ResourceID: "backup-1", LockID: "cluster-1"})
+		if err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		if op.ResourceID != "backup-1" {
+			t.Fatalf("ResourceID = %q, want the new sub-resource backup-1", op.ResourceID)
+		}
+		// The parent is locked; another sub-resource of it waits too.
+		for _, spec := range []operations.Spec{{ResourceID: "cluster-1"}, {ResourceID: "backup-2", LockID: "cluster-1"}} {
+			if _, err := e.Submit(t.Context(), spec); !errs.IsKind(err, errs.KindOperationConflict) {
+				t.Fatalf("Submit(%+v) err = %v, want OperationConflict", spec, err)
+			}
+		}
+
+		time.Sleep(time.Minute) //nolint:forbidigo // advances virtual time inside the synctest bubble
+		synctest.Wait()
+
+		if _, err := e.Submit(t.Context(), operations.Spec{ResourceID: "cluster-1"}); err != nil {
+			t.Fatalf("parent stayed locked after completion: %v", err)
+		}
+	})
+}
+
 func TestDelayedSubmitRequiresStart(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, clock.NewManual(t0), time.Second)

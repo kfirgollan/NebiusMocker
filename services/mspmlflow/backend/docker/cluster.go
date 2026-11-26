@@ -32,8 +32,13 @@ const (
 		`--gunicorn-opts "--certfile=` + tlsCertPath + ` --keyfile=` + tlsKeyPath + `"`
 )
 
-func containerName(id string) string { return "nmock-mlflow-" + id }
-func volumeName(id string) string    { return "nmock-mlflow-" + id }
+// Names carry the owner tag: concurrent mockers on one Docker host allocate
+// the same sequential cluster IDs, and their objects must not collide.
+func (b *Backend) containerName(id string) string {
+	return "nmock-mlflow-" + dockerhost.OwnerTag(b.owner) + "-" + id
+}
+
+func (b *Backend) volumeName(id string) string { return b.containerName(id) }
 
 // s3Endpoint is where the servers reach the mocker's S3 front.
 func s3Endpoint(cfg config.MSPConfig, listen string) (string, error) {
@@ -76,7 +81,7 @@ func (b *Backend) EnsureCluster(ctx context.Context, c domain.BackendCluster) (d
 	}
 	b.remember(c)
 	creds := b.credentialsOf(c.ID)
-	if err := b.docker.EnsureVolume(ctx, volumeName(c.ID), b.clusterLabels(c.ID)); err != nil {
+	if err := b.docker.EnsureVolume(ctx, b.volumeName(c.ID), b.clusterLabels(c.ID)); err != nil {
 		return domain.Endpoints{}, internal("create volume", err)
 	}
 	spec, hash := b.spec(ctx, c, creds)
@@ -131,11 +136,11 @@ func (b *Backend) spec(ctx context.Context, c domain.BackendCluster, creds crede
 	cmd := []string{"sh", "-c", serverCmd, "nmock-mlflow", c.Artifacts.Bucket}
 	labels := b.clusterLabels(c.ID)
 	spec = dockerhost.ContainerSpec{
-		Name: containerName(c.ID), Image: b.image, Labels: labels, Env: env, Cmd: cmd,
+		Name: b.containerName(c.ID), Image: b.image, Labels: labels, Env: env, Cmd: cmd,
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		Ports:      []dockerhost.PortBinding{{ContainerPort: serverPort, HostIP: b.cfg.BindIP}},
 		Memory:     c.MemoryBytes, NanoCPUs: nano,
-		Binds: []string{volumeName(c.ID) + ":" + dataDir},
+		Binds: []string{b.volumeName(c.ID) + ":" + dataDir},
 		Files: []dockerhost.File{{Path: authPath, Mode: 0o600, Content: []byte(authINI(c, creds))}},
 	}
 	sum := sha256.Sum256([]byte(strings.Join(append(slices.Clone(env), cmd[4], b.image, b.cfg.EndpointHost,
@@ -295,7 +300,7 @@ func (b *Backend) get(ctx context.Context, port string, creds credentials, query
 // ExperimentsCount implements domain.Backend: the active experiments, paged.
 func (b *Backend) ExperimentsCount(ctx context.Context, clusterID string) (int, error) {
 	creds := b.credentialsOf(clusterID)
-	ctr, err := b.docker.InspectContainer(ctx, containerName(clusterID))
+	ctr, err := b.docker.InspectContainer(ctx, b.containerName(clusterID))
 	if err != nil {
 		return 0, internal("inspect the tracking server", err)
 	}

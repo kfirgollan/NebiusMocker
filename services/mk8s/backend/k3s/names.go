@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost"
 	"github.com/kfirgollan/NebiusMocker/services/mk8s/domain"
 )
 
@@ -48,11 +49,18 @@ const apiPort = "6443/tcp"
 // device plugin would report on a real GPU node).
 const gpuResource = "nvidia.com/gpu"
 
-func networkName(clusterID string) string { return "nebius-mocker-" + clusterID }
-func serverName(clusterID string) string  { return "nebius-mocker-" + clusterID + "-server" }
-func volumeName(clusterID string) string  { return "nebius-mocker-" + clusterID + "-server" }
+// Object names carry the owner tag (dockerhost.OwnerTag of the owner label):
+// concurrent mockers on one Docker host allocate the same sequential cluster
+// IDs, and their objects must not collide.
+func (b *Backend) prefix(clusterID string) string {
+	return "nebius-mocker-" + dockerhost.OwnerTag(b.webhookURL) + "-" + clusterID
+}
 
-func agentName(clusterID, node string) string { return "nebius-mocker-" + clusterID + "-" + node }
+func (b *Backend) networkName(clusterID string) string { return b.prefix(clusterID) }
+func (b *Backend) serverName(clusterID string) string  { return b.prefix(clusterID) + "-server" }
+func (b *Backend) volumeName(clusterID string) string  { return b.prefix(clusterID) + "-server" }
+
+func (b *Backend) agentName(clusterID, node string) string { return b.prefix(clusterID) + "-" + node }
 
 func (b *Backend) clusterLabels(clusterID, role string) map[string]string {
 	return map[string]string{LabelBackend: backendName, LabelOwner: b.webhookURL, LabelCluster: clusterID, LabelRole: role}

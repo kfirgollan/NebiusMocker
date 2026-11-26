@@ -31,6 +31,9 @@ type Operation struct {
 	Request    proto.Message
 	// Err is the failure of a finished operation; nil means success.
 	Err error
+	// lockID is the key of the per-resource lock the operation holds
+	// (Spec.LockID, else ResourceID). It is not stored.
+	lockID string
 }
 
 // Done reports whether the operation has finished.
@@ -44,7 +47,12 @@ func (o *Operation) clone() *Operation {
 
 // Spec describes an operation to run.
 type Spec struct {
-	ResourceID  string
+	ResourceID string
+	// LockID is the resource whose lock the operation holds, when it differs
+	// from ResourceID: an operation that creates a sub-resource (a backup of
+	// a cluster) reports the new resource's ID but serializes with the
+	// parent's other operations. Empty means ResourceID.
+	LockID      string
 	Description string
 	CreatedBy   string
 	Request     proto.Message
@@ -73,4 +81,12 @@ type Repository interface {
 // IDGenerator creates operation IDs.
 type IDGenerator interface {
 	New(typ string) (string, error)
+}
+
+// lockKey is the per-resource lock the operation takes.
+func (s Spec) lockKey() string {
+	if s.LockID != "" {
+		return s.LockID
+	}
+	return s.ResourceID
 }

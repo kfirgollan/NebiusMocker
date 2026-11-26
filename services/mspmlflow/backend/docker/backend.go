@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -142,7 +143,7 @@ func New(ctx context.Context, o Options) (*Backend, error) {
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret) // crypto/rand.Read never fails (Go 1.24+)
 	b := &Backend{
-		cfg: o.Config, owner: o.EdgeListen, s3: s3, docker: o.Docker, clk: o.Clock, log: o.Log, ca: o.CA,
+		cfg: o.Config, owner: ownerOf(o.EdgeListen), s3: s3, docker: o.Docker, clk: o.Clock, log: o.Log, ca: o.CA,
 		poll: o.pollInterval, secret: secret, image: o.Config.MLflowImage + "-nebius-mocker", admins: map[string]credentials{},
 	}
 	b.http = o.httpClient
@@ -240,3 +241,19 @@ func (b *Backend) mac(what string) string {
 	h.Write([]byte(what))
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// ownerOf is the owner label of this backend's objects: the mocker's edge
+// address, whose port tells live owners from gone ones (reaping). An address
+// without a fixed port cannot tell two mockers apart, so it gets a random
+// owner instead.
+func ownerOf(edge string) string {
+	if _, port, err := net.SplitHostPort(edge); err == nil && port != "" && port != "0" {
+		return edge
+	}
+	b := make([]byte, 8)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails (Go 1.24+)
+	return "unbound-" + hex.EncodeToString(b)
+}
+
+// Owner is the nebius-mocker.owner label value of this backend's objects.
+func (b *Backend) Owner() string { return b.owner }

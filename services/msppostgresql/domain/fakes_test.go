@@ -294,6 +294,9 @@ type backend struct {
 	deleteErr  error
 	keepWAL    map[string]time.Time // backup ID → keepWALFrom of its deletion
 	deletedBkp []string
+	diskUsed   map[string]int64 // cluster ID → bytes CheckDisk reports
+	diskErr    error
+	diskLimits []int64 // limit of every CheckDisk call
 }
 
 func newBackend() *backend { return &backend{Backend: mock.New(), keepWAL: map[string]time.Time{}} }

@@ -5,8 +5,8 @@ package docker_test
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -40,7 +40,7 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 		BindIP: "127.0.0.1", EndpointHost: "127.0.0.1", TLSDir: dir, StartTimeout: 5 * time.Minute,
 		MLflowImage: "ghcr.io/mlflow/mlflow:v2.22.0", MLflowVersion: "2.22.0", S3Endpoint: "http://host.docker.internal:9",
 	}
-	owner := fmt.Sprintf("e2e-mlflow-%d", clk.Now().UnixNano())
+	owner := liveOwner(t)
 	b, err := mlflowdocker.New(ctx, mlflowdocker.Options{
 		Config: cfg, EdgeListen: owner, Docker: docker, Clock: clk, CA: ca, Log: slog.New(slog.DiscardHandler),
 	})
@@ -52,7 +52,7 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 		if err := b.Close(cctx); err != nil {
 			t.Errorf("Close: %v", err)
 		}
-		labels := map[string]string{mlflowdocker.LabelBackend: "msp-mlflow", mlflowdocker.LabelOwner: owner}
+		labels := map[string]string{mlflowdocker.LabelBackend: "msp-mlflow", mlflowdocker.LabelOwner: b.Owner()}
 		cs, _ := docker.ListContainers(cctx, labels)
 		vs, _ := docker.ListVolumes(cctx, labels)
 		if len(cs)+len(vs) != 0 {
@@ -123,4 +123,17 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 	if err := b.DeleteCluster(ctx, c.ID); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
 	}
+}
+
+// liveOwner plays the mocker's edge for the owner label: a listener that
+// stays open for the test, so reapers (deploy/docker/reap.sh) see the owner
+// alive and leave a concurrently running test's objects alone.
+func liveOwner(t *testing.T) string {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l.Addr().String()
 }

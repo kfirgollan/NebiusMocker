@@ -223,10 +223,12 @@ func TestClusterAndBackupFlows(t *testing.T) {
 	e.checkRunning(t, "start", got, "4vcpu-16gb", 2, 30)
 
 	// backup create / list / list-by-cluster
-	// BackupService.Create returns the operation (not the backup); the backup is found by listing.
+	// BackupService.Create returns the operation; its resource_id names the
+	// new backup ("the resource that this operation creates").
 	var op struct {
-		ID     string `json:"id"`
-		Status any    `json:"status"`
+		ID         string `json:"id"`
+		ResourceID string `json:"resource_id"`
+		Status     any    `json:"status"`
 	}
 	e.cli.JSON(t, &op, "msp", "postgresql", "v1alpha1", "backup", "create", "--cluster-id", id)
 	if op.ID == "" {
@@ -246,6 +248,9 @@ func TestClusterAndBackupFlows(t *testing.T) {
 	}
 	if b.ID == "" || b.SourceName != "cli-pg" || !b.SourceVisible || b.SourceClusterID != id {
 		t.Fatalf("no correct on-demand backup in %+v", byCluster)
+	}
+	if op.ResourceID != b.ID {
+		t.Fatalf("backup create operation resource_id = %q, want the new backup %q", op.ResourceID, b.ID)
 	}
 	sdkList, err := e.backups.List(ctx, &pgpb.ListBackupsRequest{ParentId: e.project})
 	if err != nil || len(sdkList.GetBackups()) != len(all.Backups) {

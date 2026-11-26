@@ -101,6 +101,8 @@ answer.
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_PRESETS` | `cpu-e2=2vcpu-8gb\|4vcpu-16gb\|…\|80vcpu-320gb` | `platform=<n>vcpu-<m>gb\|…;…`: resources catalog (listed platforms replace the defaults) |
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_TYPES` | `network-ssd` | Accepted disk types, comma-separated |
 | `NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS` | `3` | Largest `hosts.count` |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT` | `1Gi` | Bytes one GiB of `size_gibibytes` holds, for the docker backend's disk-full enforcement only (`8Mi`: a 10 GiB disk holds 80 MiB); validation stays 10-4096 |
+| `NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL` | `1m` | How often the disk usage of running PostgreSQL clusters is checked |
 | `NEBIUS_MOCKER_MSP_MLFLOW_IMAGE` | `ghcr.io/mlflow/mlflow:v2.22.0` | Official MLflow image the tracking servers are built from |
 | `NEBIUS_MOCKER_MSP_MLFLOW_VERSION` | `2.22.0` | `status.mlflow_version` (must match the image) |
 | `NEBIUS_MOCKER_MSP_MLFLOW_SIZES` | `medium=8vcpu-32gb` | `size=<n>vcpu-<m>gb,…`, smallest (the default) first |

@@ -68,6 +68,15 @@ type MSPConfig struct {
 	// PostgresMaxHosts caps spec.config.template.hosts.count
 	// (NEBIUS_MOCKER_MSP_POSTGRESQL_MAX_HOSTS).
 	PostgresMaxHosts int
+	// PostgresDiskUnit is how many bytes one GiB of
+	// spec.config.template.disk.size_gibibytes allows the docker backend to
+	// hold, for enforcement only (NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_UNIT,
+	// "8Mi" makes a 10 GiB disk hold 80 MiB). Validation of the size stays
+	// 10-4096.
+	PostgresDiskUnit int64
+	// PostgresDiskCheckInterval is how often the disk usage of running
+	// clusters is checked (NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL).
+	PostgresDiskCheckInterval time.Duration
 
 	// MLflowImage is the official MLflow image the tracking server is built
 	// from; the docker backend adds the S3 and auth extras on top of it
@@ -105,19 +114,21 @@ func DefaultPostgresPresets() map[string][]string {
 
 func defaultMSP() MSPConfig {
 	return MSPConfig{
-		PostgreSQLBackend: MSPBackendMock,
-		MLflowBackend:     MSPBackendMock,
-		BindIP:            "127.0.0.1",
-		EndpointHost:      "127.0.0.1",
-		TLSDir:            defaultCADir(),
-		StartTimeout:      3 * time.Minute,
-		PostgresImages:    DefaultPostgresImages(),
-		PgBouncerImage:    "edoburu/pgbouncer:v1.25.2-p0",
-		PostgresPresets:   DefaultPostgresPresets(),
-		PostgresDiskTypes: []string{"network-ssd"},
-		PostgresMaxHosts:  3,
-		MLflowImage:       "ghcr.io/mlflow/mlflow:v2.22.0",
-		MLflowVersion:     "2.22.0",
+		PostgreSQLBackend:         MSPBackendMock,
+		MLflowBackend:             MSPBackendMock,
+		BindIP:                    "127.0.0.1",
+		EndpointHost:              "127.0.0.1",
+		TLSDir:                    defaultCADir(),
+		StartTimeout:              3 * time.Minute,
+		PostgresImages:            DefaultPostgresImages(),
+		PgBouncerImage:            "edoburu/pgbouncer:v1.25.2-p0",
+		PostgresPresets:           DefaultPostgresPresets(),
+		PostgresDiskTypes:         []string{"network-ssd"},
+		PostgresMaxHosts:          3,
+		PostgresDiskUnit:          1 << 30,
+		PostgresDiskCheckInterval: time.Minute,
+		MLflowImage:               "ghcr.io/mlflow/mlflow:v2.22.0",
+		MLflowVersion:             "2.22.0",
 		// docs.nebius.com/mlflow: "medium" (8 vCPUs, 32 GiB RAM) is the only size.
 		MLflowSizes:     map[string]string{"medium": "8vcpu-32gb"},
 		MLflowSizeOrder: []string{"medium"},
@@ -144,6 +155,8 @@ func mspParsers(m *MSPConfig) []struct {
 		{"MSP_POSTGRESQL_PRESETS", func(s string) error { return parsePostgresPresets(s, m.PostgresPresets) }},
 		{"MSP_POSTGRESQL_DISK_TYPES", func(s string) error { m.PostgresDiskTypes = splitList(s); return nil }},
 		{"MSP_POSTGRESQL_MAX_HOSTS", func(s string) error { return parsePositiveInt(s, &m.PostgresMaxHosts) }},
+		{"MSP_POSTGRESQL_DISK_UNIT", func(s string) error { return parseBytes(s, &m.PostgresDiskUnit) }},
+		{"MSP_POSTGRESQL_DISK_CHECK_INTERVAL", func(s string) error { return parsePositive(s, &m.PostgresDiskCheckInterval) }},
 		{"MSP_MLFLOW_IMAGE", func(s string) error { m.MLflowImage = s; return nil }},
 		{"MSP_MLFLOW_VERSION", func(s string) error { m.MLflowVersion = s; return nil }},
 		{"MSP_MLFLOW_SIZES", func(s string) error { return parseMLflowSizes(s, m) }},

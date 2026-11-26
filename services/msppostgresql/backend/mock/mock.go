@@ -86,5 +86,11 @@ func (b *Backend) CreateBackup(_ context.Context, clusterID, _ string) (domain.B
 // DeleteBackup implements domain.Backend: there is no data to remove.
 func (*Backend) DeleteBackup(context.Context, string, string, time.Time) error { return nil }
 
+// CheckDisk implements domain.Backend: no data is stored, so the disk never
+// fills.
+func (*Backend) CheckDisk(_ context.Context, _ string, limitBytes int64) (domain.DiskUsage, error) {
+	return domain.DiskUsage{LimitBytes: limitBytes}, nil
+}
+
 // Close implements domain.Backend.
 func (*Backend) Close(context.Context) error { return nil }

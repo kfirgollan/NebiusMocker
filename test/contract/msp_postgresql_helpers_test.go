@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	pgsvc "github.com/nebius/gosdk/services/nebius/msp/postgresql/v1alpha1"
 
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
+	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/objstore/memory"
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
@@ -46,7 +48,12 @@ func startPG(t *testing.T, opts ...testkit.Option) *pgEnv {
 func startPGWithClock(t *testing.T, opts ...testkit.Option) *pgEnv {
 	t.Helper()
 	clk := clock.NewManual(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
-	opts = append([]testkit.Option{testkit.WithObjStore(memory.New(clock.Real{})), testkit.WithClock(clk)}, opts...)
+	opts = append([]testkit.Option{
+		testkit.WithObjStore(memory.New(clock.Real{})), testkit.WithClock(clk),
+		// The helpers wait for the sweeper by its wake-up time (a minute out):
+		// keep the disk loop's off that instant.
+		testkit.WithConfig(func(c *config.Config) { c.MSP.PostgresDiskCheckInterval = 6 * time.Hour }),
+	}, opts...)
 	return newPGEnv(t, clk, opts)
 }
 
@@ -113,20 +120,24 @@ func (e *pgEnv) listBackups(t *testing.T, clusterID string) []*pgpb.Backup {
 // onDemandBackup takes an on-demand backup and returns it.
 func (e *pgEnv) onDemandBackup(t *testing.T, clusterID string) *pgpb.Backup {
 	t.Helper()
-	seen := map[string]bool{}
-	for _, b := range e.listBackups(t, clusterID) {
-		seen[b.GetId()] = true
-	}
-	if err := alphaOK(t.Context())(e.backups.Create(t.Context(), &pgpb.CreateBackupRequest{ClusterId: clusterID})); err != nil {
+	op, err := e.backups.Create(t.Context(), &pgpb.CreateBackupRequest{ClusterId: clusterID})
+	if err != nil {
 		t.Fatalf("create backup: %v", err)
 	}
-	for _, b := range e.listBackups(t, clusterID) {
-		if !seen[b.GetId()] {
-			return b
-		}
+	// common.v1alpha1.Operation.resource_id is "the ID of the resource that
+	// this operation creates": the new backup, not its cluster.
+	backupID := op.ResourceID()
+	if !strings.HasPrefix(backupID, "postgresqlbackup-") {
+		t.Fatalf("backup Create operation resource_id = %q, want the new backup's ID", backupID)
 	}
-	t.Fatal("no new backup after Create")
-	return nil
+	if _, err := op.Wait(t.Context()); err != nil {
+		t.Fatalf("wait for backup %s: %v", backupID, err)
+	}
+	b, err := e.backups.Get(t.Context(), &pgpb.GetBackupRequest{ClusterId: clusterID, BackupId: backupID})
+	if err != nil {
+		t.Fatalf("get backup %s named by the operation: %v", backupID, err)
+	}
+	return b
 }
 
 // advance moves the manual clock and waits until the module's sweeper has

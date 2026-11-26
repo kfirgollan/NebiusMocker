@@ -34,7 +34,7 @@ func (b *Backend) EnsureCluster(ctx context.Context, c domain.BackendCluster) (d
 			return domain.Endpoints{}, internal("pull image "+ref, err)
 		}
 	}
-	if _, err := b.docker.EnsureNetwork(ctx, networkName(c.ID), b.clusterLabels(c.ID)); err != nil {
+	if _, err := b.docker.EnsureNetwork(ctx, b.networkName(c.ID), b.clusterLabels(c.ID)); err != nil {
 		return domain.Endpoints{}, internal("create network", err)
 	}
 	if err := b.docker.EnsureVolume(ctx, b.backups, b.baseLabels()); err != nil {
@@ -81,7 +81,7 @@ func (p *certs) get() ([]dockerhost.File, error) {
 	if p.files != nil {
 		return p.files, nil
 	}
-	hosts := []string{p.b.cfg.EndpointHost, "localhost", "127.0.0.1", "host.docker.internal", poolerName(p.clusterID)}
+	hosts := []string{p.b.cfg.EndpointHost, "localhost", "127.0.0.1", "host.docker.internal", p.b.poolerName(p.clusterID)}
 	for n := range max(p.b.cfg.PostgresMaxHosts, 1) {
 		hosts = append(hosts, hostAlias(n))
 	}
@@ -144,12 +144,12 @@ func (b *Backend) newHostSpec(ctx context.Context, c domain.BackendCluster, n in
 	}
 	return hostSpec{
 		spec: dockerhost.ContainerSpec{
-			Name: hostName(c.ID, n), Image: image, Labels: labels, Env: env,
+			Name: b.hostName(c.ID, n), Image: image, Labels: labels, Env: env,
 			Entrypoint: []string{"sh", "-c", script, "nmock-pg"}, Cmd: flags,
-			Network: networkName(c.ID), Aliases: []string{hostAlias(n)},
+			Network: b.networkName(c.ID), Aliases: []string{hostAlias(n)},
 			Ports:  []dockerhost.PortBinding{{ContainerPort: pgPort, HostIP: b.cfg.BindIP}},
 			Memory: c.MemoryBytes, NanoCPUs: nano,
-			Binds: []string{volumeName(c.ID, n) + ":" + pgData, b.backups + ":" + backupsDir},
+			Binds: []string{b.volumeName(c.ID, n) + ":" + pgData, b.backups + ":" + backupsDir},
 		},
 		hash: hash(map[string]any{
 			"image": image, "flags": flags, "script": script, "memory": c.MemoryBytes, "nano": nano, "endpoint": b.cfg.EndpointHost,
@@ -183,7 +183,7 @@ func (b *Backend) ensureHost(ctx context.Context, c domain.BackendCluster, n int
 			return err
 		}
 		spec.Files = files
-		return b.docker.EnsureVolume(ctx, volumeName(c.ID, n), spec.Labels)
+		return b.docker.EnsureVolume(ctx, b.volumeName(c.ID, n), spec.Labels)
 	})
 	if err != nil {
 		return "", err
@@ -286,7 +286,7 @@ func (b *Backend) removeHostsFrom(ctx context.Context, clusterID string, first i
 		if err := b.removeContainer(ctx, c); err != nil {
 			return err
 		}
-		if err := b.docker.RemoveVolume(ctx, volumeName(clusterID, n)); err != nil {
+		if err := b.docker.RemoveVolume(ctx, b.volumeName(clusterID, n)); err != nil {
 			return internal("remove volume of "+c.Name, err)
 		}
 	}
@@ -371,9 +371,9 @@ func (b *Backend) endpoints(ctx context.Context, c domain.BackendCluster, hosts 
 	if err != nil {
 		return domain.Endpoints{}, err
 	}
-	target := hostName(c.ID, 0)
+	target := b.hostName(c.ID, 0)
 	if hosts > 1 {
-		target = hostName(c.ID, 1)
+		target = b.hostName(c.ID, 1)
 	}
 	ro, err := b.hostPort(ctx, target)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		BindIP: "127.0.0.1", EndpointHost: "host.docker.internal", TLSDir: dir, StartTimeout: 3 * time.Minute,
 		PostgresImages: config.DefaultPostgresImages(), PgBouncerImage: "edoburu/pgbouncer:v1.25.2-p0", PostgresMaxHosts: 3,
 	}
-	owner := fmt.Sprintf("e2e-msp-%d", clk.Now().UnixNano())
+	owner := liveOwner(t)
 	b, err := mspdocker.New(ctx, mspdocker.Options{
 		Config: cfg, EdgeListen: owner, Docker: docker, Clock: clk, CA: ca,
 		Log: slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelInfo})),
@@ -62,7 +63,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	e := &e2eEnv{t: t, clk: clk, docker: docker, b: b, owner: owner}
+	e := &e2eEnv{t: t, clk: clk, docker: docker, b: b, owner: b.Owner()}
 	t.Cleanup(func() {
 		cctx := context.WithoutCancel(ctx)
 		if err := b.Close(cctx); err != nil {
@@ -115,7 +116,7 @@ func (e *e2eEnv) sql(endpoint, password, query string) (string, error) {
 	host, port, _ := strings.Cut(endpoint, ":")
 	conn := fmt.Sprintf("host=%s port=%s sslmode=verify-full sslrootcert=/ca.pem user=%s dbname=%s connect_timeout=10", host, port, e2eUser, e2eDB)
 	res, err := e.docker.Exec(e.t.Context(), e.client, dockerhost.ExecSpec{
-		Cmd: []string{"psql", "-X", "-tA", "-v", "ON_ERROR_STOP=1", conn, "-c", query}, Env: []string{"PGPASSWORD=" + password},
+		Cmd: []string{"psql", "-X", "-tA", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", conn, "-c", query}, Env: []string{"PGPASSWORD=" + password},
 	})
 	if err != nil {
 		e.t.Fatalf("exec psql: %v", err)
@@ -307,4 +308,78 @@ func TestE2EPostgresLifecycle(t *testing.T) {
 	if len(cs) != 0 {
 		t.Errorf("containers left after deleting the clusters: %v", cs)
 	}
+}
+
+// TestE2EDiskFull: a cluster over its disk limit refuses writes (SQLSTATE
+// 25006) through the pooler and directly, keeps serving reads, and accepts
+// writes again once the limit is raised.
+func TestE2EDiskFull(t *testing.T) {
+	e := newE2EEnv(t)
+	ctx := t.Context()
+	c := domain.BackendCluster{
+		ID: "postgresql-e2ed", ProjectID: "project-x", Name: "d", Version: "16", Hosts: 1,
+		CPUs: 2, MemoryBytes: 2 << 30, DiskGiB: 10,
+		Pooler:   domain.Pooler{Mode: "transaction", MaxPoolSize: 10},
+		UserName: e2eUser, DBName: e2eDB, Password: "pw-disk",
+	}
+	ep := e.ensure(c)
+	c.Password = ""
+	rw, direct := ep.PrivateReadWrite, ep.PrivateReadOnly // one host: the read-only endpoint is the primary itself
+	e.mustSQL(rw, "pw-disk", "create table t (id int, filler text)")
+
+	base, err := e.b.CheckDisk(ctx, c.ID, 1<<40)
+	if err != nil || base.Full || base.UsedBytes <= 0 {
+		t.Fatalf("CheckDisk with a huge limit = %+v, %v", base, err)
+	}
+	limit := base.UsedBytes + 30<<20
+	if u, err := e.b.CheckDisk(ctx, c.ID, limit); err != nil || u.Full {
+		t.Fatalf("CheckDisk below the limit = %+v, %v", u, err)
+	}
+	e.mustSQL(rw, "pw-disk", "insert into t select g, repeat('x', 200) from generate_series(1, 400000) g")
+
+	u, err := e.b.CheckDisk(ctx, c.ID, limit)
+	if err != nil || !u.Full || u.UsedBytes < limit {
+		t.Fatalf("CheckDisk over the limit = %+v, %v; want full", u, err)
+	}
+	for name, endpoint := range map[string]string{"through the pooler": rw, "directly": direct} {
+		_, err := e.sql(endpoint, "pw-disk", "insert into t values (-1, 'refused')")
+		if err == nil || !strings.Contains(err.Error(), "25006") || !strings.Contains(err.Error(), "read-only transaction") {
+			t.Errorf("write %s on a full disk: err = %v, want SQLSTATE 25006 read-only transaction", name, err)
+		}
+		if got := e.mustSQL(endpoint, "pw-disk", "select count(*) from t"); got != "400000" {
+			t.Errorf("read %s on a full disk = %q, want 400000", name, got)
+		}
+	}
+	// Checking again changes nothing, and the control plane's own statements
+	// (a password change) still work on a full cluster.
+	if u2, err := e.b.CheckDisk(ctx, c.ID, limit); err != nil || !u2.Full {
+		t.Errorf("second CheckDisk = %+v, %v", u2, err)
+	}
+	c.Password = "pw-disk-2"
+	e.ensure(c)
+	c.Password = ""
+	if _, err := e.sql(rw, "pw-disk-2", "insert into t values (-2, 'still refused')"); err == nil {
+		t.Error("a write succeeded after EnsureCluster on a full disk")
+	}
+
+	// A bigger disk: writes work again.
+	if u, err := e.b.CheckDisk(ctx, c.ID, limit*20); err != nil || u.Full {
+		t.Fatalf("CheckDisk with a bigger limit = %+v, %v", u, err)
+	}
+	for _, endpoint := range []string{rw, direct} {
+		e.mustSQL(endpoint, "pw-disk-2", "insert into t values (1000000, 'accepted')")
+	}
+}
+
+// liveOwner plays the mocker's edge for the owner label: a listener that
+// stays open for the test, so reapers (deploy/docker/reap.sh) see the owner
+// alive and leave a concurrently running test's objects alone.
+func liveOwner(t *testing.T) string {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l.Addr().String()
 }

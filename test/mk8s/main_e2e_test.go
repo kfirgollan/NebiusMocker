@@ -56,6 +56,7 @@ func startEnv(t *testing.T) *env {
 	names := append([]string{"*.api.nebius.cloud", "*.iam.api.nebius.cloud", "localhost"}, apiHosts...)
 	ca := testca.New(t, names, nil)
 	port := freePort(t)
+	d.owner = fmt.Sprintf("https://host.docker.internal:%d", port) // the k3s backend's default webhook URL
 	inst := testkit.StartT(t, []mocker.Module{iam.New(), vpc.New(), compute.New(), mk8s.New()},
 		testkit.WithAuthnRequired(), testkit.WithAuthz(authz.ModeEnforce), testkit.WithLogs(),
 		testkit.WithConfig(func(c *config.Config) {

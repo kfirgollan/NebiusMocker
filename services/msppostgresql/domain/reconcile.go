@@ -28,7 +28,7 @@ func (s *Service) ensureCluster(ctx context.Context, id string, r run) error {
 	if err != nil {
 		return s.fail(ctx, c, err)
 	}
-	setStatus(c, mspv1alpha1pb.ClusterStatus_PHASE_RUNNING, mspv1alpha1pb.ClusterStatus_STATE_FINISHED)
+	setStatus(c, mspv1alpha1pb.ClusterStatus_PHASE_RUNNING, s.diskState(ctx, c))
 	c.Status.ConnectionEndpoints = &pgpb.Endpoints{
 		PrivateReadWrite: ep.PrivateReadWrite, PrivateReadOnly: ep.PrivateReadOnly,
 		PublicReadWrite: ep.PublicReadWrite, PublicReadOnly: ep.PublicReadOnly,

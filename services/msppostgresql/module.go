@@ -30,13 +30,14 @@ const sweepInterval = time.Minute
 
 // Module is the Managed PostgreSQL service module.
 type Module struct {
-	mu      sync.Mutex
-	backend domain.Backend
-	svc     *domain.Service
-	clk     clock.Clock
-	log     *slog.Logger
-	stop    context.CancelFunc
-	wg      sync.WaitGroup
+	mu           sync.Mutex
+	backend      domain.Backend
+	svc          *domain.Service
+	clk          clock.Clock
+	log          *slog.Logger
+	stop         context.CancelFunc
+	diskInterval time.Duration
+	wg           sync.WaitGroup
 }
 
 var (
@@ -69,6 +70,10 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	}
 	m.mu.Lock()
 	m.backend, m.svc, m.clk, m.log = backend, svc, deps.Clock, deps.Log
+	m.diskInterval = deps.Config.MSP.PostgresDiskCheckInterval
+	if m.diskInterval <= 0 {
+		m.diskInterval = time.Minute
+	}
 	m.mu.Unlock()
 	deps.Authz.RegisterKind(domain.KindCluster, func(ctx context.Context, id string) (string, error) {
 		c, err := clusters.Get(ctx, id)
@@ -98,6 +103,7 @@ func (m *Module) Start(ctx context.Context) error {
 	defer m.mu.Unlock()
 	ctx, m.stop = context.WithCancel(ctx)
 	m.wg.Go(func() { m.sweep(ctx) })
+	m.wg.Go(func() { m.checkDisks(ctx) })
 	return nil
 }
 
@@ -114,6 +120,21 @@ func (m *Module) Stop(ctx context.Context) error {
 		return nil
 	}
 	return b.Close(ctx)
+}
+
+// checkDisks measures the disk of the running clusters every
+// NEBIUS_MOCKER_MSP_POSTGRESQL_DISK_CHECK_INTERVAL until ctx ends.
+func (m *Module) checkDisks(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.clk.After(m.diskInterval):
+		}
+		if err := m.svc.CheckDisks(ctx); err != nil && ctx.Err() == nil {
+			m.log.WarnContext(ctx, "postgresql disk check", "error", err)
+		}
+	}
 }
 
 // sweep applies the backup schedule and retention until ctx ends.

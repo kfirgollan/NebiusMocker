@@ -71,8 +71,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
-	"strings"
+	"net"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -160,6 +159,7 @@ type Options struct {
 type Backend struct {
 	cfg     config.MSPConfig
 	owner   string
+	tag     string // dockerhost.OwnerTag(owner), in every object name
 	docker  Docker
 	clk     clock.Clock
 	log     *slog.Logger
@@ -186,9 +186,16 @@ func New(ctx context.Context, o Options) (*Backend, error) {
 	}
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret) // crypto/rand.Read never fails (Go 1.24+)
+	owner := o.EdgeListen
+	if _, port, err := net.SplitHostPort(owner); err != nil || port == "" || port == "0" {
+		// Without a port of its own the edge address does not tell mockers
+		// apart: use a random owner, so two never share objects.
+		owner = "random-" + hex.EncodeToString(secret[:8])
+		o.Log.InfoContext(ctx, "msp postgresql: the edge address has no port; using a random owner", "owner", owner)
+	}
 	b := &Backend{
-		cfg: o.Config, owner: o.EdgeListen, docker: o.Docker, clk: o.Clock, log: o.Log, ca: o.CA,
-		poll: o.pollInterval, secret: secret, backups: backupsVolumeName(o.EdgeListen),
+		cfg: o.Config, owner: owner, tag: dockerhost.OwnerTag(owner), docker: o.Docker, clk: o.Clock, log: o.Log, ca: o.CA,
+		poll: o.pollInterval, secret: secret, backups: "nmock-pg-backups-" + dockerhost.OwnerTag(owner),
 	}
 	if b.poll <= 0 {
 		b.poll = 500 * time.Millisecond
@@ -293,13 +300,6 @@ func (b *Backend) mac(what string) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-var nonName = regexp.MustCompile(`[^a-z0-9]+`)
-
-// backupsVolumeName names the mocker's backups volume after its edge address.
-func backupsVolumeName(owner string) string {
-	s := strings.Trim(nonName.ReplaceAllString(strings.ToLower(owner), "-"), "-")
-	if s == "" {
-		s = "default"
-	}
-	return "nmock-pg-backups-" + s
-}
+// Owner is what this backend's Docker objects carry in nebius-mocker.owner
+// (the edge address, or a random one when it has no port).
+func (b *Backend) Owner() string { return b.owner }

@@ -90,7 +90,7 @@ func (h *harness) ensure(c domain.BackendCluster) domain.Endpoints {
 
 func (h *harness) server() dockerhost.Container {
 	h.t.Helper()
-	c, err := h.f.InspectContainer(h.t.Context(), "nmock-mlflow-ml1")
+	c, err := h.f.InspectContainer(h.t.Context(), h.b.containerName("ml1"))
 	if err != nil {
 		h.t.Fatalf("server container: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestEnsureClusterBuildsTheImageOnce(t *testing.T) {
 	}
 	h.f.FailNext("BuildImage", errors.New("must not rebuild"))
 	h.ensure(testCluster("ml2"))
-	if got := h.spec("nmock-mlflow-ml2").Image; got != tag {
+	if got := h.spec(h.b.containerName("ml2")).Image; got != tag {
 		t.Errorf("image = %q", got)
 	}
 }
@@ -179,12 +179,12 @@ func TestEnsureClusterCreatesTheServer(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	ep := h.ensure(testCluster("ml1"))
-	s := h.spec("nmock-mlflow-ml1")
+	s := h.spec(h.b.containerName("ml1"))
 	c := h.server()
 	if !c.Running || c.Labels[LabelBackend] != "msp-mlflow" || c.Labels[LabelOwner] != testOwner || c.Labels[LabelCluster] != "ml1" || c.Labels[labelSpec] == "" {
 		t.Errorf("container = running %v labels %v", c.Running, c.Labels)
 	}
-	if !slices.Equal(h.f.Volumes(), []string{"nmock-mlflow-ml1"}) || !slices.Equal(s.Binds, []string{"nmock-mlflow-ml1:/mlflow"}) {
+	if !slices.Equal(h.f.Volumes(), []string{h.b.containerName("ml1")}) || !slices.Equal(s.Binds, []string{h.b.volumeName("ml1") + ":/mlflow"}) {
 		t.Errorf("volumes %v binds %v", h.f.Volumes(), s.Binds)
 	}
 	if s.Memory != 32<<30 || s.NanoCPUs != 8_000_000_000 {
@@ -267,7 +267,7 @@ func TestStopStartKeepsContainerAndPort(t *testing.T) {
 	if h.server().ID == id {
 		t.Error("the container was not recreated")
 	}
-	if !strings.Contains(string(fileContent(t, h.spec("nmock-mlflow-ml1"), authPath).Content), "admin_password = pw-1") {
+	if !strings.Contains(string(fileContent(t, h.spec(h.b.containerName("ml1")), authPath).Content), "admin_password = pw-1") {
 		t.Error("the recreated server lost the remembered admin password")
 	}
 }
@@ -282,7 +282,7 @@ func TestDeleteRemovesServerAndVolume(t *testing.T) {
 			t.Fatalf("DeleteCluster = %v", err)
 		}
 	}
-	if len(h.f.Containers()) != 1 || !slices.Equal(h.f.Volumes(), []string{"nmock-mlflow-ml2"}) {
+	if len(h.f.Containers()) != 1 || !slices.Equal(h.f.Volumes(), []string{h.b.containerName("ml2")}) {
 		t.Errorf("containers %v volumes %v", h.f.Containers(), h.f.Volumes())
 	}
 	if err := h.b.Close(t.Context()); err != nil {

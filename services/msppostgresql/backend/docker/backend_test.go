@@ -22,6 +22,12 @@ func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
 
 const testOwner = ":4566"
 
+// tag is what every Docker object name of the test backend carries.
+var tag = dockerhost.OwnerTag(testOwner)
+
+// n is a Docker object name of cluster-relative name s.
+func n(s string) string { return "nmock-pg-" + tag + "-" + s }
+
 // harness is a backend on a fake Docker whose PostgreSQL always answers.
 type harness struct {
 	t *testing.T
@@ -160,14 +166,14 @@ func TestEnsureClusterCreatesTheCluster(t *testing.T) {
 	h := newHarness(t)
 	ep := h.ensure(testCluster("pg1"))
 
-	wantNames := []string{"nmock-pg-pg1-0", "nmock-pg-pg1-1", "nmock-pg-pg1-pooler"}
+	wantNames := []string{n("pg1-0"), n("pg1-1"), n("pg1-pooler")}
 	if got := h.names(); !slices.Equal(got, wantNames) {
 		t.Fatalf("containers = %v, want %v", got, wantNames)
 	}
-	if got := h.f.Volumes(); !slices.Equal(got, []string{"nmock-pg-backups-4566", "nmock-pg-pg1-0", "nmock-pg-pg1-1"}) {
+	if got := h.f.Volumes(); !slices.Equal(got, slices.Sorted(slices.Values([]string{"nmock-pg-backups-" + tag, n("pg1-0"), n("pg1-1")}))) {
 		t.Errorf("volumes = %v", got)
 	}
-	if nets := h.f.Networks(); len(nets) != 1 || nets[0].Name != "nmock-pg-pg1" {
+	if nets := h.f.Networks(); len(nets) != 1 || nets[0].Name != n("pg1") {
 		t.Errorf("networks = %v", nets)
 	}
 	for _, name := range wantNames {
@@ -180,14 +186,14 @@ func TestEnsureClusterCreatesTheCluster(t *testing.T) {
 		}
 	}
 
-	primary := h.spec("nmock-pg-pg1-0")
+	primary := h.spec(n("pg1-0"))
 	if primary.Image != "postgres:16.11-alpine" || primary.Memory != 8<<30 || primary.NanoCPUs != 2_000_000_000 {
 		t.Errorf("primary image/limits = %q %d %d", primary.Image, primary.Memory, primary.NanoCPUs)
 	}
-	if !slices.Equal(primary.Aliases, []string{"pg-0"}) || primary.Network != "nmock-pg-pg1" {
+	if !slices.Equal(primary.Aliases, []string{"pg-0"}) || primary.Network != n("pg1") {
 		t.Errorf("primary network = %q aliases %v", primary.Network, primary.Aliases)
 	}
-	wantBinds := []string{"nmock-pg-pg1-0:/var/lib/postgresql/data", "nmock-pg-backups-4566:/backups"}
+	wantBinds := []string{n("pg1-0") + ":/var/lib/postgresql/data", "nmock-pg-backups-" + tag + ":/backups"}
 	if !slices.Equal(primary.Binds, wantBinds) {
 		t.Errorf("primary binds = %v, want %v", primary.Binds, wantBinds)
 	}
@@ -208,7 +214,7 @@ func TestEnsureClusterCreatesTheCluster(t *testing.T) {
 		t.Errorf("server cert = %q", crt.Content)
 	}
 
-	rw, ro := port(t, h.container("nmock-pg-pg1-pooler")), port(t, h.container("nmock-pg-pg1-1"))
+	rw, ro := port(t, h.container(n("pg1-pooler"))), port(t, h.container(n("pg1-1")))
 	if ep.PrivateReadWrite != "pg.example.test:"+rw || ep.PrivateReadOnly != "pg.example.test:"+ro {
 		t.Errorf("endpoints = %+v, want rw port %s ro port %s (first replica)", ep, rw, ro)
 	}
@@ -241,7 +247,7 @@ func TestParametersRenderIntoFlags(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.ensure(testCluster("pg1"))
-	for _, name := range []string{"nmock-pg-pg1-0", "nmock-pg-pg1-1"} {
+	for _, name := range []string{n("pg1-0"), n("pg1-1")} {
 		cmd := h.spec(name).Cmd
 		joined := strings.Join(cmd, " ")
 		for _, want := range []string{
@@ -275,7 +281,7 @@ func TestReplicaSeedsFromThePrimary(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.ensure(testCluster("pg1"))
-	replica, primary := h.spec("nmock-pg-pg1-1"), h.spec("nmock-pg-pg1-0")
+	replica, primary := h.spec(n("pg1-1")), h.spec(n("pg1-0"))
 	script := replica.Entrypoint[2]
 	if !strings.Contains(script, "pg_basebackup -h pg-0 -U nmock_replicator") || !strings.Contains(script, "-R -X stream") {
 		t.Errorf("replica script = %s", script)
@@ -307,8 +313,8 @@ func TestPoolerConfiguration(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.ensure(testCluster("pg1"))
-	s := h.spec("nmock-pg-pg1-pooler")
-	if s.Image != "edoburu/pgbouncer:v1.25.2-p0" || s.Network != "nmock-pg-pg1" {
+	s := h.spec(n("pg1-pooler"))
+	if s.Image != "edoburu/pgbouncer:v1.25.2-p0" || s.Network != n("pg1") {
 		t.Errorf("pooler = %q on %q", s.Image, s.Network)
 	}
 	ini := string(fileOf(t, s, poolerINIPath).Content)
@@ -364,7 +370,7 @@ func TestEnsureIsIdempotentAndRecreatesOnSpecChange(t *testing.T) {
 
 	c.Parameters["statement_timeout"] = "1000ms"
 	h.ensure(c)
-	for _, n := range []string{"nmock-pg-pg1-0", "nmock-pg-pg1-1"} {
+	for _, n := range []string{n("pg1-0"), n("pg1-1")} {
 		if h.container(n).ID == ids[n] {
 			t.Errorf("%s was not recreated after a parameter change", n)
 		}
@@ -372,23 +378,23 @@ func TestEnsureIsIdempotentAndRecreatesOnSpecChange(t *testing.T) {
 			t.Errorf("%s: new flags missing", n)
 		}
 	}
-	if h.container("nmock-pg-pg1-pooler").ID != ids["nmock-pg-pg1-pooler"] {
+	if h.container(n("pg1-pooler")).ID != ids[n("pg1-pooler")] {
 		t.Error("the pooler was recreated by a PostgreSQL parameter change")
 	}
-	if got := h.f.Volumes(); !slices.Contains(got, "nmock-pg-pg1-0") || !slices.Contains(got, "nmock-pg-pg1-1") {
+	if got := h.f.Volumes(); !slices.Contains(got, n("pg1-0")) || !slices.Contains(got, n("pg1-1")) {
 		t.Errorf("data volumes were lost: %v", got)
 	}
 
 	c.MemoryBytes = 16 << 30
 	h.ensure(c)
-	if h.container("nmock-pg-pg1-0").ID == ids["nmock-pg-pg1-0"] || h.spec("nmock-pg-pg1-0").Memory != 16<<30 {
+	if h.container(n("pg1-0")).ID == ids[n("pg1-0")] || h.spec(n("pg1-0")).Memory != 16<<30 {
 		t.Error("a resources change did not recreate the host")
 	}
 
-	poolerID := h.container("nmock-pg-pg1-pooler").ID
+	poolerID := h.container(n("pg1-pooler")).ID
 	c.Pooler.MaxPoolSize = 50
 	h.ensure(c)
-	if h.container("nmock-pg-pg1-pooler").ID == poolerID {
+	if h.container(n("pg1-pooler")).ID == poolerID {
 		t.Error("the pooler was not recreated after its configuration changed")
 	}
 }
@@ -440,7 +446,7 @@ func TestEndpointsStayStable(t *testing.T) {
 	if got := h.ensure(c); got != first {
 		t.Errorf("endpoints after recreation = %+v, want %+v", got, first)
 	}
-	if h.container("nmock-pg-pg1-0").Labels[labelPort] == "" {
+	if h.container(n("pg1-0")).Labels[labelPort] == "" {
 		t.Error("the pinned port is not recorded in a label")
 	}
 }
@@ -456,13 +462,13 @@ func TestScaleDownRemovesReplicas(t *testing.T) {
 	}
 	c.Hosts = 1
 	ep := h.ensure(c)
-	if want := []string{"nmock-pg-pg1-0", "nmock-pg-pg1-pooler"}; !slices.Equal(h.names(), want) {
+	if want := []string{n("pg1-0"), n("pg1-pooler")}; !slices.Equal(h.names(), want) {
 		t.Errorf("containers = %v, want %v", h.names(), want)
 	}
-	if vols := h.f.Volumes(); slices.Contains(vols, "nmock-pg-pg1-1") || slices.Contains(vols, "nmock-pg-pg1-2") || !slices.Contains(vols, "nmock-pg-pg1-0") {
+	if vols := h.f.Volumes(); slices.Contains(vols, n("pg1-1")) || slices.Contains(vols, n("pg1-2")) || !slices.Contains(vols, n("pg1-0")) {
 		t.Errorf("volumes = %v", vols)
 	}
-	if want := "pg.example.test:" + port(t, h.container("nmock-pg-pg1-0")); ep.PrivateReadOnly != want {
+	if want := "pg.example.test:" + port(t, h.container(n("pg1-0"))); ep.PrivateReadOnly != want {
 		t.Errorf("one host: read-only endpoint = %q, want the primary %q", ep.PrivateReadOnly, want)
 	}
 }
@@ -499,7 +505,7 @@ func TestDeleteClusterKeepsBackups(t *testing.T) {
 			t.Errorf("volume %s survived DeleteCluster", v)
 		}
 	}
-	if !slices.Contains(h.f.Volumes(), "nmock-pg-backups-4566") {
+	if !slices.Contains(h.f.Volumes(), "nmock-pg-backups-"+tag) {
 		t.Error("DeleteCluster removed the backups volume")
 	}
 	if len(h.f.Networks()) != 1 {
@@ -542,7 +548,7 @@ func TestReadinessTimeoutIsInternalWithLogs(t *testing.T) {
 func TestStartFailureCarriesTheLogs(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	h.f.SetAutoExit("nmock-pg-pg1-0", 1, "FATAL: could not open certificate file\n")
+	h.f.SetAutoExit(n("pg1-0"), 1, "FATAL: could not open certificate file\n")
 	_, err := h.b.EnsureCluster(t.Context(), testCluster("pg1"))
 	if !errs.IsKind(err, errs.KindInternal) || !strings.Contains(err.Error(), "could not open certificate file") {
 		t.Fatalf("EnsureCluster err = %v, want Internal with the log", err)
@@ -562,7 +568,7 @@ func TestCreateBackupCommand(t *testing.T) {
 	}
 	calls := h.f.Execs()
 	last := calls[len(calls)-1]
-	if last.Container != "nmock-pg-pg1-0" || last.Spec.User != "postgres" {
+	if last.Container != n("pg1-0") || last.Spec.User != "postgres" {
 		t.Errorf("backup ran in %s as %q, want the primary as postgres", last.Container, last.Spec.User)
 	}
 	args := strings.Join(last.Spec.Cmd, " ")
@@ -596,7 +602,7 @@ func TestRestoreSeedsTheVolumeBeforeStarting(t *testing.T) {
 			t.Errorf("restore script lacks %q:\n%s", want, script)
 		}
 	}
-	if !slices.Equal(helper.Binds, []string{"nmock-pg-pg2-0:/var/lib/postgresql/data", "nmock-pg-backups-4566:/backups"}) {
+	if !slices.Equal(helper.Binds, []string{n("pg2-0") + ":/var/lib/postgresql/data", "nmock-pg-backups-" + tag + ":/backups"}) {
 		t.Errorf("helper binds = %v", helper.Binds)
 	}
 	conf := string(fileOf(t, helper, "/restore.conf").Content)
@@ -616,7 +622,7 @@ func TestRestoreSeedsTheVolumeBeforeStarting(t *testing.T) {
 			t.Errorf("helper container %s was left behind", n)
 		}
 	}
-	if !strings.Contains(strings.Join(h.spec("nmock-pg-pg2-0").Cmd, " "), "cp %p /backups/pg2/wal/%f") {
+	if !strings.Contains(strings.Join(h.spec(n("pg2-0")).Cmd, " "), "cp %p /backups/pg2/wal/%f") {
 		t.Error("the restored cluster does not archive to its own WAL directory")
 	}
 	// The bootstrap role and database are ensured after the promotion.
@@ -670,7 +676,7 @@ func TestFailedRestoreLeavesNoVolume(t *testing.T) {
 	if !errs.IsKind(err, errs.KindInternal) || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("EnsureCluster err = %v, want the helper's log", err)
 	}
-	if slices.Contains(h.f.Volumes(), "nmock-pg-pg2-0") {
+	if slices.Contains(h.f.Volumes(), n("pg2-0")) {
 		t.Error("a half-restored data volume was kept")
 	}
 }
@@ -691,7 +697,7 @@ func TestDeleteBackup(t *testing.T) {
 		t.Fatalf("DeleteBackup = %v", err)
 	}
 	s := h.f.Created()[before]
-	if !strings.HasPrefix(s.Entrypoint[2], "set -- /backups/pg1/base/bk1 /backups/pg1/wal all\n") || !slices.Equal(s.Binds, []string{"nmock-pg-backups-4566:/backups"}) {
+	if !strings.HasPrefix(s.Entrypoint[2], "set -- /backups/pg1/base/bk1 /backups/pg1/wal all\n") || !slices.Equal(s.Binds, []string{"nmock-pg-backups-" + tag + ":/backups"}) {
 		t.Errorf("delete helper = %q binds %v", s.Entrypoint[2], s.Binds)
 	}
 
@@ -724,20 +730,45 @@ func TestArchiveAgeRoundsUp(t *testing.T) {
 	}
 }
 
-func TestBackupsVolumeName(t *testing.T) {
+func TestOwnerWithoutAPortIsRandom(t *testing.T) {
 	t.Parallel()
-	tests := map[string]string{
-		":4566":          "nmock-pg-backups-4566",
-		"0.0.0.0:4566":   "nmock-pg-backups-0-0-0-0-4566",
-		"Host_A:4566":    "nmock-pg-backups-host-a-4566",
-		"":               "nmock-pg-backups-default",
-		"e2e-msp-17":     "nmock-pg-backups-e2e-msp-17",
-		"[::1]:4566":     "nmock-pg-backups-1-4566",
-		"/tmp/edge.sock": "nmock-pg-backups-tmp-edge-sock",
+	ca, _ := localca.LoadOrCreate(t.TempDir(), clock.Real{})
+	owners := map[string]bool{}
+	for _, edge := range []string{"", ":0", "127.0.0.1:0", "e2e-no-port"} {
+		for range 2 {
+			b, err := New(t.Context(), Options{Config: testConfig(), EdgeListen: edge, Docker: dockerfake.New(), Clock: clock.Real{}, CA: ca, Log: slog.New(slog.DiscardHandler)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owners[b.Owner()] || !strings.HasPrefix(b.Owner(), "random-") {
+				t.Errorf("edge %q: owner %q is not a fresh random one", edge, b.Owner())
+			}
+			owners[b.Owner()] = true
+		}
 	}
-	for owner, want := range tests {
-		if got := backupsVolumeName(owner); got != want {
-			t.Errorf("backupsVolumeName(%q) = %q, want %q", owner, got, want)
+	b, _ := New(t.Context(), Options{Config: testConfig(), EdgeListen: ":4566", Docker: dockerfake.New(), Clock: clock.Real{}, CA: ca, Log: slog.New(slog.DiscardHandler)})
+	if b.Owner() != ":4566" {
+		t.Errorf("owner = %q, want the edge address", b.Owner())
+	}
+}
+
+func TestNamesCarryTheOwnerTag(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.ensure(testCluster("pg1"))
+	for _, c := range h.f.Containers() {
+		if !strings.HasPrefix(c.Name, "nmock-pg-"+tag+"-") {
+			t.Errorf("container %s lacks the owner tag %s", c.Name, tag)
+		}
+	}
+	for _, v := range h.f.Volumes() {
+		if !strings.HasPrefix(v, "nmock-pg-"+tag+"-") && v != "nmock-pg-backups-"+tag {
+			t.Errorf("volume %s lacks the owner tag %s", v, tag)
+		}
+	}
+	for _, nw := range h.f.Networks() {
+		if nw.Name != n("pg1") {
+			t.Errorf("network %s, want %s", nw.Name, n("pg1"))
 		}
 	}
 }

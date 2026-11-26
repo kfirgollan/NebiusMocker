@@ -39,7 +39,10 @@ func (b *Backend) sh(ctx context.Context, id, script string, args ...string) (st
 // psql runs sql in the "postgres" database of the container over the local
 // socket as role user and returns the unaligned, tuple-only output.
 func (b *Backend) psql(ctx context.Context, id, user, sql string) (string, error) {
-	return b.run(ctx, id, "psql", "-X", "-q", "-tA", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", "postgres", "-c", sql)
+	// A full disk makes every database read-only by default (CheckDisk); the
+	// backend's own statements must still work, so each run switches it off.
+	return b.run(ctx, id, "psql", "-X", "-q", "-tA", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", "postgres",
+		"-c", "SET default_transaction_read_only = off", "-c", sql)
 }
 
 // readiness is what waitPostgres waits for.

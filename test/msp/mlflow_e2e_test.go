@@ -226,7 +226,7 @@ func TestMLflowScenario(t *testing.T) {
 		t.Fatalf("aws s3 rm: %v", err)
 	}
 	tf.Destroy(t)
-	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-mlflow"); len(left) > 0 {
+	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-mlflow", "nebius-mocker.owner="+e.addr); len(left) > 0 {
 		t.Fatalf("containers left after the clusters were destroyed: %v", left)
 	}
 	buckets, err := storagesvc.NewBucketService(e.sdk).List(t.Context(), &storagepb.ListBucketsRequest{ParentId: e.inst.ProjectID})
