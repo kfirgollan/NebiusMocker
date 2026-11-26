@@ -56,7 +56,7 @@ func TestEnsureNodesAgentSpec(t *testing.T) {
 		}
 	}
 	wantCmd := []string{
-		"agent", "--server=https://" + h.b.serverName(testCluster) + ":6443", "--node-name=n1",
+		"agent", "--server=https://" + serverAlias(testCluster) + ":6443", "--node-name=n1",
 		"--node-label=kubernetes.io/os=linux", "--node-label=team=ml",
 		"--node-taint=dedicated=gpu:NoSchedule", "--node-taint=spot:PreferNoSchedule",
 		"--kubelet-arg=max-pods=32",

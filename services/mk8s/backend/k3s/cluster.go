@@ -167,7 +167,7 @@ func (b *Backend) startServer(ctx context.Context, c domain.BackendCluster, imag
 	if err := b.docker.EnsureVolume(ctx, b.volumeName(c.ID), b.clusterLabels(c.ID, roleServer)); err != nil {
 		return "", fmt.Errorf("volume of %s: %w", c.ID, err)
 	}
-	sans := []string{"127.0.0.1", "localhost", b.serverName(c.ID)}
+	sans := []string{"127.0.0.1", "localhost", serverAlias(c.ID)}
 	if !slices.Contains(sans, b.cfg.EndpointHost) {
 		sans = append(sans, b.cfg.EndpointHost)
 	}
@@ -192,7 +192,7 @@ func (b *Backend) startServer(ctx context.Context, c domain.BackendCluster, imag
 		Privileged: true,
 		Tmpfs:      map[string]string{"/run": "", "/var/run": ""},
 		Network:    b.networkName(c.ID),
-		Aliases:    []string{b.serverName(c.ID)},
+		Aliases:    []string{serverAlias(c.ID)},
 		Ports:      []dockerhost.PortBinding{{ContainerPort: apiPort, HostIP: b.cfg.BindIP, HostPort: port}},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		Binds:      []string{b.volumeName(c.ID) + ":" + dataDir},

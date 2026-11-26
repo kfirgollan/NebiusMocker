@@ -62,6 +62,12 @@ func (b *Backend) volumeName(clusterID string) string  { return b.prefix(cluster
 
 func (b *Backend) agentName(clusterID, node string) string { return b.prefix(clusterID) + "-" + node }
 
+// serverAlias is the server's host name inside the cluster's own network
+// (agents dial it; the API server certificate covers it). It needs no owner
+// tag, the network is the cluster's, and it must stay a valid DNS label (at
+// most 63 characters), which the tagged container name may not be.
+func serverAlias(clusterID string) string { return "nebius-mocker-" + clusterID + "-server" }
+
 func (b *Backend) clusterLabels(clusterID, role string) map[string]string {
 	return map[string]string{LabelBackend: backendName, LabelOwner: b.webhookURL, LabelCluster: clusterID, LabelRole: role}
 }

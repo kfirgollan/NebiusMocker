@@ -163,7 +163,7 @@ func (b *Backend) startAgents(ctx context.Context, g domain.BackendNodeGroup, wa
 func (b *Backend) startAgent(ctx context.Context, g domain.BackendNodeGroup, n domain.BackendNode, spec agentSpec) error {
 	cmd := []string{
 		"agent",
-		"--server=https://" + b.serverName(g.ClusterID) + ":6443",
+		"--server=https://" + serverAlias(g.ClusterID) + ":6443",
 		"--node-name=" + n.Name,
 	}
 	for _, k := range slices.Sorted(maps.Keys(spec.Labels)) {
