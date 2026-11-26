@@ -219,12 +219,16 @@ rejected with an error that names them, never silently ignored.
 
 ## How this list is kept current
 
-- Every object's RPCs come from the provider's generated code. [services/terraform-coverage.md](services/terraform-coverage.md)
-  lists them for all 116 objects.
-- `python3 -I .claude/skills/add-nebius-service/scripts/inventory.py <area>` reports, for each provider object, whether
-  the mock implements its RPCs and whether an e2e test covers it. Its detection is heuristic. For example, it counts
-  the `vpc.v1alpha1` services as implemented although they are not, so check its rows against the code.
-- The Terraform suites live in `test/terraform/<area>` and run with `make e2e`. The Docker-backed flows run with
-  `make e2e-<area>`.
-- When a new provider release comes out, an `add-nebius-service` refresh run bumps the pin and fills the gaps. Then
-  update this page.
+Run `/terraform-sweep` (`.claude/skills/terraform-sweep/`). Its script
+(`python3 -I .claude/skills/terraform-sweep/scripts/sweep.py`) does three things:
+- Reads every object and the gRPC calls it makes from the newest provider release's generated code.
+- Checks which calls the mock serves, matching the exact proto package and version, and which objects a test under
+  `test/` uses in HCL.
+- With `--write`, updates this page's statuses and summary.
+
+The skill then has you check the changes against the code and update the notes, the "missing by area" table,
+[services/terraform-coverage.md](services/terraform-coverage.md), the README and the service docs.
+
+The Terraform suites live in `test/terraform/<area>` and run with `make e2e`. The Docker-backed flows run with
+`make e2e-<area>`. A new provider release is adopted (the pin bumped and the gaps filled) through an
+`add-nebius-service` refresh. Run the sweep again afterwards.

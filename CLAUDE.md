@@ -95,6 +95,9 @@ make e2e-<area>   # Docker-backed flows (Harbor, RustFS, CLI), each brings its b
   `scripts/inventory.py <area>`, a gap report against the protos, the provider and gosdk, so rerunning it on an existing
   service only fills the delta. Done means full CRUD via Terraform *and* the Go SDK, plus unit, contract and e2e tests.
   Each service doc records a `Verified against: nebius/api@…, provider …, gosdk …` line.
+- **Terraform support status:** use the `terraform-sweep` skill (`/terraform-sweep`). It compares the mock with the
+  newest provider release and updates `docs/terraform.md`, `docs/services/terraform-coverage.md`, the README notes and
+  the service docs. Run it after a service lands or a provider release comes out.
 - **Features and parallel work:** use the `orchestrate-task` skill, e.g. `/orchestrate-task /add-nebius-service <area>`.
   - The main session is the **dispatcher**. It doesn't do the task itself.
   - Each task gets one **leader**, always `model: opus`, in its own git worktree (`isolation: worktree`), running in the
