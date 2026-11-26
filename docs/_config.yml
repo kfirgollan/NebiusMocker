@@ -1,0 +1,18 @@
+# GitHub Pages site for the docs/ folder (Settings → Pages: branch main, folder /docs).
+title: NebiusMocker (Nebius Mocker)
+description: >-
+  Nebius Mocker is a LocalStack-style local emulator of the Nebius AI Cloud API. The official Nebius
+  Terraform provider, Go SDK and nebius CLI run against it unmodified, with no Nebius account.
+theme: jekyll-theme-cayman
+url: https://kfirgollan.github.io
+baseurl: /NebiusMocker
+github:
+  repository_url: https://github.com/kfirgollan/NebiusMocker
+plugins:
+  - jekyll-relative-links   # links to .md files work on the site and on GitHub
+  - jekyll-readme-index     # each folder's README.md is its index page
+  - jekyll-seo-tag
+  - jekyll-sitemap          # /sitemap.xml for search engines
+relative_links:
+  enabled: true
+  collections: false

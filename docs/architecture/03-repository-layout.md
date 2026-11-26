@@ -193,12 +193,12 @@ services/<area>/
 Dependency direction is `api → domain ← dal`. Domain and DAL are transport-free: they return `pkg/errs` kinds, and only
 `api` maps them to gRPC status + `ServiceError` via `pkg/serviceerror`. Other adapters, such as mk8s cluster backends or
 the S3 data plane, implement domain ports and follow the DAL rules. The full rulebook is the
-[`go-architecture` skill](../../.claude/skills/go-architecture/SKILL.md).
+[`go-architecture` skill](https://github.com/kfirgollan/NebiusMocker/blob/main/.claude/skills/go-architecture/SKILL.md).
 
 ## Dependency rules
 
 These are enforced by `.golangci.yml` (depguard + forbidigo) and the `test/arch` architecture test. See the
-[`go-lint` skill](../../.claude/skills/go-lint/SKILL.md).
+[`go-lint` skill](https://github.com/kfirgollan/NebiusMocker/blob/main/.claude/skills/go-lint/SKILL.md).
 
 - Databases and storage engines (`go.etcd.io/bbolt`, `database/sql`, drivers) are imported only under `pkg/store/**`.
 - `pkg/store` is imported only by `services/*/dal`, `services/*/module.go` and the composition roots.
