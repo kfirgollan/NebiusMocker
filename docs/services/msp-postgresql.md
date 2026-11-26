@@ -127,7 +127,8 @@ With `NEBIUS_MOCKER_MSP_POSTGRESQL_BACKEND=docker` every cluster is real Postgre
   replays the archive to `recovery_time` and promotes.
 - **Lifecycle.** Stop stops the containers, Start starts them; Delete removes containers, volumes and the network.
   Everything carries `nebius-mocker.backend=msp-postgresql` and `nebius-mocker.owner=<edge address>`; a mocker removes its
-  own leftovers at startup and shutdown.
+  own leftovers at startup and shutdown. Hosts and pooler run with restart policy `on-failure`; the e2e suites still
+  fail on any crash, OOM kill or `RestartCount` above 0 (`pkg/dockerhost/crashwatch`).
 
 ### Disk size
 

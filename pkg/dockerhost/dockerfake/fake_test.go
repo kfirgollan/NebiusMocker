@@ -86,8 +86,12 @@ func TestLifecycle(t *testing.T) {
 	if logs, _ := f.Logs(ctx, id, 2); logs != "b\nc\n" {
 		t.Errorf("Logs tail 2 = %q", logs)
 	}
+	f.SetRestartCount(id, 2)
+	if c, _ := f.InspectContainer(ctx, id); c.RestartCount != 2 {
+		t.Errorf("RestartCount = %d, want 2", c.RestartCount)
+	}
 	list, _ := f.ListContainers(ctx, map[string]string{"l": "1"})
-	if len(list) != 1 || list[0].Running {
+	if len(list) != 1 || list[0].Running || list[0].RestartCount != 0 {
 		t.Errorf("ListContainers = %+v", list)
 	}
 	if err := f.RemoveContainer(ctx, id); err != nil {

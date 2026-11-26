@@ -15,6 +15,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost"
+	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost/crashwatch"
 	"github.com/kfirgollan/NebiusMocker/pkg/localca"
 	mlflowdocker "github.com/kfirgollan/NebiusMocker/services/mspmlflow/backend/docker"
 	"github.com/kfirgollan/NebiusMocker/services/mspmlflow/domain"
@@ -47,6 +48,8 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The server runs with a restart policy: a crash must fail the test.
+	crashes := crashwatch.Start(t, docker, map[string]string{mlflowdocker.LabelBackend: "msp-mlflow", mlflowdocker.LabelOwner: b.Owner()})
 	t.Cleanup(func() {
 		cctx := context.WithoutCancel(ctx)
 		if err := b.Close(cctx); err != nil {
@@ -127,6 +130,7 @@ func TestE2EMLflowLifecycle(t *testing.T) {
 	if n, err := b.ExperimentsCount(ctx, c.ID); err != nil || n != 2 {
 		t.Errorf("ExperimentsCount after restart = %d, %v; want 2 (persisted)", n, err)
 	}
+	crashes.Check(ctx, t)
 	if err := b.DeleteCluster(ctx, c.ID); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
 	}

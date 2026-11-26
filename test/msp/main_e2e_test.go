@@ -24,6 +24,8 @@ import (
 
 	"github.com/kfirgollan/NebiusMocker/pkg/authz"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
+	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost"
+	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost/crashwatch"
 	"github.com/kfirgollan/NebiusMocker/pkg/mocker"
 	"github.com/kfirgollan/NebiusMocker/pkg/testkit"
 	"github.com/kfirgollan/NebiusMocker/services/iam"
@@ -45,13 +47,15 @@ func TestMain(m *testing.M) {
 
 // env is one mocker with the docker backends and RustFS as its object store.
 type env struct {
-	d    *docker
-	inst *testkit.Instance
-	ca   *testca.CA // the edge's CA
-	addr string     // the edge, 127.0.0.1:<port>
-	port int
-	s3   string // the S3 front, 127.0.0.1:<port>
-	sdk  *gosdk.SDK
+	d *docker
+	// crashes fails the test on a crashed or restarted container of this run.
+	crashes *crashwatch.Watch
+	inst    *testkit.Instance
+	ca      *testca.CA // the edge's CA
+	addr    string     // the edge, 127.0.0.1:<port>
+	port    int
+	s3      string // the S3 front, 127.0.0.1:<port>
+	sdk     *gosdk.SDK
 	// mspCA is the file of the mocker's managed-service CA (clusters'
 	// server certificates), the one users put in ~/.postgresql/root.crt.
 	mspCA string
@@ -65,6 +69,14 @@ func startEnv(t *testing.T) *env {
 	ca := testca.New(t, names, nil)
 	port, s3Port := freePort(t), freePort(t)
 	d.owner = fmt.Sprintf("127.0.0.1:%d", port) // the edge address, as the MSP backends label their objects
+	// The managed servers run with a restart policy: a crash of any of this
+	// run's containers must fail the test. Started before the mocker, so its
+	// final check also covers the mocker's shutdown.
+	client, err := dockerhost.New(d.host)
+	if err != nil {
+		t.Fatalf("docker client: %v", err)
+	}
+	crashes := crashwatch.Start(t, client, map[string]string{"nebius-mocker.owner": d.owner})
 	mspDir := t.TempDir()
 	inst := testkit.StartT(t,
 		[]mocker.Module{iam.New(), vpc.New(), storage.New(), msppostgresql.New(), mspmlflow.New()},
@@ -89,7 +101,7 @@ func startEnv(t *testing.T) *env {
 		}))
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	return &env{
-		d: d, inst: inst, ca: ca, addr: addr, port: port, s3: fmt.Sprintf("127.0.0.1:%d", s3Port),
+		d: d, crashes: crashes, inst: inst, ca: ca, addr: addr, port: port, s3: fmt.Sprintf("127.0.0.1:%d", s3Port),
 		sdk: tlsSDK(t, addr, ca, inst.Token), mspCA: mspDir + "/ca.pem",
 	}
 }

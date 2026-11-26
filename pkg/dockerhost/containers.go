@@ -143,25 +143,31 @@ type Container struct {
 	ID, Name, Image string // Name has no leading "/"
 	Labels          map[string]string
 	Running         bool
+	OOMKilled       bool   // inspect only
 	Status          string // created|running|exited|...
 	ExitCode        int
-	Ports           map[string][]PortBinding // "6443/tcp" -> actual host bindings
-	Networks        map[string]string        // network name -> container IP (inspect only)
+	// RestartCount (inspect only) is how often the daemon restarted the
+	// container under its restart policy, after a crash; stop/start does not count.
+	RestartCount int
+	Ports        map[string][]PortBinding // "6443/tcp" -> actual host bindings
+	Networks     map[string]string        // network name -> container IP (inspect only)
 }
 
 // InspectContainer returns the container by ID or name; a missing one is ErrNotFound.
 func (c *Client) InspectContainer(ctx context.Context, idOrName string) (Container, error) {
 	var raw struct {
-		ID     string `json:"Id"`
-		Name   string `json:"Name"`
-		Config struct {
+		ID           string `json:"Id"`
+		Name         string `json:"Name"`
+		RestartCount int    `json:"RestartCount"`
+		Config       struct {
 			Image  string            `json:"Image"`
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 		State struct {
-			Running  bool   `json:"Running"`
-			Status   string `json:"Status"`
-			ExitCode int    `json:"ExitCode"`
+			Running   bool   `json:"Running"`
+			Status    string `json:"Status"`
+			ExitCode  int    `json:"ExitCode"`
+			OOMKilled bool   `json:"OOMKilled"`
 		} `json:"State"`
 		NetworkSettings struct {
 			Ports    map[string][]wireBinding `json:"Ports"`
@@ -188,6 +194,7 @@ func (c *Client) InspectContainer(ctx context.Context, idOrName string) (Contain
 		Networks: networks,
 		ID:       raw.ID, Name: strings.TrimPrefix(raw.Name, "/"), Image: raw.Config.Image, Labels: raw.Config.Labels,
 		Running: raw.State.Running, Status: raw.State.Status, ExitCode: raw.State.ExitCode, Ports: ports,
+		OOMKilled: raw.State.OOMKilled, RestartCount: raw.RestartCount,
 	}, nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // apiVersion is the path prefix every request carries; Docker 24+ serves it.
@@ -189,6 +190,7 @@ type Info struct {
 	OperatingSystem string
 	Architecture    string
 	ServerVersion   string
+	SystemTime      time.Time // the daemon's clock, which event times use
 }
 
 // Info returns daemon capacity and version.

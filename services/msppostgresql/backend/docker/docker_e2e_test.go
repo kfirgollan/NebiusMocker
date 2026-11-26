@@ -15,6 +15,7 @@ import (
 	"github.com/kfirgollan/NebiusMocker/pkg/clock"
 	"github.com/kfirgollan/NebiusMocker/pkg/config"
 	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost"
+	"github.com/kfirgollan/NebiusMocker/pkg/dockerhost/crashwatch"
 	"github.com/kfirgollan/NebiusMocker/pkg/localca"
 	mspdocker "github.com/kfirgollan/NebiusMocker/services/msppostgresql/backend/docker"
 	"github.com/kfirgollan/NebiusMocker/services/msppostgresql/domain"
@@ -64,8 +65,11 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		t.Fatalf("New: %v", err)
 	}
 	e := &e2eEnv{t: t, clk: clk, docker: docker, b: b, owner: b.Owner()}
+	// The servers run with a restart policy: a crash must fail the test.
+	crashes := crashwatch.Start(t, docker, map[string]string{mspdocker.LabelBackend: "msp-postgresql", mspdocker.LabelOwner: b.Owner()})
 	t.Cleanup(func() {
 		cctx := context.WithoutCancel(ctx)
+		crashes.Check(cctx, t) // before Close removes the containers and their RestartCount
 		if err := b.Close(cctx); err != nil {
 			t.Errorf("Close: %v", err)
 		}

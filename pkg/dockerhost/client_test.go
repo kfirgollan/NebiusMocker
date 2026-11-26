@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 
@@ -117,10 +118,16 @@ func TestInfo(t *testing.T) {
 		if r.URL.Path != "/v1.43/info" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		jsonReply(w, 200, map[string]any{"NCPU": 4, "MemTotal": 8192, "OperatingSystem": "OS", "Architecture": "aarch64", "ServerVersion": "27.0"})
+		jsonReply(w, 200, map[string]any{
+			"NCPU": 4, "MemTotal": 8192, "OperatingSystem": "OS", "Architecture": "aarch64", "ServerVersion": "27.0",
+			"SystemTime": "2026-11-26T13:08:06.123456789Z",
+		})
 	})
 	got, err := c.Info(t.Context())
-	want := dockerhost.Info{NCPU: 4, MemTotal: 8192, OperatingSystem: "OS", Architecture: "aarch64", ServerVersion: "27.0"}
+	want := dockerhost.Info{
+		NCPU: 4, MemTotal: 8192, OperatingSystem: "OS", Architecture: "aarch64", ServerVersion: "27.0",
+		SystemTime: time.Date(2026, 11, 26, 13, 8, 6, 123456789, time.UTC),
+	}
 	if err != nil || got != want {
 		t.Fatalf("Info = %+v, %v; want %+v", got, err, want)
 	}
@@ -405,9 +412,9 @@ func TestInspectAndList(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1.43/containers/k3s/json":
 			jsonReply(w, 200, map[string]any{
-				"Id": "cid", "Name": "/k3s",
+				"Id": "cid", "Name": "/k3s", "RestartCount": 2,
 				"Config": map[string]any{"Image": "rancher/k3s", "Labels": map[string]string{"a": "b"}},
-				"State":  map[string]any{"Running": true, "Status": "running", "ExitCode": 0},
+				"State":  map[string]any{"Running": true, "Status": "running", "ExitCode": 0, "OOMKilled": true},
 				"NetworkSettings": map[string]any{
 					"Ports":    map[string]any{"6443/tcp": []map[string]string{{"HostIp": "0.0.0.0", "HostPort": "32768"}}, "80/tcp": nil},
 					"Networks": map[string]any{"net": map[string]string{"IPAddress": "172.18.0.2"}},
@@ -428,7 +435,8 @@ func TestInspectAndList(t *testing.T) {
 		t.Fatalf("InspectContainer = %v", err)
 	}
 	if got.ID != "cid" || got.Name != "k3s" || got.Image != "rancher/k3s" || !got.Running || got.Status != "running" ||
-		got.Ports["6443/tcp"][0].HostPort != "32768" || got.Networks["net"] != "172.18.0.2" || got.Labels["a"] != "b" {
+		got.Ports["6443/tcp"][0].HostPort != "32768" || got.Networks["net"] != "172.18.0.2" || got.Labels["a"] != "b" ||
+		got.RestartCount != 2 || !got.OOMKilled {
 		t.Errorf("InspectContainer = %+v", got)
 	}
 	list, err := c.ListContainers(t.Context(), map[string]string{"a": "b"})

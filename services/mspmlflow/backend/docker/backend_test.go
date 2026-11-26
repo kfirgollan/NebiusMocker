@@ -210,6 +210,14 @@ func TestEnsureClusterCreatesTheServer(t *testing.T) {
 			t.Errorf("command lacks %q: %s", want, script)
 		}
 	}
+	// The auth database is migrated once, before gunicorn forks its workers.
+	if !strings.HasPrefix(script, "python /etc/nmock/init_auth.py && exec mlflow server ") {
+		t.Errorf("command does not initialize the auth database first: %s", script)
+	}
+	if init := string(fileContent(t, s, initAuthPath).Content); !strings.Contains(init, "auth.store.init_db(auth.auth_config.database_uri)") ||
+		!strings.Contains(init, "auth.create_admin_user(") {
+		t.Errorf("init_auth.py = %s", init)
+	}
 	if s.Cmd[len(s.Cmd)-1] != "bkt" {
 		t.Errorf("bucket argument = %v", s.Cmd)
 	}

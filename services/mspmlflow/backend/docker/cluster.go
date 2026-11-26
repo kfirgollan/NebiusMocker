@@ -27,7 +27,17 @@ const (
 	tlsKeyPath  = "/etc/nmock/tls/tls.key"
 	authPath    = "/etc/nmock/auth.ini"
 	dataDir     = "/mlflow"
-	serverCmd   = `exec mlflow server --app-name basic-auth --host 0.0.0.0 --port 5000 --workers 2 ` +
+	// initAuthPath holds initAuth, which creates the auth database and the
+	// admin user before gunicorn starts. The basic-auth app otherwise does it
+	// as each worker boots, and two workers migrating a fresh SQLite database
+	// at once fail one of them ("Worker failed to boot"), which halts the
+	// server seconds after the other worker served its first request.
+	initAuthPath = "/etc/nmock/init_auth.py"
+	initAuth     = `from mlflow.server import auth
+auth.store.init_db(auth.auth_config.database_uri)
+auth.create_admin_user(auth.auth_config.admin_username, auth.auth_config.admin_password)
+`
+	serverCmd = `python ` + initAuthPath + ` && exec mlflow server --app-name basic-auth --host 0.0.0.0 --port 5000 --workers 2 ` +
 		`--backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination "s3://$1/" --serve-artifacts ` +
 		`--gunicorn-opts "--timeout=120 --certfile=` + tlsCertPath + ` --keyfile=` + tlsKeyPath + `"`
 )
@@ -142,7 +152,10 @@ func (b *Backend) spec(ctx context.Context, c domain.BackendCluster, creds crede
 		Ports:      []dockerhost.PortBinding{{ContainerPort: serverPort, HostIP: b.cfg.BindIP}},
 		Memory:     c.MemoryBytes, NanoCPUs: nano,
 		Binds: []string{b.volumeName(c.ID) + ":" + dataDir},
-		Files: []dockerhost.File{{Path: authPath, Mode: 0o600, Content: []byte(authINI(c, creds))}},
+		Files: []dockerhost.File{
+			{Path: authPath, Mode: 0o600, Content: []byte(authINI(c, creds))},
+			{Path: initAuthPath, Mode: 0o644, Content: []byte(initAuth)},
+		},
 	}
 	sum := sha256.Sum256([]byte(strings.Join(append(slices.Clone(env), cmd[4], b.image, b.cfg.EndpointHost,
 		fmt.Sprint(c.MemoryBytes, nano)), "\x00")))

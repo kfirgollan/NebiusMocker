@@ -173,6 +173,7 @@ func TestPostgreSQLScenario(t *testing.T) {
 
 	diskFull(t, e, tf, u, clusterID, rw)
 
+	e.crashes.Check(t.Context(), t) // while the containers still carry their RestartCount
 	tf.Destroy(t)
 	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-postgresql", "nebius-mocker.owner="+e.addr); len(left) > 0 {
 		t.Fatalf("containers left after the clusters were deleted: %v", left)

@@ -85,13 +85,13 @@ e2e-mk8s: ## Managed Kubernetes on k3s (needs Docker + terraform): Terraform, ge
 # e2e-msp runs Managed PostgreSQL and Managed MLflow on the docker backends:
 # the in-process mocker starts real PostgreSQL, PgBouncer and MLflow
 # containers, and the user's tools (psql, nebius CLI, MLflow client, AWS CLI)
-# reach them through the published endpoints with the mocker's CA. The two
-# backend packages' own e2e_msp tests run first.
+# reach them through the published endpoints with the mocker's CA. The crash
+# watch's self-test and the two backend packages' own e2e_msp tests run first.
 MSP_CLEANUP := ./deploy/docker/reap.sh nebius-mocker.test=msp nebius-mocker.backend=msp-postgresql nebius-mocker.backend=msp-mlflow
 
 e2e-msp: ## Managed PostgreSQL + MLflow on Docker (needs Docker + terraform): Terraform, psql, CLI, MLflow client, S3
 	@$(MSP_CLEANUP)
-	@status=0; $(GO) test -tags e2e_msp -count=1 -timeout 60m -v ./services/msppostgresql/backend/... ./services/mspmlflow/backend/... ./test/msp/... || status=$$?; \
+	@status=0; $(GO) test -tags e2e_msp -count=1 -timeout 60m -v ./pkg/dockerhost/crashwatch/... ./services/msppostgresql/backend/... ./services/mspmlflow/backend/... ./test/msp/... || status=$$?; \
 	$(MSP_CLEANUP); exit $$status
 
 check: lint test ## Everything the pre-commit hook runs

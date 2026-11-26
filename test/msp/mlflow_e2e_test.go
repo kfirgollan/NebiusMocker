@@ -225,6 +225,7 @@ func TestMLflowScenario(t *testing.T) {
 	if _, err := aws.Run(t.Context(), "s3", "rm", "s3://"+mlBucket+"/", "--recursive"); err != nil {
 		t.Fatalf("aws s3 rm: %v", err)
 	}
+	e.crashes.Check(t.Context(), t) // while the containers still carry their RestartCount
 	tf.Destroy(t)
 	if left := e.d.leftovers(t, "nebius-mocker.backend=msp-mlflow", "nebius-mocker.owner="+e.addr); len(left) > 0 {
 		t.Fatalf("containers left after the clusters were destroyed: %v", left)

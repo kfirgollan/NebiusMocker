@@ -94,7 +94,14 @@ MLflow image (arm64 and amd64) in its own container and volume (SQLite backend s
 - HTTPS with a certificate from the mocker's local CA (`<NEBIUS_MOCKER_MSP_TLS_DIR>/ca.pem`);
 - proxied artifact storage (`--serve-artifacts`) in `s3://<effective bucket>/`, through the mocker's S3 front with the
   service account's access key, so artifacts land in the Nebius bucket and are readable with any S3 client;
-- memory and CPU limits from the size; a port picked once and kept across stop/start.
+- memory and CPU limits from the size; a port picked once and kept across stop/start;
+- two gunicorn workers. The auth database is created and migrated (and the admin user added) by a one-shot step before
+  gunicorn starts: the basic-auth app does it as each worker boots, and two workers migrating a fresh SQLite database
+  at once made one fail to boot, which halted the whole server seconds after it first answered (about 1 in 30 fresh
+  servers under load);
+- restart policy `on-failure`, so a crashed server comes back like a managed one. The e2e suites still fail on any crash:
+  `pkg/dockerhost/crashwatch` follows the daemon's events of the run's containers and fails the test on a die that no
+  stop or delete caused, an OOM kill, or a `RestartCount` above 0.
 
 The image with the S3 and auth extras is built once on first use (needs network access to PyPI). Containers carry
 `nebius-mocker.backend=msp-mlflow` and are removed on delete and at mocker startup/shutdown.

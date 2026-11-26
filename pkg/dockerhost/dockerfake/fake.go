@@ -132,6 +132,16 @@ func (f *Fake) SetExited(id string, code int, logs string) {
 	c.c.Running, c.c.Status, c.c.ExitCode, c.logs = false, "exited", code, logs
 }
 
+// SetRestartCount sets how often the daemon restarted the container under
+// its restart policy, as InspectContainer reports it.
+func (f *Fake) SetRestartCount(id string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, err := f.find(id); err == nil {
+		c.c.RestartCount = n
+	}
+}
+
 // SetMemoryUsage sets what MemoryUsage returns for the container.
 func (f *Fake) SetMemoryUsage(id string, bytes int64) {
 	f.mu.Lock()
@@ -450,7 +460,8 @@ func (f *Fake) ListContainers(_ context.Context, labels map[string]string) ([]do
 			continue
 		}
 		s := cloneContainer(c.c)
-		s.Ports, s.Networks, s.ExitCode = nil, nil, 0 // the real list endpoint omits them
+		// The real list endpoint omits these.
+		s.Ports, s.Networks, s.ExitCode, s.RestartCount, s.OOMKilled = nil, nil, 0, 0, false
 		out = append(out, s)
 	}
 	slices.SortFunc(out, func(a, b dockerhost.Container) int { return strings.Compare(a.Name, b.Name) })
