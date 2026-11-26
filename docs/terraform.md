@@ -197,16 +197,17 @@ supply real credentials.
 
 ## What is missing, by area
 
-| Area | Missing objects | Service doc |
-|---|---|---|
-| Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
-| Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |
-| Other | `applications_v1alpha1_k8s_release`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [quotas.md](services/quotas.md) |
+Nothing: every object in provider 0.6.91 that calls the API is supported and tested. `nebius_hash` and
+`nebius_parent_id` are computed by the provider itself.
 
-Across the supported objects, these are not modeled:
-- **Quotas:** nothing returns `RESOURCE_EXHAUSTED` for a quota.
-- **Capacity:** compute instances do not draw from capacity block groups yet, so allowance and block group `usage` stays 0 ([capacity.md](services/capacity.md#not-yet)).
-- **Hardware faults:** nothing ever reaches an `ERROR` state.
+Across the supported objects, these are not modeled (each service doc's "Not yet" has the details):
+- **Hardware and capacity:** no VM boots and nothing reaches an `ERROR` state; there is no `NotEnoughResources` and no
+  host maintenance or preemption on a moving spot price ([compute.md](services/compute.md)).
+- **Data planes that need a vendor's agent or a browser:** the application tunnel's traffic (proprietary agent and
+  undocumented edge protocol, [tunnel.md](services/tunnel.md)) and real SAML sign-in for federations
+  ([iam.md](services/iam.md)).
+- **Quota names:** Nebius publishes display names only, so some quota IDs are inferred and marked so
+  ([quotas.md](services/quotas.md)).
 
 Each service doc's **Implementation status** section lists the field-level gaps. Fields the mock does not support are
 rejected with an error that names them, never silently ignored.
