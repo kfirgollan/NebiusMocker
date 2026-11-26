@@ -22,6 +22,9 @@ CI with no Nebius account.
 > **KMS** symmetric and asymmetric keys work with real crypto (AES-256-GCM, ECDSA, RSA-OAEP), plus rotation and
 > delayed deletion, through Terraform, the Go SDK and the `nebius kms` CLI; see
 > [docs/services/kms.md](docs/services/kms.md#implementation-status).
+> **DNS** private zones and records work through Terraform, the Go SDK and the `nebius dns` CLI, and resolve with
+> `dig @127.0.0.1 -p 4653 <name>` against the mock's DNS responder; see
+> [docs/services/dns.md](docs/services/dns.md#implementation-status).
 > **MysteryBox (SecretStash) secrets, versions and payloads** work with the official Terraform provider, CLI and Go
 > SDK: see [docs/services/mysterybox.md](docs/services/mysterybox.md#implementation-status).
 > **VPC networking** (pools, networks, subnets, private and public allocations, route tables and routes, security
@@ -115,10 +118,10 @@ resource "nebius_compute_v1_instance" "gpu" {
 
 ### Terraform notes
 
-- **Coverage:** 68 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
+- **Coverage:** 72 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
   end to end, and 2 more work without a Terraform test. [docs/terraform.md](docs/terraform.md) lists every object with
   its status, compared with the official provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are
-  mk8s, DNS, the managed databases, IAM federation, and storage inventory and transfer.
+  mk8s, the managed databases, IAM federation, and storage inventory and transfer.
 - **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
   empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
   apply shows a diff, that is a bug in the mock.
@@ -182,6 +185,7 @@ process. The credential-helper flow (`nebius registry configure-helper`) and the
 [docs/services/registry.md](docs/services/registry.md#running-it-the-documented-setup).
 | `NEBIUS_MOCKER_OBJSTORE` | `memory` | `rustfs` stores objects in RustFS (`NEBIUS_MOCKER_OBJSTORE_ENDPOINT`, default `http://127.0.0.1:9000`) |
 | `NEBIUS_MOCKER_STORAGE_S3_LISTEN` | `:4580` | Object Storage S3 front (`off` disables it) |
+| `NEBIUS_MOCKER_DNS_LISTEN` | `:4653` | DNS responder for the mock's zones, UDP and TCP (`off` disables it) |
 | `NEBIUS_MOCKER_AI_LISTEN` | `127.0.0.1:4600` | HTTPS stub that AI endpoint URLs point at (`NEBIUS_MOCKER_AI_PUBLIC_URL` overrides the advertised base URL; TCP ports use `NEBIUS_MOCKER_AI_TCP_LISTEN`, `:4601`) |
 | `NEBIUS_MOCKER_AI_TLS_DIR` | `<user config dir>/nebius-mocker/ca` | Local CA of the AI data plane; trust `<dir>/ca.pem` (`curl --cacert`) |
 

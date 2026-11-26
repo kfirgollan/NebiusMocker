@@ -54,6 +54,8 @@ They are documented in each service doc (for example `NEBIUS_MOCKER_STORAGE_*` i
 VPC: `NEBIUS_MOCKER_VPC_DEFAULT_PRIVATE_CIDR` (default `10.0.0.0/13`, the `default-network-pool` of each project) and
 `NEBIUS_MOCKER_VPC_PUBLIC_CIDR` (default `203.0.113.0/24`, the `default-public-pool`); see
 [services/vpc.md](../services/vpc.md#configuration).
+DNS: `NEBIUS_MOCKER_DNS_LISTEN` (default `:4653`, UDP and TCP; `off` disables it) is the address of the DNS responder
+that answers from the mock's zones; see [services/dns.md](../services/dns.md#configuration).
 
 ## Seed data
 

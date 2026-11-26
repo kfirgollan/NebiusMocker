@@ -25,6 +25,7 @@ type Repos struct {
 	SecurityGroups Repository[*vpcpb.SecurityGroup]
 	SecurityRules  Repository[*vpcpb.SecurityRule]
 	Scopes         Repository[*vpcv1alpha1pb.Scope]
+	NetworkUsers   NetworkUserRepository
 }
 
 // Config holds the seeded address space.
@@ -77,7 +78,7 @@ func New(d Deps) (*Service, error) {
 	r := d.Repos
 	if d.Ops == nil || d.IDs == nil || d.Clock == nil || d.Hierarchy == nil ||
 		r.Pools == nil || r.Networks == nil || r.Subnets == nil || r.Allocations == nil ||
-		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil || r.Scopes == nil {
+		r.RouteTables == nil || r.Routes == nil || r.SecurityGroups == nil || r.SecurityRules == nil || r.Scopes == nil || r.NetworkUsers == nil {
 		return nil, errors.New("vpc: service dependencies must not be nil")
 	}
 	c := &core{ops: d.Ops, ids: d.IDs, clk: d.Clock, hier: d.Hierarchy, cfg: d.Config, r: r}

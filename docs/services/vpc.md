@@ -135,7 +135,7 @@ several rules may share a priority (DENY is evaluated first), which `status.effe
 | Delete | Refused while |
 |---|---|
 | Pool | Networks reference it, child pools exist, subnets carve from it, or allocations come from it; always for `default-public-pool` |
-| Network | Subnets, non-default security groups or non-default route tables exist (the defaults are deleted with it) |
+| Network | Subnets, non-default security groups or non-default route tables exist (the defaults are deleted with it), or DNS zones are bound to it (`peer.Networks`, see [dns.md](dns.md)) |
 | Subnet | Allocations reference it (instance NICs and mk8s clusters: later, via `peer`) |
 | Allocation | It is assigned, or a route uses it as next hop |
 | Route table | Subnets use it; always for a default route table |

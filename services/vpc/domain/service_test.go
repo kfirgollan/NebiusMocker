@@ -45,6 +45,7 @@ func newEnv(t *testing.T) *env {
 			SecurityGroups: newFakeRepo[*vpcpb.SecurityGroup](),
 			SecurityRules:  newFakeRepo[*vpcpb.SecurityRule](),
 			Scopes:         newFakeRepo[*vpcv1alpha1pb.Scope](),
+			NetworkUsers:   newFakeNetworkUsers(),
 		},
 		Ops:       &inlineOps{},
 		IDs:       &seqIDs{},

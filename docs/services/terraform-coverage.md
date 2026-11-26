@@ -40,8 +40,8 @@ data:    Get(id)  |  GetByName(parent_id, name)  |  special lookup (GetDefault, 
 | `nebius_compute_v1_gpu_cluster` | `nebius.compute.v1.GpuClusterService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 | [compute](compute.md) |
 | `nebius_compute_v1_instance` | `nebius.compute.v1.InstanceService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 | [compute](compute.md) |
 | `nebius_compute_v1_nvl_instance_group` | `nebius.compute.v1.NVLInstanceGroupService` | Create, Get, GetByName, Update, Delete + OperationService.Get | T2 | [compute](compute.md) |
-| `nebius_dns_v1_record` | `nebius.dns.v1.RecordService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T1 | [dns](dns.md) |
-| `nebius_dns_v1_zone` | `nebius.dns.v1.ZoneService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T1 | [dns](dns.md) |
+| `nebius_dns_v1_record` | `nebius.dns.v1.RecordService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 | [dns](dns.md) |
+| `nebius_dns_v1_zone` | `nebius.dns.v1.ZoneService` | Get, GetByName, Create, Update, Delete + OperationService.Get | T2 | [dns](dns.md) |
 | `nebius_hash` | `— (provider-local)` | Computes hashes locally; no API call | — |  |
 | `nebius_iam_v1_access_permit` | `nebius.iam.v1.AccessPermitService` | Create, Delete, Get + OperationService.Get | T2 | [iam](iam.md) |
 | `nebius_iam_v1_auth_public_key` | `nebius.iam.v1.AuthPublicKeyService` | Create, Get, GetByName, Update, Delete + OperationService.Get | T2 | [iam](iam.md) |
@@ -97,8 +97,8 @@ data:    Get(id)  |  GetByName(parent_id, name)  |  special lookup (GetDefault, 
 | `nebius_compute_v1_image` | `nebius.compute.v1.ImageService` | Get, GetByName | T2 | [compute](compute.md) |
 | `nebius_compute_v1_instance` | `nebius.compute.v1.InstanceService` | Get, GetByName | T2 | [compute](compute.md) |
 | `nebius_compute_v1_nvl_instance_group` | `nebius.compute.v1.NVLInstanceGroupService` | Get, GetByName | T2 | [compute](compute.md) |
-| `nebius_dns_v1_record` | `nebius.dns.v1.RecordService` | Get, GetByName | T1 | [dns](dns.md) |
-| `nebius_dns_v1_zone` | `nebius.dns.v1.ZoneService` | Get, GetByName | T1 | [dns](dns.md) |
+| `nebius_dns_v1_record` | `nebius.dns.v1.RecordService` | Get, GetByName | T2 | [dns](dns.md) |
+| `nebius_dns_v1_zone` | `nebius.dns.v1.ZoneService` | Get, GetByName | T2 | [dns](dns.md) |
 | `nebius_iam_v1_access_permit` | `nebius.iam.v1.AccessPermitService` | Get | T2 | [iam](iam.md) |
 | `nebius_iam_v1_auth_public_key` | `nebius.iam.v1.AuthPublicKeyService` | Get, GetByName | T2 | [iam](iam.md) |
 | `nebius_iam_v1_federated_credentials` | `nebius.iam.v1.FederatedCredentialsService` | Get, GetByName | T1 | [iam](iam.md) |

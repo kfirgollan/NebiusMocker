@@ -10,5 +10,5 @@
 # 127.0.0.1 but not processes listening on the host's loopback.
 FROM scratch
 COPY nebius-mocker /nebius-mocker
-EXPOSE 4566 4590
+EXPOSE 4566 4590 4653/udp 4653/tcp
 ENTRYPOINT ["/nebius-mocker"]

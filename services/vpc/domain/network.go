@@ -321,7 +321,11 @@ func (s *NetworkService) checkDelete(ctx context.Context, n *vpcpb.Network) erro
 	if err != nil {
 		return err
 	}
-	if users := slices.Concat(idsOf(subs), idsOf(sgs), idsOf(rts)); len(users) > 0 {
+	bound, err := s.c.r.NetworkUsers.List(ctx, id)
+	if err != nil {
+		return err
+	}
+	if users := slices.Concat(idsOf(subs), idsOf(sgs), idsOf(rts), bound); len(users) > 0 {
 		return inUse(id, "network", users)
 	}
 	return nil

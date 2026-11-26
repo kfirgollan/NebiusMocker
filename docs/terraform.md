@@ -7,16 +7,16 @@ objects work today compared with the full list in the official provider docs.
 Checked against provider **0.6.91**, the newest release on the Terraform Registry (2026-11-25), and its documentation at
 [registry.terraform.io](https://registry.terraform.io/providers/nebius/nebius/latest/docs) and
 [docs.nebius.com/terraform-provider](https://docs.nebius.com/terraform-provider/reference). Status as of 2026-11-26
-(`main` at `935eb6e`).
+(`main` at `c97ec5b`).
 
 ## Summary
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 28 | 0 | 1 (`nebius_hash`) | 21 |
-| Data sources | 62 | 36 | 2 | 1 (`nebius_parent_id`) | 23 |
+| Resources | 50 | 30 | 0 | 1 (`nebius_hash`) | 19 |
+| Data sources | 62 | 38 | 2 | 1 (`nebius_parent_id`) | 21 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **68** | **2** | **2** | **44** |
+| **Total** | **116** | **72** | **2** | **2** | **40** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -78,8 +78,8 @@ supply real credentials.
 | `nebius_compute_v1_gpu_cluster` | ✅ | Checked against a fabric catalog. No topology or capacity simulation ([compute.md](services/compute.md#gpu-clusters-implemented)) |
 | `nebius_compute_v1_instance` | ✅ | CPU and GPU platforms, managed and existing disks, filesystems, GPU clusters, private and public IPs, and stop/start. Nothing boots. Preemptible instances are accepted but never preempted. Specific reservations (`reservation_ids`), spot pricing policies, local disk passthrough and NVL instance groups are rejected by name ([compute.md](services/compute.md#instances-implemented)) |
 | `nebius_compute_v1_nvl_instance_group` | ❌ Missing | |
-| `nebius_dns_v1_record` | ❌ Missing | |
-| `nebius_dns_v1_zone` | ❌ Missing | |
+| `nebius_dns_v1_record` | ✅ | Types `A`, `MX`, `TXT`, `SRV`, `CAA`, `SVCB`, `HTTPS`; `CNAME`, `AAAA`, `PTR` rejected by name, as in the docs. Served by the mock's DNS responder ([dns.md](services/dns.md#implementation-status)) |
+| `nebius_dns_v1_zone` | ✅ | Private zones bound to a VPC network; creates the service-managed `SOA` and `NS` records ([dns.md](services/dns.md#implementation-status)) |
 | `nebius_hash` | ➖ Provider-local | Computed by the provider, with no API call |
 | `nebius_iam_v1_access_permit` | ✅ | Enforced under `NEBIUS_MOCKER_AUTHZ=enforce` |
 | `nebius_iam_v1_auth_public_key` | ✅ | Usable as provider `service_account` credentials |
@@ -135,8 +135,8 @@ supply real credentials.
 | `nebius_compute_v1_image` | ✅ | Seeded public catalog for each region, plus custom images imported from Object Storage |
 | `nebius_compute_v1_instance` | ✅ | |
 | `nebius_compute_v1_nvl_instance_group` | ❌ Missing | |
-| `nebius_dns_v1_record` | ❌ Missing | |
-| `nebius_dns_v1_zone` | ❌ Missing | |
+| `nebius_dns_v1_record` | ✅ | |
+| `nebius_dns_v1_zone` | ✅ | |
 | `nebius_iam_v1_access_permit` | ⚠️ No Terraform test | The RPC (`Get`) is implemented and covered by contract tests |
 | `nebius_iam_v1_auth_public_key` | ✅ | |
 | `nebius_iam_v1_federated_credentials` | ❌ Missing | |
@@ -202,7 +202,6 @@ supply real credentials.
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
 | IAM | `federation`, `federation_certificate`, `federated_credentials`, `invitation` (4 resources, 4 data sources), `tenant_user_account` (data source) | [iam.md](services/iam.md) |
 | Object Storage | `inventory`, `transfer` (v1 and v1alpha1): 3 resources, 3 data sources | [storage.md](services/storage.md) |
-| DNS | `zone`, `record` (2 resources, 2 data sources) | [dns.md](services/dns.md) |
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
 | Capacity | `capacity_allowance` (resource and data source), `capacity_block_group` (data source) | [capacity.md](services/capacity.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |

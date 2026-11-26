@@ -12,6 +12,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0
+	github.com/miekg/dns v1.1.73
 	github.com/nebius/gosdk v0.2.100
 	go.uber.org/goleak v1.3.0
 	go.yaml.in/yaml/v3 v3.0.5

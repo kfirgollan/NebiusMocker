@@ -45,6 +45,7 @@ func NewRepos(st store.Store) domain.Repos {
 		SecurityGroups: NewRepo(st, domain.KindSecurityGroup, func() *vpcpb.SecurityGroup { return &vpcpb.SecurityGroup{} }),
 		SecurityRules:  NewRepo(st, domain.KindSecurityRule, func() *vpcpb.SecurityRule { return &vpcpb.SecurityRule{} }),
 		Scopes:         NewRepo(st, domain.KindScope, func() *vpcv1alpha1pb.Scope { return &vpcv1alpha1pb.Scope{} }),
+		NetworkUsers:   NewNetworkUserRepo(st),
 	}
 }
 

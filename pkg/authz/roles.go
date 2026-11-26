@@ -150,7 +150,8 @@ func DefaultCatalog() *Catalog {
 		},
 		Role{Name: RoleAdmin, Grants: []string{"*"}},
 		Role{Name: RoleMysteryBoxPayloadViewer, Grants: []string{permMysteryBoxPayloadRead}},
-		Role{Name: RoleAuditor, Grants: append(slices.Clone(read), auditPermissions)},
+		// The auditor views DNS zones but not their records (Nebius DNS docs).
+		Role{Name: RoleAuditor, Grants: append(slices.Clone(read), auditPermissions), Excludes: []string{"dns.records.*"}},
 		Role{Name: RoleComputeUseViaObjectStorage, Grants: []string{"compute.filesystems." + VerbUseViaObjectStorage}},
 	)
 }

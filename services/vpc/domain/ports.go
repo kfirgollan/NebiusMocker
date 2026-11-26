@@ -60,6 +60,17 @@ type Repository[T Resource] interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// NetworkUserRepository records which resources of other services (NIDs such
+// as "dnszone-…") are bound to a network.
+type NetworkUserRepository interface {
+	// Add records the binding; adding twice is a no-op.
+	Add(ctx context.Context, networkID, userID string) error
+	// Remove deletes the binding; a missing one is not an error.
+	Remove(ctx context.Context, networkID, userID string) error
+	// List returns the IDs bound to the network.
+	List(ctx context.Context, networkID string) ([]string, error)
+}
+
 // Operations starts long-running operations (satisfied by *operations.Engine).
 type Operations interface {
 	Submit(ctx context.Context, spec operations.Spec) (*operations.Operation, error)
