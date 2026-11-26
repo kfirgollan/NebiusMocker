@@ -29,7 +29,7 @@ func TestInstanceValidation(t *testing.T) {
 		{"unknown platform", func(s *computepb.InstanceSpec) { s.Resources = preset("cpu-nope", "2vcpu-8gb") }, codes.InvalidArgument, "platform"},
 		{"preset not in platform", func(s *computepb.InstanceSpec) { s.Resources = preset("cpu-e2", "1gpu-16vcpu-200gb") }, codes.InvalidArgument, "preset"},
 		{"platform not in region", func(s *computepb.InstanceSpec) { s.Resources = preset("gpu-b200-sxm", "8gpu-160vcpu-1792gb") }, codes.InvalidArgument, "platform"},
-		{"nvl_instance_group_id", func(s *computepb.InstanceSpec) { s.NvlInstanceGroupId = "computenvlinstancegroup-x" }, codes.InvalidArgument, "nvl_instance_group_id"},
+		{"unknown nvl_instance_group_id", func(s *computepb.InstanceSpec) { s.NvlInstanceGroupId = "computenvlinstancegroup-x" }, codes.NotFound, "nvl_instance_group_id"},
 		{"spot_pricing_policy", func(s *computepb.InstanceSpec) {
 			s.PricingModel = &computepb.InstanceSpec_SpotPricingPolicy{SpotPricingPolicy: &computepb.SpotPricingPolicySpec{Id: "x"}}
 		}, codes.InvalidArgument, "spot_pricing_policy"},

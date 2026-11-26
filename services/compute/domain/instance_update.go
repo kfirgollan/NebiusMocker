@@ -21,7 +21,7 @@ import (
 // Rules (docs: compute/virtual-machines/update, lifecycle):
 //   - only RUNNING or STOPPED instances can be updated;
 //   - immutable: service_account_id, resources.platform, gpu_cluster,
-//     recovery_policy, preemptible, and per interface (matched by name)
+//     nvl_instance_group_id, recovery_policy, preemptible, and per interface (matched by name)
 //     subnet_id and ip_address;
 //   - the preset may change only while the instance is STOPPED and the
 //     platform has allow_preset_change;
@@ -190,6 +190,9 @@ func keepInstanceImmutable(prev, next *computepb.InstanceSpec) error {
 	}
 	if !proto.Equal(prev.GetGpuCluster(), next.GetGpuCluster()) {
 		immutable("gpu_cluster")
+	}
+	if prev.GetNvlInstanceGroupId() != next.GetNvlInstanceGroupId() {
+		immutable("nvl_instance_group_id")
 	}
 	if prev.GetRecoveryPolicy() != next.GetRecoveryPolicy() {
 		immutable("recovery_policy")

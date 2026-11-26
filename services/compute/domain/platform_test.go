@@ -90,7 +90,7 @@ func TestDefaultPlatformsPerRegion(t *testing.T) {
 			t.Errorf("bad metadata %v", p.GetMetadata())
 		}
 	}
-	want := []string{"gpu-h100-sxm", "gpu-h200-sxm", "gpu-l40s-a", "gpu-l40s-d", "cpu-d3", "cpu-e2"}
+	want := []string{"gpu-h100-sxm", "gpu-h200-sxm", "gpu-gb200", "gpu-gb300", "gpu-l40s-a", "gpu-l40s-d", "cpu-d3", "cpu-e2"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("eu-north1 platforms = %v, want %v", names, want)
 	}
@@ -140,7 +140,7 @@ func TestPlatformPaging(t *testing.T) {
 			break
 		}
 	}
-	if len(got) != 6 {
+	if len(got) != 8 {
 		t.Errorf("paged = %v", got)
 	}
 	if _, err := s.List(t.Context(), projEU, 0, "garbage"); !errs.IsKind(err, errs.KindBadRequest) {

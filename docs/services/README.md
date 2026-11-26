@@ -11,7 +11,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 |---|---|---|---|---|---|---|
 | IAM | [iam.md](iam.md) | 21 | 115 | 15 / 28 | **T2** | — |
 | VPC | [vpc.md](vpc.md) | 14 | 84 | 13 / 23 | **T2** (v1 and v1alpha1; v1alpha1 is a view of the v1 resources) | — |
-| Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
+| Compute | [compute.md](compute.md) | 10 | 59 | 7 / 13 | **T2** (ImageService implemented, image payloads in RustFS; DiskService + DiskSnapshotService, GpuClusterService, NVLInstanceGroupService, InstanceService + PlatformService implemented, management plane only: no VM boots) | container-backed VMs (T3, optional) |
 | Managed Kubernetes | [mk8s.md](mk8s.md) | 4 | 30 | 4 / 8 | **T2** ✅ implemented (v1 and v1alpha1; nodes are compute instances; `mock` backend); **T3** ✅ `k3s` backend: real Kubernetes in Docker (`make e2e-mk8s`) | — |
 | Object Storage | [storage.md](storage.md) | 4 | 33 | 4 / 8 | **T2** bucket, inventory, transfer (v1, v1alpha1) | S3 data plane via RustFS (✅ buckets, objects, inventory reports, transfers; see storage.md) |
 | Container Registry | [registry.md](registry.md) | 2 | 9 | 1 / 2 | **T2** ✅ implemented; **T3** OCI data plane via Harbor ✅ | — |

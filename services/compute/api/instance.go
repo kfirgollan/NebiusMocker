@@ -32,8 +32,8 @@ func RegisterInstanceAuthzRules(r *authz.Rules) {
 		AllowIf:    func(context.Context, string, any) bool { return true },
 		Target:     func(context.Context, any) (string, error) { return "", nil },
 	})
-	// The group is the target: NVL instance groups are not implemented, so
-	// the lookup of any ID is NOT_FOUND.
+	// The group is the target: listing its instances needs
+	// compute.instances.list on the group's project.
 	r.Add(m("ListInstancesByNVLInstanceGroup"), authz.Rule{
 		Permission: authz.Perm("compute", "instances", authz.VerbList),
 		Target: func(_ context.Context, req any) (string, error) {

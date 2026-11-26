@@ -140,7 +140,7 @@ resource "nebius_compute_v1_instance" "gpu" {
 - **Authorization:** `NEBIUS_MOCKER_AUTHZ=enforce` makes permits real, so `nmock-dev-viewer` gets `PERMISSION_DENIED` on
   writes. The provider's `service_account` credentials work through the mock's token exchange.
 - **State:** the mock keeps everything in memory. After a restart, re-apply or delete your Terraform state.
-- **No hardware:** VMs, GPU clusters and disks are management-plane records only. Shared filesystems hold real data
+- **No hardware:** VMs, GPU clusters, NVL instance groups and disks are management-plane records only. Shared filesystems hold real data
   in RustFS and can be mounted with rclone.
 
 ### Object Storage (S3)

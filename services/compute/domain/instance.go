@@ -37,6 +37,8 @@ type InstanceDeps struct {
 	Disks *DiskService
 	// GpuClusters is joined by instances with spec.gpu_cluster.
 	GpuClusters GpuClusterMembership
+	// NVLGroups is joined by instances with spec.nvl_instance_group_id.
+	NVLGroups NVLMembership
 	// Filesystems records spec.filesystems attachments.
 	Filesystems FilesystemAttachments
 	// Nodes records the instances managed by mk8s node groups (nodes.go).
@@ -52,7 +54,7 @@ type InstanceDeps struct {
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
-		d.Disks == nil || d.GpuClusters == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
 	}
 	if d.PublicIPReleaseAfter <= 0 {
@@ -155,25 +157,6 @@ func (s *InstanceService) BatchGet(ctx context.Context, ids []string) (map[strin
 		out[id] = BatchResult{Instance: inst, Err: err}
 	}
 	return out, nil
-}
-
-// ListByNVLInstanceGroup lists the instances of an NVL instance group. The
-// mocker has no NVLInstanceGroupService yet and instances cannot join a
-// group (spec.nvl_instance_group_id is rejected), so no group exists.
-func (s *InstanceService) ListByNVLInstanceGroup(_ context.Context, groupID string, size int64, token string) (InstancePage, error) {
-	if groupID == "" {
-		return InstancePage{}, errs.BadRequest(errs.Violation{Field: "nvl_instance_group_id", Message: "required"})
-	}
-	if _, err := pageSize(size); err != nil {
-		return InstancePage{}, err
-	}
-	if _, err := decodeOffset(token); err != nil {
-		return InstancePage{}, err
-	}
-	return InstancePage{}, &errs.Error{
-		Kind: errs.KindNotFound, ResourceID: groupID,
-		Message: "NVL instance group " + groupID + " not found (NVL instance groups are not implemented in NebiusMocker)",
-	}
 }
 
 // Create validates the request, then (in the operation's Prepare) binds the
@@ -486,9 +469,12 @@ func (s *InstanceService) prepareCreate(ctx context.Context, inst *computepb.Ins
 	inst.Status.NetworkInterfaces = nics
 	id := inst.GetMetadata().GetId()
 	undo := func(err error, fs []string) error {
-		return errors.Join(err, s.detachFilesystems(ctx, id, fs), s.leaveGpuCluster(ctx, inst), s.releaseAll(ctx, id, inst.GetSpec()))
+		return errors.Join(err, s.detachFilesystems(ctx, id, fs), s.leaveGpuCluster(ctx, inst), s.leaveNVLGroup(ctx, inst), s.releaseAll(ctx, id, inst.GetSpec()))
 	}
 	if err := s.joinGpuCluster(ctx, inst); err != nil {
+		return undo(err, nil)
+	}
+	if err := s.joinNVLGroup(ctx, inst); err != nil {
 		return undo(err, nil)
 	}
 	fs, err := s.attachFilesystems(ctx, inst, nil, inst.GetSpec())
@@ -527,6 +513,9 @@ func (s *InstanceService) remove(ctx context.Context, id string) error {
 		return err
 	}
 	if err := s.leaveGpuCluster(ctx, cur); err != nil {
+		return err
+	}
+	if err := s.leaveNVLGroup(ctx, cur); err != nil {
 		return err
 	}
 	return s.d.Instances.Txn(ctx, func(tx InstanceTx) error {

@@ -4,7 +4,7 @@
 // Implemented: ImageService (public catalog per region and custom images
 // imported from Object Storage), with image payloads in the shared object
 // store (pkg/objstore); DiskService and DiskSnapshotService; GpuClusterService
-// (inventory only). See docs/services/compute.md.
+// and NVLInstanceGroupService (inventory only). See docs/services/compute.md.
 package compute
 
 import (
@@ -94,12 +94,17 @@ func (m *Module) Register(ctx context.Context, reg grpc.ServiceRegistrar, deps m
 	if err != nil {
 		return err
 	}
+	nvlGroups, err := registerNVLInstanceGroups(reg, deps, platforms)
+	if err != nil {
+		return err
+	}
 	disks, err := registerDisks(reg, deps, svc)
 	if err != nil {
 		return err
 	}
 	return m.registerInstances(reg, deps, instanceWiring{
 		disks: disks, platforms: platforms, gpuClusters: gpuClusters, filesystems: filesystems,
+		nvlGroups: nvlGroups,
 	})
 }
 

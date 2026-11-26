@@ -59,6 +59,8 @@ type PlatformService struct {
 	regions  PlatformRegions
 	byCode   map[string]*regionPlatforms
 	byName   map[string]*regionPlatforms
+	// nvl maps platform names to their NVL instance group type.
+	nvl map[string]computepb.NVLInstanceGroupSpec_NVLInstanceGroupType
 }
 
 // NewPlatformService builds the per-region platforms from the catalog.
@@ -70,6 +72,13 @@ func NewPlatformService(d PlatformDeps) (*PlatformService, error) {
 	s := &PlatformService{
 		projects: d.Projects, regions: d.ProjectRegions,
 		byCode: map[string]*regionPlatforms{}, byName: map[string]*regionPlatforms{},
+		nvl: map[string]computepb.NVLInstanceGroupSpec_NVLInstanceGroupType{},
+	}
+	for i := range d.Catalog.Platforms {
+		def := &d.Catalog.Platforms[i]
+		if def.NVLInstanceGroupType != "" {
+			s.nvl[def.Name] = nvlType(def.NVLInstanceGroupType)
+		}
 	}
 	for _, r := range d.Regions {
 		rp := &regionPlatforms{name: r.Name}
@@ -201,6 +210,12 @@ func (s *PlatformService) List(ctx context.Context, parentID string, size int64,
 		page.NextPageToken = encodeOffset(end)
 	}
 	return page, nil
+}
+
+// NVLInstanceGroupType returns the type of the NVL instance groups that
+// instances of platform can join (UNSPECIFIED: none).
+func (s *PlatformService) NVLInstanceGroupType(platform string) computepb.NVLInstanceGroupSpec_NVLInstanceGroupType {
+	return s.nvl[platform]
 }
 
 // Resolve returns the platform and preset for an instance in projectID.

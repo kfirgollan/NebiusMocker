@@ -37,6 +37,9 @@ func (s *InstanceService) checkSpec(ctx context.Context, projectID string, spec 
 	if err := checkUnsupported(spec); err != nil {
 		return PlatformPreset{}, err
 	}
+	if err := checkRecoveryPolicy(spec); err != nil {
+		return PlatformPreset{}, err
+	}
 	if err := checkScheduling(spec, pp); err != nil {
 		return PlatformPreset{}, err
 	}
@@ -64,16 +67,10 @@ func (s *InstanceService) checkSpec(ctx context.Context, projectID string, spec 
 // does not have (see docs/services/compute.md, "Not yet").
 func checkUnsupported(spec *computepb.InstanceSpec) error {
 	switch {
-	case spec.GetNvlInstanceGroupId() != "":
-		return notImplemented("spec.nvl_instance_group_id", "NVLInstanceGroupService (NVL instance groups)")
 	case spec.GetSpotPricingPolicy() != nil:
 		return notImplemented("spec.spot_pricing_policy", "Spot pricing policies")
 	case spec.GetLocalDisks().GetPassthroughGroup().GetRequested():
 		return notImplemented("spec.local_disks.passthrough_group", "Local disk passthrough")
-	case spec.GetRecoveryPolicy() == computepb.InstanceRecoveryPolicy_ALWAYS:
-		return errs.BadRequest(errs.Violation{
-			Field: "spec.recovery_policy", Message: "ALWAYS is allowed only for instances in an NVL instance group, which NebiusMocker does not implement yet",
-		})
 	}
 	rp := spec.GetReservationPolicy()
 	switch {

@@ -27,6 +27,9 @@ type PlatformDef struct {
 	GPUMemoryGigabytes     int32  `yaml:"gpu_memory_gigabytes" json:"gpu_memory_gigabytes"`
 	AllowPresetChange      bool   `yaml:"allow_preset_change" json:"allow_preset_change"`
 	AllowedForPreemptibles bool   `yaml:"allowed_for_preemptibles" json:"allowed_for_preemptibles"`
+	// NVLInstanceGroupType is the NVL instance group type (GB200, GB300) whose
+	// groups instances of this platform can join; empty: none.
+	NVLInstanceGroupType string `yaml:"nvl_instance_group_type" json:"nvl_instance_group_type"`
 	// Regions limits the platform to these regions; empty means every region.
 	Regions []string    `yaml:"regions" json:"regions"`
 	Presets []PresetDef `yaml:"presets" json:"presets"`
@@ -75,6 +78,9 @@ func (c PlatformCatalog) validate() error {
 			problems = append(problems, fmt.Errorf("%s: duplicate platform", at))
 		case len(p.Presets) == 0:
 			problems = append(problems, fmt.Errorf("%s: at least one preset is required", at))
+		}
+		if t := p.NVLInstanceGroupType; t != "" && !validNVLType(t) {
+			problems = append(problems, fmt.Errorf("%s: nvl_instance_group_type %q is not one of %s", at, t, nvlTypeNames()))
 		}
 		seen[p.Name] = true
 		names := map[string]bool{}

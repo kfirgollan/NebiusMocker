@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 44 | 0 | 1 (`nebius_hash`) | 5 |
-| Data sources | 62 | 56 | 0 | 1 (`nebius_parent_id`) | 5 |
+| Resources | 50 | 45 | 0 | 1 (`nebius_hash`) | 4 |
+| Data sources | 62 | 57 | 0 | 1 (`nebius_parent_id`) | 4 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **104** | **0** | **2** | **10** |
+| **Total** | **116** | **106** | **0** | **2** | **8** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -76,8 +76,8 @@ supply real credentials.
 | `nebius_compute_v1_disk_snapshot` | ✅ | |
 | `nebius_compute_v1_filesystem` | ✅ | Real data in RustFS, and the size limit is enforced. The `NETWORK_SSD` family only: `NETWORK_HDD`, `WEKA` and `VAST` are rejected ([compute.md](services/compute.md#shared-filesystems-implemented)) |
 | `nebius_compute_v1_gpu_cluster` | ✅ | Checked against a fabric catalog. No topology or capacity simulation ([compute.md](services/compute.md#gpu-clusters-implemented)) |
-| `nebius_compute_v1_instance` | ✅ | CPU and GPU platforms, managed and existing disks, filesystems, GPU clusters, private and public IPs, and stop/start. Nothing boots. Preemptible instances are accepted but never preempted. Specific reservations (`reservation_ids`), spot pricing policies, local disk passthrough and NVL instance groups are rejected by name ([compute.md](services/compute.md#instances-implemented)) |
-| `nebius_compute_v1_nvl_instance_group` | ❌ Missing | |
+| `nebius_compute_v1_instance` | ✅ | CPU and GPU platforms, managed and existing disks, filesystems, GPU clusters, private and public IPs, NVL instance groups (`nvl_instance_group_id`, `recovery_policy = ALWAYS`), and stop/start. Nothing boots. Preemptible instances are accepted but never preempted. Specific reservations (`reservation_ids`), spot pricing policies and local disk passthrough are rejected by name ([compute.md](services/compute.md#instances-implemented)) |
+| `nebius_compute_v1_nvl_instance_group` | ✅ | GB200/GB300 groups; members are instances on the illustrative `gpu-gb200` / `gpu-gb300` platforms, and delete is refused while the group has members. No NVLink domain is simulated ([compute.md](services/compute.md#nvl-instance-groups)) |
 | `nebius_dns_v1_record` | ✅ | Types `A`, `MX`, `TXT`, `SRV`, `CAA`, `SVCB`, `HTTPS`; `CNAME`, `AAAA`, `PTR` rejected by name, as in the docs. Served by the mock's DNS responder ([dns.md](services/dns.md#implementation-status)) |
 | `nebius_dns_v1_zone` | ✅ | Private zones bound to a VPC network; creates the service-managed `SOA` and `NS` records ([dns.md](services/dns.md#implementation-status)) |
 | `nebius_hash` | ➖ Provider-local | Computed by the provider, with no API call |
@@ -134,7 +134,7 @@ supply real credentials.
 | `nebius_compute_v1_gpu_cluster` | ✅ | |
 | `nebius_compute_v1_image` | ✅ | Seeded public catalog for each region, plus custom images imported from Object Storage |
 | `nebius_compute_v1_instance` | ✅ | |
-| `nebius_compute_v1_nvl_instance_group` | ❌ Missing | |
+| `nebius_compute_v1_nvl_instance_group` | ✅ | |
 | `nebius_dns_v1_record` | ✅ | |
 | `nebius_dns_v1_zone` | ✅ | |
 | `nebius_iam_v1_access_permit` | ✅ | |
@@ -200,7 +200,6 @@ supply real credentials.
 | Area | Missing objects | Service doc |
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
-| Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |
 | Other | `applications_v1alpha1_k8s_release`, `billing_v1_pricing_policy`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [billing.md](services/billing.md), [quotas.md](services/quotas.md) |
 

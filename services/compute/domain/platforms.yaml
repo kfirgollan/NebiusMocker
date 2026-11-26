@@ -61,6 +61,33 @@ platforms:
     presets:
       - { name: 1gpu-24vcpu-346gb, vcpu_count: 24, memory_gibibytes: 346, gpu_count: 1 }
       - { name: 8gpu-192vcpu-2768gb, vcpu_count: 192, memory_gibibytes: 2768, gpu_count: 8, allow_gpu_clustering: true }
+  # GB200/GB300 NVL72 (Grace Blackwell, rack-scale NVLink). Their instances
+  # join NVL instance groups of the matching type (nvl_instance_group_type).
+  # Nebius does not document these platform and preset names publicly: the
+  # names, sizes and regions below are ILLUSTRATIVE (4 GPUs per VM, as one
+  # GB200/GB300 compute tray).
+  - name: gpu-gb200
+    human_readable_name: "NVIDIA GB200 NVL72 with NVIDIA Grace"
+    short_human_readable_name: "GB200"
+    gpu_count_quota_type: gpu-gb200
+    gpu_memory_gigabytes: 186
+    allow_preset_change: false
+    allowed_for_preemptibles: false
+    nvl_instance_group_type: GB200
+    regions: [eu-north1, us-central1]
+    presets:
+      - { name: 4gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 4 }
+  - name: gpu-gb300
+    human_readable_name: "NVIDIA GB300 NVL72 with NVIDIA Grace"
+    short_human_readable_name: "GB300"
+    gpu_count_quota_type: gpu-gb300
+    gpu_memory_gigabytes: 279
+    allow_preset_change: false
+    allowed_for_preemptibles: false
+    nvl_instance_group_type: GB300
+    regions: [eu-north1, uk-south1]
+    presets:
+      - { name: 4gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 4 }
   - name: gpu-rtx6000
     human_readable_name: "NVIDIA RTX PRO 6000 Blackwell"
     short_human_readable_name: "RTX PRO 6000"

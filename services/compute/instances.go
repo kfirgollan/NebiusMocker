@@ -30,7 +30,7 @@ func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 	svc, err := domain.NewInstanceService(domain.InstanceDeps{
 		Instances: instances, OpIndex: dal.NewInstanceOpIndex(deps.Store), Projects: deps.Authz,
 		Platforms: w.platforms, Network: peerNetwork{dir: deps.Peers}, Disks: w.disks,
-		GpuClusters: w.gpuClusters, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
+		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
 		Perms: callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
 		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
 		PublicIPReleaseAfter: deps.Config.ComputePublicIPReleaseAfter,
@@ -105,6 +105,7 @@ type instanceWiring struct {
 	platforms   *domain.PlatformService
 	gpuClusters domain.GpuClusterMembership
 	filesystems domain.FilesystemAttachments
+	nvlGroups   domain.NVLMembership
 }
 
 // peerNetwork finds the VPC NIC capability at call time.
