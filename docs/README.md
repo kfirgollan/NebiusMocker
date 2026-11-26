@@ -6,13 +6,14 @@ behaves the way they do. That covers authentication, permissions, quotas, async 
 The Nebius CLI, SDKs and Terraform provider can therefore run against a laptop or a CI container
 instead of a real tenant.
 
-> Status: **design phase**. No code exists yet. These documents are the blueprint for the first implementation.
+> Status: early, with working services. See the [Terraform support matrix](terraform.md) and each service doc's **Implementation status** section.
 
 ## Map
 
 | Section | What it covers |
 |---|---|
 | [architecture/](architecture/README.md) | Goals, system design, Go module layout, request pipeline, IAM, state, lifecycles, quotas, deployment, test harness, milestones, decisions |
+| [terraform.md](terraform.md) | Using the official Terraform provider against the mock, and which of its 116 objects are supported today versus the official provider docs |
 | [services/](services/README.md) | Every public Nebius service (91 gRPC services, 488 RPCs), how each one will be emulated, and what the Terraform provider needs from it |
 
 ## Sources of truth

@@ -34,6 +34,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 Also see:
 
 - [terraform-coverage.md](terraform-coverage.md): every Terraform resource, data source and ephemeral resource → service → RPCs → tier.
+- [../terraform.md](../terraform.md): which of those objects work against the mock today, and what is missing.
 - [_template.md](_template.md): the template for adding a service doc.
 
 ## Endpoint map

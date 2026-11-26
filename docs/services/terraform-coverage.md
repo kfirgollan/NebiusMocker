@@ -1,6 +1,6 @@
 # Terraform provider coverage
 
-This is the milestone-1 contract ([ADR-0007](../architecture/decisions/0007-terraform-first-milestone.md)): every object in
+For what works today, see [../terraform.md](../terraform.md). This page is the milestone-1 contract ([ADR-0007](../architecture/decisions/0007-terraform-first-milestone.md)): every object in
 the `nebius/nebius` provider **v0.6.91** (source [`terraform-provider-nebius@09355968`](https://github.com/nebius/terraform-provider-nebius))
 must pass its scenario in [`test/terraform`](../architecture/12-test-harness.md#3-terraform-scenarios-testterraform).
 

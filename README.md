@@ -112,6 +112,23 @@ resource "nebius_compute_v1_instance" "gpu" {
 }
 ```
 
+### Terraform notes
+
+- **Coverage:** 62 of the provider's 116 objects (resources, data sources and ephemeral resources) work and are tested
+  end to end, and 2 more work without a Terraform test. [docs/terraform.md](docs/terraform.md) lists every object with
+  its status, compared with the official provider docs. Missing objects fail with `UNIMPLEMENTED`; the main gaps are
+  mk8s, DNS, the managed databases, IAM federation, storage inventory and transfer, and `vpc.v1alpha1`.
+- **Fidelity:** each supported resource goes through create, an empty `terraform plan`, an in-place update, another
+  empty plan, replacement on immutable attributes, and destroy, all with the official provider. If a plan after
+  apply shows a diff, that is a bug in the mock.
+- **Seeded parents:** tenant `tenant-e00mock0000000000default`, project `project-e00mock000000000default` (`eu-north1`)
+  with a default network and `default-subnet`, and public images in `project-e00public-images`.
+- **Authorization:** `NEBIUS_MOCKER_AUTHZ=enforce` makes permits real, so `nmock-dev-viewer` gets `PERMISSION_DENIED` on
+  writes. The provider's `service_account` credentials work through the mock's token exchange.
+- **State:** the mock keeps everything in memory. After a restart, re-apply or delete your Terraform state.
+- **No hardware:** VMs, GPU clusters and disks are management-plane records only. Shared filesystems hold real data
+  in RustFS and can be mounted with rclone.
+
 ### Object Storage (S3)
 
 Buckets work out of the box. For object reads and writes, run [RustFS](https://github.com/rustfs/rustfs) and point the
