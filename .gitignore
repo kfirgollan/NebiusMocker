@@ -4,3 +4,6 @@
 *.tfstate*
 tfplan
 .claude/worktrees/
+
+# BSD sed `-i -E` on macOS writes backups with an "-E" suffix
+*-E
