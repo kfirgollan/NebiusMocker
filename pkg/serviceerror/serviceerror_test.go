@@ -52,6 +52,16 @@ func TestFromDomain(t *testing.T) {
 			func(se *commonpb.ServiceError) bool { return se.GetRetryType() == commonpb.ServiceError_CALL },
 		},
 		{
+			"quota exceeded carries QuotaFailure",
+			errs.QuotaExceeded("over", errs.QuotaViolation{Quota: "compute.instance.count", Limit: "2", Requested: "1", Region: "eu-north1"}),
+			codes.ResourceExhausted,
+			func(se *commonpb.ServiceError) bool {
+				v := se.GetQuotaFailure().GetViolations()
+				return len(v) == 1 && v[0].GetQuota() == "compute.instance.count" && v[0].GetLimit() == "2" &&
+					v[0].GetRequested() == "1" && v[0].GetRegion() == "eu-north1"
+			},
+		},
+		{
 			"unknown error hides text", errors.New("secret db path /x"), codes.Internal,
 			func(se *commonpb.ServiceError) bool { return se.GetInternalError() != nil },
 		},

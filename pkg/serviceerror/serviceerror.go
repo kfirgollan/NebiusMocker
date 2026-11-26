@@ -68,8 +68,18 @@ var mappings = map[errs.Kind]mapping{
 		}}
 	}},
 	errs.KindUnauthenticated: {codes.Unauthenticated, commonpb.ServiceError_NOTHING, nil},
-	errs.KindQuotaExceeded:   {codes.ResourceExhausted, commonpb.ServiceError_NOTHING, nil},
+	errs.KindQuotaExceeded:   {codes.ResourceExhausted, commonpb.ServiceError_NOTHING, quotaFailureDetail},
 	errs.KindInternal:        {codes.Internal, commonpb.ServiceError_CALL, internalDetail},
+}
+
+func quotaFailureDetail(_ context.Context, e *errs.Error) *commonpb.ServiceError {
+	qf := &commonpb.QuotaFailure{}
+	for _, v := range e.QuotaViolations {
+		qf.Violations = append(qf.Violations, &commonpb.QuotaFailure_Violation{
+			Quota: v.Quota, Message: v.Message, Limit: v.Limit, Requested: v.Requested, Region: v.Region,
+		})
+	}
+	return &commonpb.ServiceError{Details: &commonpb.ServiceError_QuotaFailure{QuotaFailure: qf}}
 }
 
 func internalDetail(ctx context.Context, _ *errs.Error) *commonpb.ServiceError {

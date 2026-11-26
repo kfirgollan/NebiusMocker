@@ -66,6 +66,17 @@ type Error struct {
 	OperationID string
 	Message     string
 	Violations  []Violation
+	// QuotaViolations are set for KindQuotaExceeded: the exhausted quotas.
+	QuotaViolations []QuotaViolation
+}
+
+// QuotaViolation describes one exhausted quota (nebius.common.v1.QuotaFailure.Violation).
+type QuotaViolation struct {
+	Quota     string // quota name, e.g. "compute.instance.count"
+	Message   string
+	Limit     string // the allowance's limit
+	Requested string // the amount the request would add
+	Region    string
 }
 
 // Error implements the error interface.
@@ -127,6 +138,11 @@ func PermissionDenied(id string) *Error {
 // Unauthenticated reports missing or invalid credentials.
 func Unauthenticated(msg string) *Error {
 	return &Error{Kind: KindUnauthenticated, Message: msg}
+}
+
+// QuotaExceeded reports that a request would exceed one or more quota allowances.
+func QuotaExceeded(msg string, violations ...QuotaViolation) *Error {
+	return &Error{Kind: KindQuotaExceeded, Message: msg, QuotaViolations: violations}
 }
 
 // Internal reports an unexpected failure. msg must not contain sensitive data.
