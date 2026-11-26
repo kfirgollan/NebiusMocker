@@ -13,10 +13,10 @@ Checked against provider **0.6.91**, the newest release on the Terraform Registr
 
 | Kind | In the official provider | Supported and tested | Supported, no Terraform test | Provider-local (no API) | Missing |
 |---|---|---|---|---|---|
-| Resources | 50 | 43 | 0 | 1 (`nebius_hash`) | 6 |
-| Data sources | 62 | 54 | 0 | 1 (`nebius_parent_id`) | 7 |
+| Resources | 50 | 44 | 0 | 1 (`nebius_hash`) | 5 |
+| Data sources | 62 | 56 | 0 | 1 (`nebius_parent_id`) | 5 |
 | Ephemeral resources | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **116** | **101** | **0** | **2** | **13** |
+| **Total** | **116** | **104** | **0** | **2** | **10** |
 
 "Supported and tested" means every RPC the provider calls for the object is implemented, and an end-to-end test runs
 the real provider through it. For resources, that test covers create, an empty `terraform plan`, an in-place update,
@@ -71,7 +71,7 @@ supply real credentials.
 | `nebius_ai_v1_endpoint` | ✅ | Inventory only, and no container runs. The endpoint URL points at an HTTPS stub that answers `200 "endpoint was called"`. UDP ports are rejected ([ai.md](services/ai.md)) |
 | `nebius_applications_v1alpha1_k8s_release` | ✅ | Needs mk8s |
 | `nebius_billing_v1_pricing_policy` | ❌ Missing | |
-| `nebius_capacity_v1_capacity_allowance` | ❌ Missing | |
+| `nebius_capacity_v1_capacity_allowance` | ✅ | Block groups are seeded from a catalog. A limit may exceed the group's size, and the effective limit is the smaller of the two ([capacity.md](services/capacity.md#behavior-notes)) |
 | `nebius_compute_v1_disk` | ✅ | From an image, an image family or a snapshot. No quotas ([compute.md](services/compute.md#disks-and-snapshots-implemented)) |
 | `nebius_compute_v1_disk_snapshot` | ✅ | |
 | `nebius_compute_v1_filesystem` | ✅ | Real data in RustFS, and the size limit is enforced. The `NETWORK_SSD` family only: `NETWORK_HDD`, `WEKA` and `VAST` are rejected ([compute.md](services/compute.md#shared-filesystems-implemented)) |
@@ -126,8 +126,8 @@ supply real credentials.
 | `nebius_ai_v1_endpoint` | ✅ | |
 | `nebius_applications_v1alpha1_k8s_release` | ✅ | |
 | `nebius_billing_v1_pricing_policy` | ❌ Missing | |
-| `nebius_capacity_v1_capacity_allowance` | ❌ Missing | |
-| `nebius_capacity_v1_capacity_block_group` | ❌ Missing | |
+| `nebius_capacity_v1_capacity_allowance` | ✅ | |
+| `nebius_capacity_v1_capacity_block_group` | ✅ | |
 | `nebius_compute_v1_disk` | ✅ | |
 | `nebius_compute_v1_disk_snapshot` | ✅ | |
 | `nebius_compute_v1_filesystem` | ✅ | |
@@ -201,13 +201,12 @@ supply real credentials.
 |---|---|---|
 | Managed Kubernetes | `mk8s_v1(alpha1)_cluster`, `mk8s_v1(alpha1)_node_group` (4 resources, 4 data sources) | [mk8s.md](services/mk8s.md) |
 | Compute | `nvl_instance_group` (resource and data source) | [compute.md](services/compute.md) |
-| Capacity | `capacity_allowance` (resource and data source), `capacity_block_group` (data source) | [capacity.md](services/capacity.md) |
 | Managed databases | `msp_postgresql_v1alpha1_cluster`, `msp_mlflow_v1alpha1_cluster` (resource and data source each) | [msp-postgresql.md](services/msp-postgresql.md), [msp-mlflow.md](services/msp-mlflow.md) |
 | Other | `applications_v1alpha1_k8s_release`, `billing_v1_pricing_policy`, `quotas_v1_quota_allowance` (resource and data source each) | [applications.md](services/applications.md), [billing.md](services/billing.md), [quotas.md](services/quotas.md) |
 
 Across the supported objects, these are not modeled:
 - **Quotas:** nothing returns `RESOURCE_EXHAUSTED` for a quota.
-- **Capacity:** no `NotEnoughResources` errors.
+- **Capacity:** compute instances do not draw from capacity block groups yet, so allowance and block group `usage` stays 0 ([capacity.md](services/capacity.md#not-yet)).
 - **Hardware faults:** nothing ever reaches an `ERROR` state.
 
 Each service doc's **Implementation status** section lists the field-level gaps. Fields the mock does not support are

@@ -1,0 +1,61 @@
+# Built-in catalog of capacity block groups (GPU reservations) and the GPU
+# presets resource advice is computed for. Replace it with
+# NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE (YAML or JSON, same shape).
+#
+# In Nebius, a capacity block group is created by your Nebius manager, not by
+# users: it reserves GPUs of one platform on one InfiniBand fabric in one
+# region, for the date ranges of its intervals
+# (https://docs.nebius.com/overview/limits/capacity-block-groups).
+#
+# block_groups[]:
+#   key       stable name of the group; its NID is derived from tenant + key
+#   tenant    owning tenant (default: the seeded tenant, NEBIUS_MOCKER_TENANT_ID)
+#   region    must be an emulated region (NEBIUS_MOCKER_REGIONS); groups in
+#             other regions are skipped
+#   platform  GPU platform, e.g. gpu-h100-sxm
+#   fabric    InfiniBand fabric, e.g. fabric-2 (see the compute fabric catalog)
+#   intervals[]: quantity (GPUs) and either
+#             start_day/end_day: days relative to the UTC day the mocker
+#               starts (an interval runs from 00:00 UTC of start_day to
+#               23:59 UTC of end_day, as in Nebius), or
+#             start/end: RFC 3339 timestamps.
+#
+# presets[]: per GPU platform, gpu_memory_gigabytes and the VM presets
+#   (name, vcpu_count, memory_gibibytes, gpu_count), copied from the compute
+#   platform catalog (services/compute/domain/platforms.yaml).
+block_groups:
+  - key: eu-north1-h100-fabric-2
+    region: eu-north1
+    platform: gpu-h100-sxm
+    fabric: fabric-2
+    intervals:
+      - {quantity: 16, start_day: -30, end_day: 334}
+      - {quantity: 8, start_day: 14, end_day: 44}
+  - key: eu-north1-h200-fabric-7
+    region: eu-north1
+    platform: gpu-h200-sxm
+    fabric: fabric-7
+    intervals:
+      - {quantity: 32, start_day: -7, end_day: 180}
+  - key: us-central1-b200
+    region: us-central1
+    platform: gpu-b200-sxm
+    fabric: us-central1-b
+    intervals:
+      - {quantity: 64, start_day: 30, end_day: 395}
+presets:
+  - platform: gpu-h100-sxm
+    gpu_memory_gigabytes: 80
+    presets:
+      - {name: 1gpu-16vcpu-200gb, vcpu_count: 16, memory_gibibytes: 200, gpu_count: 1}
+      - {name: 8gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 8}
+  - platform: gpu-h200-sxm
+    gpu_memory_gigabytes: 141
+    presets:
+      - {name: 1gpu-16vcpu-200gb, vcpu_count: 16, memory_gibibytes: 200, gpu_count: 1}
+      - {name: 8gpu-128vcpu-1600gb, vcpu_count: 128, memory_gibibytes: 1600, gpu_count: 8}
+  - platform: gpu-b200-sxm
+    gpu_memory_gigabytes: 180
+    presets:
+      - {name: 1gpu-20vcpu-224gb, vcpu_count: 20, memory_gibibytes: 224, gpu_count: 1}
+      - {name: 8gpu-160vcpu-1792gb, vcpu_count: 160, memory_gibibytes: 1792, gpu_count: 8}

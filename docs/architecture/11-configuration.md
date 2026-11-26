@@ -26,6 +26,7 @@ Every key has an environment form: `NEBIUS_MOCKER_` + the upper-snake path.
 | `NEBIUS_MOCKER_REGIONS` | `eu-north1=e00,eu-west1=e01,us-central1=u00,me-west1=m00` | Region → NID routing code (configurable; the defaults are placeholders). **Implemented**: the first region is the default; Compute seeds a public image catalog per region |
 | `NEBIUS_MOCKER_IAM_PROJECTS` | — | **Implemented**: `name[:region],…` projects seeded in the default tenant after `default` (`NEBIUS_MOCKER_PROJECT_ID`). IDs are derived from tenant + name (stable across restarts); regions must be in `NEBIUS_MOCKER_REGIONS` |
 | `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` | built-in (`services/compute/domain/fabrics.yaml`) | **Implemented**: InfiniBand fabric catalog of GPU clusters (YAML/JSON, [format](../services/compute.md#gpu-clusters-implemented)); replaces the built-in one |
+| `NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE` | built-in (`services/capacity/domain/catalog.yaml`) | **Implemented**: capacity block groups, their intervals (days relative to the start day, or RFC 3339) and the GPU presets of resource advice (YAML/JSON, [format](../services/capacity.md#behavior-notes)); replaces the built-in one |
 | `NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE` | built-in (`services/compute/domain/platforms.yaml`) | **Implemented**: platform/preset catalog per region (YAML/JSON, [format](../services/compute.md#catalogs-seed)); replaces the built-in one |
 | `NEBIUS_MOCKER_COMPUTE_PUBLIC_IP_RELEASE_AFTER` | `1h` | **Implemented**: how long a `STOPPED` instance keeps a dynamic public IP (`public_ip_address = {}`) before it is released (docs: more than one hour); a positive duration, on the mock clock ([compute](../services/compute.md)) |
 | `NEBIUS_MOCKER_PERSISTENCE` | `0` | Persist state across restarts |
@@ -117,6 +118,7 @@ Default catalogs that each module ships (all overridable):
 | Platforms and presets | compute | `cpu-e2`, `cpu-d3`, `gpu-h100-sxm`, `gpu-h200-sxm`, `gpu-b200-sxm`, `gpu-b300-sxm`, `gpu-rtx6000`, `gpu-l40s-a`, `gpu-l40s-d`, … with presets such as `2vcpu-8gb`, `8gpu-128vcpu-1600gb`, per region (`NEBIUS_MOCKER_COMPUTE_PLATFORMS_FILE`) |
 | Public images and families | compute | `ubuntu22.04-driverless`, `ubuntu22.04-cuda12`, `ubuntu24.04-driverless`, `mk8s-worker-node-v-1-31-ubuntu22.04`, … |
 | InfiniBand fabrics of GPU clusters | compute | `fabric-3` (eu-north1, `gpu-h100-sxm`), `fabric-5` (eu-west1, `gpu-h200-sxm`), `us-central1-b` (us-central1, `gpu-b200-sxm`), … from the public docs; **implemented**, replaced with `NEBIUS_MOCKER_COMPUTE_FABRICS_FILE` ([format](../services/compute.md#gpu-clusters-implemented)) |
+| Capacity block groups | capacity | `eu-north1` `gpu-h100-sxm`/`fabric-2` (16 GPUs), `gpu-h200-sxm`/`fabric-7` (32), `us-central1` `gpu-b200-sxm` (64, scheduled) in the seeded tenant; **implemented**, replaced with `NEBIUS_MOCKER_CAPACITY_BLOCK_GROUPS_FILE` |
 | Kubernetes versions | mk8s | `1.34`, `1.35`, `1.36` |
 | Roles | iam | `admin`, `editor`, `viewer`, narrower roles |
 | Quota defaults | quotas | see [09](09-quotas-limits-faults.md) |

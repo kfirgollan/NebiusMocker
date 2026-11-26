@@ -25,6 +25,9 @@ CI with no Nebius account.
 > **DNS** private zones and records work through Terraform, the Go SDK and the `nebius dns` CLI, and resolve with
 > `dig @127.0.0.1 -p 4653 <name>` against the mock's DNS responder; see
 > [docs/services/dns.md](docs/services/dns.md#implementation-status).
+> **Capacity** block groups (GPU reservations, seeded from a catalog, with intervals on the mock clock), project
+> capacity allowances and resource advice work with Terraform, the Go SDK and the `nebius capacity` CLI; see
+> [docs/services/capacity.md](docs/services/capacity.md#implementation-status).
 > **MysteryBox (SecretStash) secrets, versions and payloads** work with the official Terraform provider, CLI and Go
 > SDK: see [docs/services/mysterybox.md](docs/services/mysterybox.md#implementation-status).
 > **VPC networking** (pools, networks, subnets, private and public allocations, route tables and routes, security

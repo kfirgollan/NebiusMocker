@@ -107,6 +107,8 @@ type Config struct {
 	// Auth configures issued access tokens and the service-account token
 	// exchange (NEBIUS_MOCKER_TOKEN_*, NEBIUS_MOCKER_IAM_JWT_MAX_TTL).
 	Auth AuthConfig
+	// Capacity configures capacity block groups (NEBIUS_MOCKER_CAPACITY_*).
+	Capacity CapacityConfig
 }
 
 // Region is one emulated Nebius region.
@@ -304,6 +306,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	parsers = append(parsers, iamParsers(&c.IAM)...)
 	parsers = append(parsers, authParsers(&c.Auth)...)
 	parsers = append(parsers, computeFabricsParsers(&c.ComputeFabricsFile)...)
+	parsers = append(parsers, capacityParsers(&c.Capacity)...)
 	for _, p := range parsers {
 		v, ok := lookup("NEBIUS_MOCKER_" + p.name)
 		if !ok || strings.TrimSpace(v) == "" {

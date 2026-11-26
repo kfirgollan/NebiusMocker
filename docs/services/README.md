@@ -20,7 +20,7 @@ Tiers are defined in [architecture/01](../architecture/01-goals-and-scope.md#fid
 | DNS | [dns.md](dns.md) | 2 | 13 | 2 / 4 | **T2** ✅ implemented; **T3** DNS responder (`miekg/dns`) ✅ | — |
 | Quotas | [quotas.md](quotas.md) | 1 | 6 | 1 / 2 | T1 (+ live usage) | — |
 | Billing | [billing.md](billing.md) | 5 | 14 | 1 / 2 | T1 pricing policy, T0 rest | T1 calculator (M4) |
-| Capacity | [capacity.md](capacity.md) | 4 | 14 | 2 / 3 | T1 | T2 with capacity simulation (M2) |
+| Capacity | [capacity.md](capacity.md) | 4 | 14 | 2 / 3 | **T2** ✅ implemented (seeded block groups and intervals on the mock clock, project allowances, resource advice) | Compute instances drawing from reservations (`followup-compute-reservations`) |
 | Managed PostgreSQL | [msp-postgresql.md](msp-postgresql.md) | 2 | 15 | 1 / 2 | T1 | — |
 | Managed MLflow | [msp-mlflow.md](msp-mlflow.md) | 1 | 7 | 1 / 2 | T1 | — |
 | AI (endpoints, jobs, devlabs) | [ai.md](ai.md) | 4 | 23 | 1 / 2 | **T2** endpoint inventory (stub data plane), T0 rest | T1 jobs/devlabs (M4) |
