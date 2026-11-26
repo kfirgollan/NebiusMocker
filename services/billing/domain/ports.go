@@ -65,6 +65,13 @@ type Platforms interface {
 	Platform(ctx context.Context, projectID, name string) (p Platform, ok bool, err error)
 }
 
+// RunningVMs counts the compute instances running under a pricing policy
+// (status.running_vm_count), from the compute module's store
+// (peer.PricingPolicyVMs). It returns 0 when compute is not enabled.
+type RunningVMs interface {
+	RunningVMCount(ctx context.Context, projectID, policyID string) (int64, error)
+}
+
 // Hierarchy resolves parents of resources (authz engine).
 type Hierarchy interface {
 	Parent(ctx context.Context, id string) (string, error)

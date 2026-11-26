@@ -3,6 +3,7 @@ package domain_test
 import (
 	"context"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,10 +179,29 @@ func (o *ppOps) finish(t *testing.T) {
 	o.pending = nil
 }
 
+// ppVMs is a domain.RunningVMs with fixed counts per "project/policy".
+type ppVMs struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func (f *ppVMs) set(projectID, policyID string, n int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.counts[projectID+"/"+policyID] = n
+}
+
+func (f *ppVMs) RunningVMCount(_ context.Context, projectID, policyID string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.counts[projectID+"/"+policyID], nil
+}
+
 // ppEnv is a PricingPolicyService wired to fakes.
 type ppEnv struct {
 	svc  *domain.PricingPolicyService
 	repo *ppRepo
+	vms  *ppVMs
 	ops  *ppOps
 	clk  *clock.Manual
 }
@@ -219,11 +239,11 @@ func newPPEnv(t *testing.T, opts ...ppOption) *ppEnv {
 	if err != nil {
 		t.Fatalf("nid.NewGenerator: %v", err)
 	}
-	e := &ppEnv{repo: &ppRepo{}, ops: &ppOps{}, clk: clock.NewManual(ppT0)}
+	e := &ppEnv{repo: &ppRepo{}, vms: &ppVMs{counts: map[string]int64{}}, ops: &ppOps{}, clk: clock.NewManual(ppT0)}
 	e.svc, err = domain.NewPricingPolicyService(domain.PricingPolicyDeps{
 		Repo: e.repo, Prices: cfg.prices,
 		Regions:   ppRegions{ppProject: ppEast, ppOtherProject: ppEast, ppWestProject: ppWest},
-		Platforms: cfg.platforms, Hierarchy: ppHierarchy{}, Ops: e.ops, IDs: ids, Clock: e.clk,
+		Platforms: cfg.platforms, VMs: e.vms, Hierarchy: ppHierarchy{}, Ops: e.ops, IDs: ids, Clock: e.clk,
 		Config: domain.Config{ProjectID: ppProject},
 	})
 	if err != nil {

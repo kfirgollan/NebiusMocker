@@ -420,7 +420,7 @@ func TestInstanceCreateValidation(t *testing.T) {
 		}, errs.KindBadRequest, "spec.resources.platform"},
 		{"unknown nvl group", func(s *computepb.InstanceSpec) { s.NvlInstanceGroupId = "computenvlinstancegroup-e00nope" }, errs.KindNotFound, ""},
 		{"nvl group with a non-NVL platform", func(s *computepb.InstanceSpec) { s.NvlInstanceGroupId = testNVLGroup }, errs.KindBadRequest, "spec.nvl_instance_group_id"},
-		{"spot pricing", func(s *computepb.InstanceSpec) {
+		{"spot pricing on a regular instance", func(s *computepb.InstanceSpec) {
 			s.PricingModel = &computepb.InstanceSpec_SpotPricingPolicy{SpotPricingPolicy: &computepb.SpotPricingPolicySpec{}}
 		}, errs.KindBadRequest, "spec.spot_pricing_policy"},
 		{"local disk passthrough", func(s *computepb.InstanceSpec) {

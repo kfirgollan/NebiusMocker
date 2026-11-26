@@ -66,10 +66,7 @@ func (s *InstanceService) checkSpec(ctx context.Context, projectID string, spec 
 // checkUnsupported rejects, by name, the fields whose services the mocker
 // does not have (see docs/services/compute.md, "Not yet").
 func checkUnsupported(spec *computepb.InstanceSpec) error {
-	switch {
-	case spec.GetSpotPricingPolicy() != nil:
-		return notImplemented("spec.spot_pricing_policy", "Spot pricing policies")
-	case spec.GetLocalDisks().GetPassthroughGroup().GetRequested():
+	if spec.GetLocalDisks().GetPassthroughGroup().GetRequested() {
 		return notImplemented("spec.local_disks.passthrough_group", "Local disk passthrough")
 	}
 	if rp := spec.GetReservationPolicy(); len(rp.GetReservationIds()) > 0 && rp.GetPolicy() == computepb.ReservationPolicy_FORBID {
@@ -95,6 +92,9 @@ func checkScheduling(spec *computepb.InstanceSpec, pp PlatformPreset) error {
 		case rp.GetPolicy() == computepb.ReservationPolicy_STRICT:
 			return errs.BadRequest(errs.Violation{Field: "spec.reservation_policy.policy", Message: "preemptible instances cannot use reservations"})
 		}
+	}
+	if err := checkPricingModel(spec); err != nil {
+		return err
 	}
 	return checkReservationPolicy(spec, pp)
 }

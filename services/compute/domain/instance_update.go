@@ -59,6 +59,9 @@ func (s *InstanceService) applyUpdateLocked(ctx context.Context, cmd UpdateInsta
 	if target != none {
 		after = target
 	}
+	if err := s.admitUpdateRun(ctx, prev, next, state, after); err != nil {
+		return none, err
+	}
 	reservation, commitReservation, undoReservation, err := s.reservationOnUpdate(ctx, stored, updated, target)
 	if err != nil {
 		return none, err
@@ -137,6 +140,9 @@ func (s *InstanceService) checkUpdate(ctx context.Context, stored *computepb.Ins
 	if err != nil {
 		return err
 	}
+	if err := s.checkPricingPolicy(ctx, stored.GetMetadata().GetParentId(), prev, next); err != nil {
+		return err
+	}
 	if next.GetResources().GetPreset() != prev.GetResources().GetPreset() {
 		switch {
 		case !pp.Platform.GetSpec().GetAllowPresetChange():
@@ -153,6 +159,18 @@ func (s *InstanceService) checkUpdate(ctx context.Context, stored *computepb.Ins
 		return errs.BadState(id, "filesystems can be attached only while the instance is STOPPED: stop it first")
 	}
 	return nil
+}
+
+// admitUpdateRun checks the pricing policy of an instance that runs after
+// the update, when the update starts it or changes its pricing policy.
+func (s *InstanceService) admitUpdateRun(ctx context.Context, prev, next *computepb.InstanceSpec, state, after computepb.InstanceStatus_InstanceState) error {
+	if after != computepb.InstanceStatus_RUNNING {
+		return nil
+	}
+	if state == computepb.InstanceStatus_RUNNING && next.GetSpotPricingPolicy().GetId() == prev.GetSpotPricingPolicy().GetId() {
+		return nil
+	}
+	return s.admitRun(ctx, next)
 }
 
 // transition returns the state an update passes through and the one it

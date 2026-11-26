@@ -51,7 +51,7 @@ func (*Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocke
 
 	repo := dal.NewPricingPolicyRepo(deps.Store)
 	policies, err := domain.NewPricingPolicyService(domain.PricingPolicyDeps{
-		Repo: repo, Prices: prices, Regions: regions, Platforms: platforms, Hierarchy: deps.Authz,
+		Repo: repo, Prices: prices, Regions: regions, Platforms: platforms, VMs: computeVMs{dir: deps.Peers}, Hierarchy: deps.Authz,
 		Ops: deps.Ops, IDs: deps.IDs, Clock: deps.Clock, Config: cfg,
 	})
 	if err != nil {
@@ -72,6 +72,9 @@ func (*Module) Register(_ context.Context, reg grpc.ServiceRegistrar, deps mocke
 		p, err := repo.Get(ctx, id)
 		return p.GetMetadata().GetParentId(), err
 	})
+	if err := peer.Provide[peer.PricingPolicies](deps.Peers, peer.PricingPoliciesKey, policyPeer{svc: policies}); err != nil {
+		return fmt.Errorf("billing: %w", err)
+	}
 	api.RegisterAuthzRules(deps.Rules)
 	billingpb.RegisterPricingPolicyServiceServer(reg, api.NewPricingPolicyHandler(policies))
 	billingpb.RegisterCalculatorServiceServer(reg, api.NewCalculatorHandler(calc))

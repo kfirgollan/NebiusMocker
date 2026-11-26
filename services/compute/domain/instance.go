@@ -42,6 +42,8 @@ type InstanceDeps struct {
 	// Reservations draws GPUs from capacity block groups
 	// (spec.reservation_policy, instance_reservation.go).
 	Reservations Reservations
+	// Pricing reads the billing pricing policies of spec.spot_pricing_policy.
+	Pricing PricingPolicies
 	// Filesystems records spec.filesystems attachments.
 	Filesystems FilesystemAttachments
 	// Nodes records the instances managed by mk8s node groups (nodes.go).
@@ -60,7 +62,7 @@ type InstanceDeps struct {
 
 func (d InstanceDeps) validate() error {
 	if d.Instances == nil || d.OpIndex == nil || d.Projects == nil || d.Platforms == nil || d.Network == nil ||
-		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Reservations == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
+		d.Disks == nil || d.GpuClusters == nil || d.NVLGroups == nil || d.Reservations == nil || d.Pricing == nil || d.Filesystems == nil || d.Nodes == nil || d.Perms == nil || d.Quota == nil || d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return errors.New("compute: instance service dependencies must not be nil")
 	}
 	if d.PublicIPReleaseAfter <= 0 {
@@ -168,7 +170,9 @@ func (s *InstanceService) BatchGet(ctx context.Context, ids []string) (map[strin
 // Create validates the request, then (in the operation's Prepare) binds the
 // NICs' addresses, creates managed disks, attaches existing disks and stores
 // the instance as CREATING. Work makes it RUNNING, or STOPPED when
-// spec.stopped is set.
+// spec.stopped is set. When its pricing policy does not let it start, Work
+// leaves it STOPPED and fails the operation (docs: "the request returns an
+// error, but the VM is created in the stopped state").
 func (s *InstanceService) Create(ctx context.Context, cmd CreateInstanceCmd) (*operations.Operation, error) {
 	inst, err := s.newInstance(ctx, cmd)
 	if err != nil {
@@ -179,12 +183,24 @@ func (s *InstanceService) Create(ctx context.Context, cmd CreateInstanceCmd) (*o
 		ResourceID: id, Description: "Create instance", CreatedBy: reqctx.PrincipalFrom(ctx).ID, Request: cmd.Request,
 		Prepare: func(ctx context.Context) error { return s.prepareCreate(ctx, inst) },
 		Work: func(ctx context.Context) error {
-			return s.mutate(ctx, id, func(_ InstanceTx, cur *computepb.Instance) error {
-				if cur.GetStatus().GetState() == computepb.InstanceStatus_CREATING {
-					setInstanceState(cur, restingState(cur.GetSpec()))
+			to := restingState(inst.GetSpec())
+			var refused error
+			if to == computepb.InstanceStatus_RUNNING {
+				if refused = s.admitRun(ctx, inst.GetSpec()); refused != nil {
+					to = computepb.InstanceStatus_STOPPED
+				}
+			}
+			err := s.mutate(ctx, id, func(tx InstanceTx, cur *computepb.Instance) error {
+				if cur.GetStatus().GetState() != computepb.InstanceStatus_CREATING {
+					return nil
+				}
+				setInstanceState(cur, to)
+				if refused != nil {
+					return s.recordStop(tx, cur, to)
 				}
 				return nil
 			})
+			return errors.Join(err, refused)
 		},
 	})
 }
@@ -342,6 +358,9 @@ func (s *InstanceService) preparePower(ctx context.Context, id string, m powerMo
 	held := cur.GetStatus().GetReservationId()
 	reservation := held
 	if m.to == computepb.InstanceStatus_RUNNING {
+		if err := s.admitRun(ctx, cur.GetSpec()); err != nil {
+			return err
+		}
 		if reservation, err = s.reservationOnStart(ctx, cur); err != nil {
 			return err
 		}
@@ -455,6 +474,9 @@ func (s *InstanceService) newInstance(ctx context.Context, cmd CreateInstanceCmd
 		return nil, errs.BadRequest(errs.Violation{Field: "spec", Message: "required"})
 	}
 	if _, err := s.checkSpec(ctx, parentID, spec); err != nil {
+		return nil, err
+	}
+	if err := s.checkPricingPolicy(ctx, parentID, nil, spec); err != nil {
 		return nil, err
 	}
 	id, err := s.d.IDs.New(KindInstance)

@@ -30,7 +30,7 @@ func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 	svc, err := domain.NewInstanceService(domain.InstanceDeps{
 		Instances: instances, OpIndex: dal.NewInstanceOpIndex(deps.Store), Projects: deps.Authz,
 		Platforms: w.platforms, Network: peerNetwork{dir: deps.Peers}, Disks: w.disks,
-		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Reservations: peerReservations{dir: deps.Peers}, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
+		GpuClusters: w.gpuClusters, NVLGroups: w.nvlGroups, Reservations: peerReservations{dir: deps.Peers}, Pricing: peerPricing{dir: deps.Peers}, Filesystems: w.filesystems, Nodes: dal.NewNodeRepo(deps.Store),
 		Perms: callerPerms{engine: deps.Authz, mode: deps.Config.Authz, log: deps.Log},
 		Quota: peer.QuotaGateFor(deps.Peers),
 		Ops:   deps.Ops, IDs: deps.IDs, Clock: deps.Clock,
@@ -46,6 +46,9 @@ func (m *Module) registerInstances(reg grpc.ServiceRegistrar, deps mocker.Deps, 
 	})
 	api.RegisterInstanceAuthzRules(deps.Rules)
 	computepb.RegisterInstanceServiceServer(reg, api.NewInstanceHandler(svc))
+	if err := peer.Provide[peer.PricingPolicyVMs](deps.Peers, peer.PricingPolicyVMsKey, svc); err != nil {
+		return fmt.Errorf("compute: %w", err)
+	}
 	return provideNodes(deps.Peers, svc)
 }
 
@@ -121,6 +124,13 @@ type peerReservations struct{ dir *peer.Directory }
 
 func (p peerReservations) CapacityReservations() (peer.CapacityReservations, bool) {
 	return peer.Lookup(p.dir, peer.CapacityReservationsKey)
+}
+
+// peerPricing finds the billing pricing policies capability at call time.
+type peerPricing struct{ dir *peer.Directory }
+
+func (p peerPricing) PricingPolicies() (peer.PricingPolicies, bool) {
+	return peer.Lookup(p.dir, peer.PricingPoliciesKey)
 }
 
 // callerPerms checks the caller's own permission on a resource with the

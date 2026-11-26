@@ -50,6 +50,7 @@ type PricingPolicyDeps struct {
 	Prices    *PriceList
 	Regions   Regions
 	Platforms Platforms
+	VMs       RunningVMs
 	Hierarchy Hierarchy
 	Ops       Operations
 	IDs       IDGenerator
@@ -67,7 +68,7 @@ type PricingPolicyService struct {
 
 // NewPricingPolicyService wires the service.
 func NewPricingPolicyService(d PricingPolicyDeps) (*PricingPolicyService, error) {
-	if d.Repo == nil || d.Prices == nil || d.Regions == nil || d.Platforms == nil || d.Hierarchy == nil ||
+	if d.Repo == nil || d.Prices == nil || d.Regions == nil || d.Platforms == nil || d.VMs == nil || d.Hierarchy == nil ||
 		d.Ops == nil || d.IDs == nil || d.Clock == nil {
 		return nil, errors.New("billing: pricing policy dependencies must not be nil")
 	}
@@ -95,6 +96,17 @@ func (s *PricingPolicyService) Get(ctx context.Context, id string) (*billingpb.P
 	if err != nil {
 		return nil, err
 	}
+	return s.withStatus(ctx, p)
+}
+
+// Lookup returns a pricing policy with its scheduling_state but without
+// running_vm_count: it serves compute (peer.PricingPolicies), which counts
+// the VMs itself, so a lookup never calls back into compute.
+func (s *PricingPolicyService) Lookup(ctx context.Context, id string) (*billingpb.PricingPolicy, error) {
+	p, err := s.d.Repo.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	return s.withScheduling(ctx, p)
 }
 
@@ -104,7 +116,7 @@ func (s *PricingPolicyService) GetByName(ctx context.Context, parentID, name str
 	if err != nil {
 		return nil, err
 	}
-	return s.withScheduling(ctx, p)
+	return s.withStatus(ctx, p)
 }
 
 // List returns one page of a project's pricing policies in creation order.
@@ -124,11 +136,34 @@ func (s *PricingPolicyService) List(ctx context.Context, parentID string, size i
 		return Page[*billingpb.PricingPolicy]{}, err
 	}
 	for i, p := range page.Items {
-		if page.Items[i], err = s.withScheduling(ctx, p); err != nil {
+		if page.Items[i], err = s.withStatus(ctx, p); err != nil {
 			return Page[*billingpb.PricingPolicy]{}, err
 		}
 	}
 	return page, nil
+}
+
+// withStatus fills the observed status fields: running_vm_count (counted by
+// compute) and scheduling_state.
+func (s *PricingPolicyService) withStatus(ctx context.Context, p *billingpb.PricingPolicy) (*billingpb.PricingPolicy, error) {
+	n, err := s.runningVMs(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if p, err = s.withScheduling(ctx, p); err != nil {
+		return nil, err
+	}
+	p.Status.RunningVmCount = n
+	return p, nil
+}
+
+// runningVMs is the number of compute instances running under p.
+func (s *PricingPolicyService) runningVMs(ctx context.Context, p *billingpb.PricingPolicy) (int64, error) {
+	n, err := s.d.VMs.RunningVMCount(ctx, p.GetMetadata().GetParentId(), p.GetMetadata().GetId())
+	if err != nil {
+		return 0, fmt.Errorf("count the VMs of pricing policy %s: %w", p.GetMetadata().GetId(), err)
+	}
+	return n, nil
 }
 
 // withScheduling fills status.scheduling_state: BLOCKED while max_price is
@@ -200,8 +235,7 @@ func (s *PricingPolicyService) create(ctx context.Context, id string, cmd Create
 			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 		},
 		Spec: proto.CloneOf(cmd.Spec),
-		// running_vm_count stays 0: NebiusMocker's compute rejects
-		// spec.spot_pricing_policy, so no VM can run under a policy.
+		// running_vm_count is not stored: compute counts it on every read.
 		Status: &billingpb.PricingPolicyStatus{
 			State: billingpb.PricingPolicyStatus_STATE_CREATING, SkuId: m.SKU, Currency: policyCurrency,
 		},
@@ -293,7 +327,11 @@ func (s *PricingPolicyService) update(ctx context.Context, cmd UpdatePricingPoli
 	}
 	priceChanged := maxPriceOf(updated) != maxPriceOf(stored)
 	if priceChanged {
-		if n := stored.GetStatus().GetRunningVmCount(); n > 0 {
+		n, err := s.runningVMs(ctx, stored)
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
 			return false, errs.BadState(smd.GetId(), fmt.Sprintf("max_price cannot change while %d VMs run under the policy", n))
 		}
 		updated.Status.State = billingpb.PricingPolicyStatus_STATE_UPDATING
@@ -345,7 +383,11 @@ func (s *PricingPolicyService) Delete(ctx context.Context, id string, request pr
 			if err != nil {
 				return err
 			}
-			if n := p.GetStatus().GetRunningVmCount(); n > 0 {
+			n, err := s.runningVMs(ctx, p)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
 				return errs.BadState(id, fmt.Sprintf("%d VMs still run under the policy", n))
 			}
 			p.Status.State = billingpb.PricingPolicyStatus_STATE_DELETING

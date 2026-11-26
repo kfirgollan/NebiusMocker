@@ -483,8 +483,7 @@ func TestPricingPolicyUpdateBlockedByRunningVMs(t *testing.T) {
 	e := newPPEnv(t)
 	p := e.mustCreate(t, "main", "2.500")
 	id := p.GetMetadata().GetId()
-	stored := e.repo.items[0]
-	stored.Status.RunningVmCount = 2
+	e.vms.set(ppProject, id, 2)
 
 	err := e.update(t.Context(), &commonpb.ResourceMetadata{Id: id}, &billingpb.PricingPolicySpec{Pricing: ppSpec("", "3.000").GetPricing()}, nil)
 	wantKind(t, err, errs.KindBadState)
@@ -492,7 +491,7 @@ func TestPricingPolicyUpdateBlockedByRunningVMs(t *testing.T) {
 	if err := e.update(t.Context(), &commonpb.ResourceMetadata{Id: id, Name: "renamed"}, nil, nil); err != nil {
 		t.Errorf("rename with running VMs: %v", err)
 	}
-	// A request cannot set the server-owned status: it is not part of the command.
+	// running_vm_count is what compute counts, on every read.
 	got, _ := e.svc.Get(t.Context(), id)
 	if got.GetStatus().GetRunningVmCount() != 2 {
 		t.Errorf("running_vm_count = %d, want 2", got.GetStatus().GetRunningVmCount())
@@ -500,6 +499,31 @@ func TestPricingPolicyUpdateBlockedByRunningVMs(t *testing.T) {
 	// Deleting is blocked too.
 	_, err = e.svc.Delete(t.Context(), id, nil)
 	wantKind(t, err, errs.KindBadState)
+	// Once the VMs stop, max_price may change and the policy may go.
+	e.vms.set(ppProject, id, 0)
+	if err := e.update(t.Context(), &commonpb.ResourceMetadata{Id: id}, &billingpb.PricingPolicySpec{Pricing: ppSpec("", "3.000").GetPricing()}, nil); err != nil {
+		t.Errorf("max_price change with no running VM: %v", err)
+	}
+	if _, err := e.svc.Delete(t.Context(), id, nil); err != nil {
+		t.Errorf("Delete with no running VM: %v", err)
+	}
+}
+
+func TestPricingPolicyLookupForCompute(t *testing.T) {
+	t.Parallel()
+	e := newPPEnv(t)
+	p := e.mustCreate(t, "main", "1.000") // below the spot price 1.250: BLOCKED
+	id := p.GetMetadata().GetId()
+	e.vms.set(ppProject, id, 3)
+	got, err := e.svc.Lookup(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if st := got.GetStatus(); st.GetSchedulingState() != billingpb.PricingPolicyStatus_SCHEDULING_STATE_BLOCKED || st.GetRunningVmCount() != 0 {
+		t.Errorf("Lookup status = %v, want BLOCKED without a VM count", st)
+	}
+	_, err = e.svc.Lookup(t.Context(), "pricingpolicy-e00nope")
+	wantKind(t, err, errs.KindNotFound)
 }
 
 func TestPricingPolicyResetMaskClearsRequiredField(t *testing.T) {

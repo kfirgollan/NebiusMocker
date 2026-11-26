@@ -40,6 +40,7 @@
 | Instance/platform authorization: `compute.instances.{get,list,create,update,delete,start,stop}`, `compute.platforms.{get,list}` on the project | ✅ |
 | `nebius_compute_v1_instance` resource and data source (CPU and GPU platforms, GPU cluster) with the official Terraform provider | ✅ e2e: `test/terraform/compute/instance_test.go` (`make e2e`) |
 | `nebius compute instance …` / `nebius compute platform list` CLI flows | ✅ e2e: `test/computeinstance` (`make e2e`, no Docker) |
+| Instance pricing model: `on_demand`, `follows_spot_price`, `spot_pricing_policy` (billing pricing policy of the project and platform; BLOCKED / not-ACTIVE policies keep the VM from starting; `running_vm_count` counted from compute's store through `peer.PricingPolicyVMs`) | ✅ contract `test/contract/compute_instance_spot_test.go`, e2e `test/terraform/compute/spot_pricing_test.go`, CLI `test/computeinstance/spot_e2e_test.go` |
 | `nebius.compute.v1.FilesystemService`: Get, GetByName, List (paged; deprecated `filter` rejected), Create, Update (reset mask, `resource_version`, grow-only hot resize; name, type and block size immutable), Delete (`FAILED_PRECONDITION` while `forbid_deletion`, attached to instances or exposed by filesystem buckets), ListOperationsByParent | ✅ T2, with a real data plane: every filesystem is an object-store bucket (RustFS) |
 | Filesystem attachment port (`domain.FilesystemAttachments`: Attach/Detach) for InstanceService `spec.filesystems`: exists, same project, `READY`, `READ_WRITE` only; recorded in `status.read_write_attachments` in the same store transaction as the checks, so Attach and filesystem Delete never both win | ✅ (domain + DAL tests incl. an Attach-vs-Delete race; used by InstanceService) |
 | Mounting: Object Storage **filesystem buckets** (`storage.v1` `spec.filesystem_bucket`) expose a filesystem through the S3 front; users mount them with rclone (FUSE). Writes beyond the filesystem size fail | ✅ e2e: `test/filesystems` (`make e2e-filesystems`, Docker: RustFS + `rclone/rclone`) |
@@ -115,8 +116,10 @@ object-storage/objects/upload-download); they never write into the object store,
   reached; no
   capacity simulation (`NotEnoughResources`, `RESOURCE_EXHAUSTED`); no preemption, maintenance events
   (`MaintenanceService`, `status.maintenance_event_id`) or host recovery (so `recovery_policy = ALWAYS` has nothing to
-  retry); `NodeService`, spot pricing policies and local disk passthrough are not implemented (their spec fields are
-  rejected by name, see above). Capacity reservations are implemented (see Scheduling fields), but reserved intervals
+  retry); `NodeService` and local disk passthrough are not implemented (its spec field is rejected by name, see above).
+  Spot prices are constant (billing has no moving market) and billing refuses `max_price` changes while VMs run under a
+  policy (proto), so a running VM under a pricing policy is never preempted: the docs' preemption on a spot price rise
+  has no trigger in the mock. Capacity reservations are implemented (see Scheduling fields), but reserved intervals
   that end while an instance holds GPUs do not evict or stop it.
 - Platform presets, GPU memory, quota type names and region availability are illustrative.
 - Filesystems:
@@ -278,8 +281,25 @@ marks no spec attribute computed); everything synthesized lives in `status`.
   (`FilesystemAttachments`: same project, `READY`, `READ_WRITE` only). Adding one on Update needs the instance
   `STOPPED` (docs `compute/storage/use`); removing one, or deleting the instance, detaches it (never deletes it).
 - **Scheduling fields**: `preemptible` needs a platform with `allowed_for_preemptibles` and `recovery_policy = FAIL`
-  (docs); `on_preemption` is `STOP`. Nothing is ever preempted (no capacity simulation). `on_demand` /
-  `follows_spot_price` are echoed (no billing). `recovery_policy` `RECOVER`/`FAIL` are echoed (hosts never fail).
+  (docs); `on_preemption` is `STOP`. Nothing is ever preempted (no capacity simulation, constant spot prices).
+  `recovery_policy` `RECOVER`/`FAIL` are echoed (hosts never fail).
+- **Pricing model** (`spec.pricing_model`, docs `compute/virtual-machines/preemptible`, `signup-billing/pricing-policy`,
+  `domain/instance_pricing.go`): `on_demand` is for regular VMs (`INVALID_ARGUMENT` on `spec.on_demand` with
+  `preemptible`); `follows_spot_price` and `spot_pricing_policy` need `preemptible` (`INVALID_ARGUMENT` naming the
+  field). The model may change on Update (docs: "select another pricing policy before starting it").
+  - `spot_pricing_policy.id` is a billing pricing policy read through `peer.PricingPolicies`. A new reference (Create,
+    or an Update that changes it) must exist (`NOT_FOUND`), belong to the instance's project and price its platform
+    (`INVALID_ARGUMENT` on `spec.spot_pricing_policy.id`), and not be `DELETING` (`FAILED_PRECONDITION`). An unchanged
+    reference is not re-checked, so a stopped VM whose policy was deleted can still be updated.
+  - Starting (Create without `stopped`, Start, an Update that starts the VM or switches a running VM to another policy)
+    needs the policy `ACTIVE` with `scheduling_state = ALLOWED`: `CREATING`/`UPDATING` is a retryable `ABORTED`,
+    `DELETING` or `BLOCKED` (max_price below the spot price) is `FAILED_PRECONDITION`, a deleted policy `NOT_FOUND`.
+    A Create under a blocked policy fails its operation but leaves the VM `STOPPED` (docs: "the request returns an
+    error, but the VM is created in the stopped state"); Start and Update fail synchronously and change nothing.
+  - Billing's `status.running_vm_count` is counted from compute's store on every read (`peer.PricingPolicyVMs`):
+    instances of the project under the policy that are `STARTING`, `RUNNING`, `STOPPING`, or `CREATING`/`UPDATING`
+    without `spec.stopped` (an instance stopped with Stop counts while an Update runs on it). It survives restarts and
+    keeps the policy's `max_price` and deletion locked while VMs run.
 - **Capacity reservations** (`reservation_policy`, docs `compute/virtual-machines/reservations`;
   `domain/instance_reservation.go`): `reservation_ids` are capacity block group IDs (services/capacity), tried in order.
   GPUs are drawn through `peer.CapacityReservations`, which enforces the group's current limit and the project's
@@ -304,7 +324,7 @@ marks no spec attribute computed); everything synthesized lives in `status`.
   is immutable on Update. `recovery_policy = ALWAYS` is `INVALID_ARGUMENT` without a group (instance.proto: "Available
   only for instances in nvlinstancegroup").
 - **Rejected by name** (`INVALID_ARGUMENT`, "… is not implemented in NebiusMocker yet"):
-  `spot_pricing_policy`, `local_disks.passthrough_group.requested = true`.
+  `local_disks.passthrough_group.requested = true`.
 - `cloud_init_user_data` (sensitive) is stored and echoed, redacted in audit events, and never executed.
 - `BatchGet` (up to 1000 IDs) authorizes each ID (`compute.instances.get`) and returns a `google.rpc.Status`
   (`NOT_FOUND`, `PERMISSION_DENIED`) in place of each unreadable instance. `ListInstancesByNVLInstanceGroup` lists a

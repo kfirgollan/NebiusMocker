@@ -9,7 +9,7 @@
 |---|---|
 | `nebius.billing.v1.PricingPolicyService`: Create, Get, GetByName, List (paged), Update (reset mask, partial CLI updates, `resource_version`), Delete | ✅ T1 |
 | Pricing-policy rules: project parent, name of Latin letters and digits, platform with a spot market in the project's region (and offered there for preemptibles, checked against compute's catalog through `peer.ComputePlatforms`), `max_price` decimal with ≤ 3 places inside the platform's range (`OUT_OF_RANGE` otherwise), immutable `compute_instance_spec` | ✅ |
-| Pricing-policy status: `state` (CREATING → ACTIVE, UPDATING → ACTIVE on a price change, DELETING), `sku_id`, `currency`, `scheduling_state` (BLOCKED while `max_price` < spot price, computed on every read), `running_vm_count` | ✅ (`running_vm_count` is always 0, see Not yet) |
+| Pricing-policy status: `state` (CREATING → ACTIVE, UPDATING → ACTIVE on a price change, DELETING), `sku_id`, `currency`, `scheduling_state` (BLOCKED while `max_price` < spot price, computed on every read), `running_vm_count` (counted by compute on every read) | ✅ |
 | `nebius.billing.v1alpha1.SpotPriceService`: List (paged), ListSeries (filters, 15-minute / 1-hour steps, first/last/avg), no authentication needed | ✅ |
 | `nebius.billing.v1alpha1.CalculatorService`: Estimate, EstimateBatch (compute instances, disks, filesystems; create and update specs) | ✅ |
 | `nebius.billing.v1.CalculatorService`: EstimateBatch (`Any` specs of the compute create/update requests, SKU breakdown, `currency`, `filter_aggregation_unit`) | ✅ |
@@ -18,7 +18,8 @@
 | `nebius_billing_v1_pricing_policy` resource and data source with the official provider | ✅ e2e: `test/terraform/billing` |
 | `nebius billing pricing-policy`, `nebius billing v1alpha1 spot-price`, `nebius billing v1alpha1 calculator` CLI flows from the docs | ✅ e2e: `test/cli/billing` |
 | `nebius.billing.v1alpha1.OneTimeExportService` (Create, Get, List) | Not yet: `UNIMPLEMENTED` |
-| Compute instances priced by a policy (`spec.spot_pricing_policy`) | Not yet |
+| Compute instances priced by a policy (`spec.spot_pricing_policy`): validated by compute through `peer.PricingPolicies`, counted in `running_vm_count` through `peer.PricingPolicyVMs`, BLOCKED policies keep VMs from starting | ✅ (see [compute.md](compute.md), Pricing model) · contract `test/contract/compute_instance_spot_test.go`, e2e `test/terraform/compute/spot_pricing_test.go`, CLI `test/computeinstance/spot_e2e_test.go` |
+| mk8s node groups priced by a policy (`spec.template.spot_pricing_policy`) | Not yet: rejected by name in mk8s |
 | A moving spot market | Not yet |
 | Quota on pricing policies per tenant | Not yet (owned by the quotas area) |
 
@@ -44,8 +45,16 @@ mock's choice is marked *(mock)*.
 - **Names** are required, unique in the project (`ALREADY_EXISTS`) and may only contain Latin letters and digits, as the
   docs say. The name and labels can change at any time. `compute_instance_spec` is immutable: Terraform replaces the
   policy instead.
-- **Running VMs.** Changing `max_price` or deleting a policy is `FAILED_PRECONDITION` while `running_vm_count` > 0. In
-  the mock the count is always 0 (see Not yet).
+- **Running VMs.** `running_vm_count` is the number of compute instances of the project under the policy that are
+  running (or starting, stopping, or being created or updated to run), counted from compute's store on every read, so
+  it is right after a restart (0 when the compute module is disabled). Changing `max_price` or deleting a policy is
+  `FAILED_PRECONDITION` while it is > 0, as the proto says ("Nonzero blocks resource changes and deletion") and the
+  docs say for `max_price` ("first stop all running resources that use that policy"). The docs' "deleting a pricing
+  policy can stop resources that use it" describes the web console, which stops them first; the API refuses.
+- **VMs under a BLOCKED policy** cannot start: compute refuses Start with `FAILED_PRECONDITION`, and a Create fails but
+  leaves the VM `STOPPED` (docs). A stopped VM whose policy was deleted gets `NOT_FOUND` on Start until it is updated
+  to another policy. Since spot prices are constant and `max_price` is locked while VMs run, no running VM is ever
+  preempted.
 - **Spot prices** come from the price list and are constant: their `effective_time` is the start of the 30-day history
   window, and `ListSeries` gives the same value for every step and for all three methods (first, last, average)
   *(mock)*. `ListSeries` follows the proto: `start_time` within the last 30 days, 15-minute steps only for up to 7 days,
@@ -91,10 +100,10 @@ the mocker doesn't emulate (`NEBIUS_MOCKER_REGIONS`) are ignored.
 
 - **OneTimeExportService** answers `UNIMPLEMENTED` with the reason: the mock has no billing contracts
   (`contract-…` parents) and meters no usage, so there is no FOCUS report to export.
-- **Instances under a policy.** Compute still rejects `spec.spot_pricing_policy` by name, and mk8s rejects it in node
-  templates. No VM runs under a policy, so `running_vm_count` stays 0 and preemption on a price rise is not emulated.
-  (AI endpoints accept `spot_pricing_policy` and now check that the policy exists.)
-- **A moving market.** Spot prices are constant: the price list has no random walk.
+- **mk8s node groups under a policy.** mk8s still rejects `spot_pricing_policy` in node templates. (AI endpoints accept
+  `spot_pricing_policy` and check that the policy exists.)
+- **A moving market.** Spot prices are constant: the price list has no random walk, so preemption of running VMs on a
+  price rise is not emulated.
 - **Quotas** on policies per tenant (`RESOURCE_EXHAUSTED`) are left to the quotas area.
 
 ## Overview
